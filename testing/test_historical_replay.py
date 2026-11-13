@@ -1,4 +1,4 @@
-"""Deidentified offline replay and CMS benchmark scenarios."""
+"""Deidentified offline replay and Medicare fee schedule scenarios."""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -10,13 +10,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.insurance import cms_pfs, cpt_suggester, historical_replay, identity, stedi_discovery
+from app.insurance import cpt_suggester, historical_replay, identity, medicare_fees, stedi_discovery
 from app.api.routers import commercial_estimator as api
 from testing.test_stedi_discovery import setup as discovery_setup
 from testing.test_inventory_certification import CERTIFICATE, DOC, INPUTS, PAYER, SCOPE, SOURCE
 
 
-DAY = '2026-10-14'
+DAY = '2026-11-13'
 PLAN = 'RPPO-UHC Complete Care Support TX-1A'
 EXCLUSION = {'decision': 'excluded_under_available_agreement',
              'document_id': DOC['id'], 'document_sha256': DOC['sha256'],
@@ -24,22 +24,38 @@ EXCLUSION = {'decision': 'excluded_under_available_agreement',
              'passage': 'Regional PPO Medicare Advantage products are excluded.'}
 
 
+def synthetic_fee_rate(code, modifiers, units, *, service_date, place_of_service, provider_npi, patient_binding):
+    amounts = {code: cents for code, _, cents in medicare_fees.FEE_ROWS}
+    if (code not in amounts or modifiers or not units or not place_of_service
+            or not provider_npi or not patient_binding or service_date < medicare_fees.EFFECTIVE_FROM):
+        return None
+    return {'id': f'medicare:{code}', 'code': code, 'modifier': '',
+            'allowed_cents': amounts[code], 'basis': 'medicare_fee_schedule',
+            'source_reference': medicare_fees.SOURCE_REFERENCE,
+            'effective_from': medicare_fees.EFFECTIVE_FROM,
+            'service_date': service_date, 'place_of_service': place_of_service,
+            'provider_npi': provider_npi, 'patient_binding': patient_binding}
+
+
+@pytest.fixture(autouse=True)
+def synthetic_medicare_fees(monkeypatch):
+    monkeypatch.setattr(medicare_fees, 'estimate_rate', synthetic_fee_rate)
+
+
 def _bundle(rows: list[dict], codes: list[dict] | None = None, *, policy: dict | None = None) -> dict:
     case = {'intake_id': 'synthetic-intake', 'previsit_raw_object_key': 'synthetic/saved-271.json',
-            'previsit': {'checked_at': '2026-10-14T15:00:00Z'},
-            'previsit_context': {'inputs': deepcopy(INPUTS), 'source': deepcopy(SOURCE),
+            'previsit': {'checked_at': '2026-11-13T15:00:00Z'},
+            'previsit_context': {'inputs': {**deepcopy(INPUTS), 'service_date': DAY}, 'source': deepcopy(SOURCE),
                                  'payer_id': '87726', 'result': {
                 'identity': {'status': 'matched', 'match_version': 2, 'binding': 'synthetic-member-binding'},
                 'collection_guidance': {'amount_cents': 25000, 'basis': 'historical_only'}}},
             'visit_review': {'billing_protection': {
                 'status': 'not_qmb', 'identity_binding': 'synthetic-member-binding',
-                'reference': 'synthetic-member-check', 'verified_at': '2026-10-14T12:00:00Z'}}}
+                'reference': 'synthetic-member-check', 'verified_at': '2026-11-13T12:00:00Z'}}}
     document = {**DOC, 'created_at': '2026-09-01T00:00:00Z',
                 'extraction': {'compiled': {'exclusions': [EXCLUSION]}}}
-    scope = {**SCOPE, 'cms_locality': '11', 'cms_qp_status': 'non_qp',
-             'cms_payment_reference': 'Synthetic locality and QP certification'}
     certificate = {**CERTIFICATE, 'document_hashes': {DOC['id']: DOC['sha256']},
-                   'scopes': [scope]}
+                   'scopes': [SCOPE]}
     payer = {**PAYER, 'rules': {'agreement_inventory': certificate,
                                'collection_policy': policy or {}}}
     payload = {'payerId': '87726', 'plans': [{'name': PLAN}],
@@ -71,7 +87,7 @@ def _row(kind: str, value: float, service: str = '98', *, note: str = '') -> dic
 def _positive_policy() -> dict:
     return {'mode': 'defer_to_claim', 'approved_by': 'synthetic-admin',
             'approved_at': '2026-10-01T12:00:00Z', 'reference': 'Synthetic approval',
-            'allow_supported_oon_advance': True, 'allow_cms_based_advance': True}
+            'allow_supported_oon_advance': True, 'allow_medicare_schedule_advance': True}
 
 
 def test_replay_preserves_verified_dependent_policy_reconciliation():
@@ -106,25 +122,11 @@ def test_replay_preserves_verified_dependent_policy_reconciliation():
     assert historical_replay.replay(altered)['status'] == 'unlinked_saved_response'
 
 
-def test_cms_dallas_office_rate_is_dated_and_scope_bound():
-    rate = cms_pfs.estimate_rate('99204', [], 1, service_date=DAY, locality='11',
-        qp_status='non_qp', place_of_service='11', provider_npi='1234567890',
-        patient_binding='synthetic-member-binding')
-    assert rate['allowed_cents'] == 17667
-    assert rate['basis'] == 'cms_original_medicare_estimate'
-    assert cms_pfs.estimate_rate('99204', [], 1, service_date='2027-01-01', locality='11',
-        qp_status='non_qp', place_of_service='11', provider_npi='1234567890',
-        patient_binding='synthetic-member-binding') is None
-    assert cms_pfs.estimate_rate('99204', [], 1, service_date=DAY, locality='',
-        qp_status='non_qp', place_of_service='11', provider_npi='1234567890',
-        patient_binding='synthetic-member-binding') is None
-
-
 def test_replay_cutoff_uses_timezone_aware_instant_and_exact_saved_bytes():
-    cutoff = '2026-10-14T15:00:00Z'
-    assert historical_replay._as_of({'approved_at': '2026-10-14T11:00:00-04:00'}, cutoff)
-    assert historical_replay._as_of({'approved_at': '2026-10-14T11:00:01-04:00'}, cutoff) is None
-    assert historical_replay._as_of({'approved_at': '2026-10-14T12:00:00'}, cutoff) is None
+    cutoff = '2026-11-13T15:00:00Z'
+    assert historical_replay._as_of({'approved_at': '2026-11-13T11:00:00-04:00'}, cutoff)
+    assert historical_replay._as_of({'approved_at': '2026-11-13T11:00:01-04:00'}, cutoff) is None
+    assert historical_replay._as_of({'approved_at': '2026-11-13T12:00:00'}, cutoff) is None
     bundle = _bundle([_row('B', 40, note='Deductible does not apply')],
                      policy=_positive_policy())
     raw = json.dumps(bundle.pop('raw_response'), indent=2).encode()
@@ -164,9 +166,8 @@ def test_authenticated_replay_export_uses_scoped_saved_case_and_raw_bytes(monkey
 
 def test_scenario_a_fixed_copay_collects_supported_advance():
     bundle = _bundle([_row('B', 40, note='Deductible does not apply')],
+                     codes=[{'id': 'office', 'code': '99202', 'units': 1, 'modifiers': []}],
                      policy=_positive_policy())
-    for field in ('cms_locality', 'cms_qp_status', 'cms_payment_reference'):
-        bundle['payer_route']['rules']['agreement_inventory']['scopes'][0].pop(field)
     original = deepcopy(bundle['case'])
     report = historical_replay.replay(bundle)
     assert report['network_evidence']['decision'] == 'out_of_network_by_clinic_contract_inventory'
@@ -182,7 +183,7 @@ def test_cancelled_later_appointment_keeps_previsit_projection_separate_from_act
     bundle = _bundle([_row('B', 40, note='Deductible does not apply')],
                      policy=_positive_policy())
     bundle['case']['appointment'] = {'status': 'cancelled',
-                                    'status_recorded_at': '2026-10-20T12:00:00Z'}
+                                    'status_recorded_at': '2026-11-20T12:00:00Z'}
     saved = deepcopy(bundle['case'])
     report = historical_replay.replay(bundle)
     assert report['mode'] == 'counterfactual_simulation'
@@ -197,35 +198,35 @@ def test_scenario_b_deductible_and_coinsurance_use_remaining_balance():
                       _row('A', .20)], policy=_positive_policy())
     report = historical_replay.replay(bundle)
     line = report['result']['price_range']['lines'][0]
-    assert line['allowed_cents'] == 17667
+    assert line['allowed_cents'] == 18049
     assert line['calculation']['deductible_cents'] == 5000
-    assert line['calculation']['coinsurance_cents'] == 2533
-    assert report['result']['collection_guidance']['amount_cents'] == 7533
+    assert line['calculation']['coinsurance_cents'] == 2610
+    assert report['result']['collection_guidance']['amount_cents'] == 7610
 
 
 def test_scenario_c_consultation_ncs_and_emg_are_distinct_lines():
     lines = [{'id': 'office', 'code': '99204', 'units': 1, 'modifiers': []},
-             {'id': 'ncs', 'code': '95907', 'units': 1, 'modifiers': []},
+             {'id': 'ncs', 'code': '95911', 'units': 1, 'modifiers': []},
              {'id': 'emg', 'code': '95886', 'units': 1, 'modifiers': []}]
     bundle = _bundle([_row('C', 50, '30'), _row('G', 500, '30'),
                       _row('A', .20, '98'), _row('A', .20, '73')], lines,
                      policy=_positive_policy())
     report = historical_replay.replay(bundle)
     priced = report['result']['price_range']['lines']
-    assert [line['allowed_cents'] for line in priced] == [17667, 9401, 9970]
+    assert [line['allowed_cents'] for line in priced] == [18049, 22107, 9997]
     assert sum((line.get('calculation') or {}).get('deductible_cents', 0) for line in priced) == 5000
-    assert report['result']['collection_guidance']['amount_cents'] == 11407
+    assert report['result']['collection_guidance']['amount_cents'] == 14030
     assert report['result']['encounter_summary']['integrity_error'] is None
 
 
 def test_synthetic_bedrock_plan_preselects_editable_emg_and_replay_uses_explicit_lines(monkeypatch):
     available = [{'id': key, 'code': code, 'units': 1, 'source': source}
                  for key, code, source in [('office', '99204', 'eCW scheduled service'),
-                                           ('ncs', '95907', 'Contract service option'),
+                                           ('ncs', '95911', 'Contract service option'),
                                            ('emg', '95886', 'Contract service option')]]
     response = {'output': {'message': {'content': [{'toolUse': {
         'name': 'submit_visit_plan', 'input': {'services': [
-            {'code': '99204', 'units': 1}, {'code': '95907', 'units': 1},
+            {'code': '99204', 'units': 1}, {'code': '95911', 'units': 1},
             {'code': '95886', 'units': 1}], 'reason': 'Synthetic plan',
             'assumptions': [], 'cash_package': ''}}}]}}}
     class FakeBedrock:
@@ -243,7 +244,7 @@ def test_synthetic_bedrock_plan_preselects_editable_emg_and_replay_uses_explicit
     bundle = _bundle([_row('C', 50, '30'), _row('G', 500, '30'),
                       _row('A', .20, '73')], lines, policy=_positive_policy())
     priced = historical_replay.replay(bundle)['result']['price_range']['lines']
-    assert [line['code'] for line in priced] == ['95907', '95886']
+    assert [line['code'] for line in priced] == ['95911', '95886']
     assert sum((line.get('calculation') or {}).get('deductible_cents', 0) for line in priced) == 5000
 
 
@@ -265,10 +266,10 @@ def test_scenario_d_missing_benefits_defer_only_with_historical_policy():
 
 def test_future_approval_and_quote_cannot_change_historical_advance():
     bundle = _bundle([_row('B', 40, note='Deductible does not apply')],
-                     policy={**_positive_policy(), 'approved_at': '2026-10-15T12:00:00Z'})
+                     policy={**_positive_policy(), 'approved_at': '2026-11-14T12:00:00Z'})
     report = historical_replay.replay(bundle)
     assert report['result']['collection_guidance']['amount_cents'] is None
-    bundle['payer_route']['rules']['agreement_inventory']['approved_at'] = '2026-10-15T12:00:00Z'
+    bundle['payer_route']['rules']['agreement_inventory']['approved_at'] = '2026-11-14T12:00:00Z'
     report = historical_replay.replay(bundle)
     assert report['network_evidence'] is None
 
@@ -325,6 +326,6 @@ def test_claimed_documented_cpt_must_exist_in_saved_selection():
 
 def test_historical_cutoff_cannot_look_past_saved_check():
     bundle = _bundle([])
-    bundle['historical_cutoff'] = '2026-10-14T16:00:00Z'
+    bundle['historical_cutoff'] = '2026-11-13T16:00:00Z'
     with pytest.raises(ValueError, match='historical cutoff'):
         historical_replay.replay(bundle)

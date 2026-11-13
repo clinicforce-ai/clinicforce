@@ -332,9 +332,9 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
                         sentence += (f', reduced by {_money(oop_reduction)} under the out-of-pocket limit'
                                      if all('allowed_cap_adjustment_cents' in row for row in calculations) else
                                      f', reduced by {_money(oop_reduction)} under plan limits')
-                    cms_based = any(line.get('allowed_basis') == 'cms_original_medicare_estimate' for line in lines)
-                    sentence += (' based on CMS Original Medicare benchmark prices, not payer-confirmed allowances'
-                                 if cms_based else
+                    medicare_schedule = any(line.get('allowed_basis') == 'medicare_fee_schedule' for line in lines)
+                    sentence += (' based on the clinic-approved Medicare fee schedule'
+                                 if medicare_schedule else
                                  ' based on the payer’s out-of-network CPT prices' if network == 'out_of_network'
                                  else ' based on the clinic’s contracted CPT prices' if network == 'in_network'
                                  else ' for the planned care')
@@ -354,9 +354,9 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
                 else:
                     sentence = 'No payment is due now under the applicable plan benefits'
             else:
-                cms_based = any(line.get('allowed_basis') == 'cms_original_medicare_estimate' for line in lines)
-                sentence = ('This estimate uses CMS Original Medicare benchmark prices, not payer-confirmed allowances'
-                            if cms_based else
+                medicare_schedule = any(line.get('allowed_basis') == 'medicare_fee_schedule' for line in lines)
+                sentence = ('This estimate uses the clinic-approved Medicare fee schedule and reported plan benefits'
+                            if medicare_schedule else
                             'This estimate uses the plan’s copay, deductible, and share of NMCT’s contract prices for the planned care'
                             if network == 'in_network' else
                             'This estimate uses the payer’s out-of-network allowed price under Medicare Advantage member billing protections'

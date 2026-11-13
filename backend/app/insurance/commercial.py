@@ -215,10 +215,10 @@ def estimate(lines: list[dict[str, Any]], benefits: dict[str, Any], rules: dict[
         raise CommercialError("A compatible individual benefit level is required for an automatic estimate.")
     out_of_network = benefits.get('network_status') == 'out_of_network'
     if out_of_network:
-        supported = {'payer_out_of_network', 'cms_original_medicare_estimate'}
+        supported = {'payer_out_of_network', 'medicare_fee_schedule'}
         if (not verified_out_of_network(benefits) or rules.get('allowed_basis') not in supported or
                 any(line.get('allowed_source') != rules['allowed_basis'] or not line.get('rate_id') for line in lines)):
-            raise CommercialError('A sourced out-of-network payer allowance or applicable CMS estimate is required for every selected CPT.')
+            raise CommercialError('A sourced out-of-network payer allowance or approved Medicare fee is required for every selected CPT.')
     elif benefits.get("network_status") != "in_network":
         raise CommercialError("Confirmed in-network provider participation is required for an automatic estimate.")
     if benefits.get("has_secondary"):

@@ -139,16 +139,14 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
                    and (rate.get('modifier') or '') == ','.join(code.get('modifiers') or [])
                    and (not rate.get('line_id') or rate['line_id'] == line_id)
                    and (rate.get('line_id') or rate.get('basis') not in
-                        {'payer_out_of_network', 'cms_original_medicare_estimate'})
+                        {'payer_out_of_network', 'medicare_fee_schedule'})
                    and (rate.get('units') is None or rate['units'] == units)
                    and (not rate.get('product_binding') or rate['product_binding'] == rules.get('product_binding'))
-                   and (not rate.get('cms_locality') or rate['cms_locality'] == rules.get('cms_locality'))
-                   and (not rate.get('cms_qp_status') or rate['cms_qp_status'] == rules.get('cms_qp_status'))
                    and (not out_of_network or
-                        rate.get('basis') in {'payer_out_of_network', 'cms_original_medicare_estimate'}
+                        rate.get('basis') in {'payer_out_of_network', 'medicare_fee_schedule'}
                         and rate.get('id') and rate.get('source_reference')
                         and (rate.get('verified_at') if rate.get('basis') == 'payer_out_of_network'
-                             else rate.get('source_sha256') and rate.get('effective_from') <= service_date <= rate.get('effective_to'))
+                             else rate.get('effective_from') and rate['effective_from'] <= service_date)
                         and rate.get('service_date') == service_date
                         and rate.get('provider_npi') == rules.get('provider_npi') and rules.get('provider_npi')
                         and rate.get('place_of_service') == rules.get('place_of_service') and rules.get('place_of_service')
@@ -165,7 +163,6 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
                 'allowed_basis': rate.get('basis') or 'clinic_contract',
                 'rate_source': rate.get('source_reference') or ('Payer out-of-network allowance needed' if out_of_network else 'Clinic contract'), 'rate_version': rate.get('version_id'),
                 'rate_source_sha256': rate.get('source_sha256'),
-                'cms_locality': rate.get('cms_locality'), 'cms_qp_status': rate.get('cms_qp_status'),
                 'rate_row_number': rate.get('row_number'),
                 'rate_effective_from': rate.get('effective_from'),
                 'rate_resolution': {'status': rate_status,

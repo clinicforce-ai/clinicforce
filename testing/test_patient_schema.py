@@ -22,6 +22,11 @@ class RecordingCursor:
         self.statements.append(statement)
         return self
 
+    def executemany(self, statement, parameter_sets):
+        for parameters in parameter_sets:
+            self.execute(statement, parameters)
+        return self
+
     def fetchone(self):
         if "information_schema.columns" in self.last:
             return {"exists": bool(self.legacy_bytes)}

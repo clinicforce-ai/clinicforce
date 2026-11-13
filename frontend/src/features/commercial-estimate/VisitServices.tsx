@@ -114,8 +114,8 @@ export default function VisitServices({
                         {row.allowed_cents != null ? (
                           <small>
                             Allowed price source:{' '}
-                            {row.allowed_basis === 'cms_original_medicare_estimate'
-                              ? 'CMS Original Medicare benchmark estimate'
+                            {row.allowed_basis === 'medicare_fee_schedule'
+                              ? 'Clinic-approved Medicare fee schedule'
                               : row.allowed_basis === 'payer_out_of_network'
                                 ? 'Payer out-of-network amount'
                                 : 'Clinic contract'}{' '}
