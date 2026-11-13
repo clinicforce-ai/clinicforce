@@ -7,9 +7,9 @@ from app.api.routers.commercial_flow.commercial_previsit_network_guard import ap
 from app.api.routers.commercial_flow.commercial_previsit_service_scope import reviewed_service_types as _reviewed_service_types
 from app.api.routers.commercial_flow.commercial_previsit_context import ecw_case_data as _ecw_case_data
 from app.api.routers.commercial_flow.commercial_previsit_context import past_visit_with_saved_estimate as _past_visit_with_saved_estimate
-from app.api.routers.commercial_flow.commercial_previsit_tpa import merge_administrator_benefits
-from app.insurance import aetna_fees, botox_review, cms_locality, cms_pfs, cpt_rules, fep_preferred, insurance_product, inventory_certification, library_network_exclusions, group_contract_support
 from app.api.routers.commercial_flow.commercial_previsit_context import benefit_context as _benefit_context
+from app.api.routers.commercial_flow.commercial_previsit_tpa import merge_administrator_benefits
+from app.insurance import aetna_fees, botox_review, cpt_rules, fep_preferred, insurance_product, inventory_certification, library_network_exclusions, group_contract_support, medicare_fees
 from app.insurance.stedi_benefits.payer_order import primary_secondary_order
 from app.insurance.stedi_benefits.linked import merge_linked_medical_oop
 from app.api.routers.commercial_flow.commercial_previsit_medicare import bind as bind_medicare_part_b
@@ -108,9 +108,11 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
     if rules['provider_npi_conflict']:
         issues.append('The eCW rendering NPI conflicts with the selected visit provider; resolve it before pricing.')
     medical_names = (benefits.get('plan_details') or {}).get('names') or []
+    product_family = insurance_product.classify(medical_names, payer_id=payer_id)
+    medicare_plan = product_family == 'original_medicare' or product_family.startswith('medicare_advantage_')
     is_aetna = aetna_fees.is_aetna_payer(payer_name)
     rules['aetna_schedule'] = is_aetna
-    rules['medicare_advantage'] = insurance_product.is_medicare_advantage(medical_names)
+    rules['medicare_advantage'] = product_family.startswith('medicare_advantage_')
     rules['patient_binding'] = (benefits.get('identity') or {}).get('binding') or ''
     rules['product_binding'] = _api.payer_allowance.product_binding(benefits.get('plan_details'))
     if is_aetna:
@@ -120,38 +122,15 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
         rules['medicare_advantage'] |= aetna_category == 'advantage'
         issues.extend(aetna_issues)
     elif benefits.get('network_status') == 'out_of_network':
-        binding = (benefits.get('identity') or {}).get('binding') or ''
-        rules['patient_binding'] = binding
-        rules['product_binding'] = _api.payer_allowance.product_binding(benefits.get('plan_details'))
-        rules['cms_locality'], rules['cms_locality_evidence'] = cms_locality.pricing_locality(
-            source.get('cms_service_zip'), source.get('cms_locality'))
-        if rules['cms_locality_evidence']['status'] == 'clinic_location_conflict':
-            issues.append('The eCW service ZIP does not match the clinic-configured CMS locality; resolve the service location before using a CMS benchmark.')
-        rules['cms_qp_status'] = source.get('cms_qp_status')
-        if review.get('selected_ids') and _api.network_participation.verified_out_of_network(benefits):
+        if not medicare_plan and review.get('selected_ids') and _api.network_participation.verified_out_of_network(benefits):
             rates = _api.payer_allowance.quoted_rates(review, selected, payer_id=payer_route_id or payer_id,
                 service_date=str(inputs.get('service_date') or ''),
                 provider_npi=str(rules.get('provider_npi') or ''),
-                place_of_service=str(rules.get('place_of_service') or ''), patient_binding=binding,
+                place_of_service=str(rules.get('place_of_service') or ''), patient_binding=rules['patient_binding'],
                 product_binding=_api.payer_allowance.product_binding(benefits.get('plan_details')))
-            quoted = {rate['line_id'] for rate in rates}
-            if rules['medicare_advantage']:
-                for line in selected:
-                    if line['id'] in quoted:
-                        continue
-                    estimated = cms_pfs.estimate_rate(line['code'], line.get('modifiers') or [],
-                        line.get('units'), service_date=str(inputs.get('service_date') or ''),
-                        locality=str(rules.get('cms_locality') or ''),
-                        qp_status=str(source.get('cms_qp_status') or ''),
-                        place_of_service=str(rules.get('place_of_service') or ''),
-                        provider_npi=str(rules.get('provider_npi') or ''),
-                        patient_binding=binding)
-                    if estimated:
-                        rates.append({**estimated, 'line_id': line['id'], 'units': line['units'],
-                                      'product_binding': rules['product_binding']})
-        if len(rates) != len(selected):
-            issues.append('Obtain the payer out-of-network allowed amount or complete CMS locality and provider payment scope for each selected CPT; clinic contract and cash prices cannot replace it.')
-    else:
+        if not medicare_plan and len(rates) != len(selected):
+            issues.append('Obtain the payer out-of-network allowed amount for each selected CPT; clinic contract and cash prices cannot replace it.')
+    elif not medicare_plan:
         try:
             _, network, profile = _api._previsit_practice_path(practice_id, {**inputs, "payer_id": payer_id}, source)
             if network.get("plan_matcher") and not source.get("plan"):
@@ -170,8 +149,21 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
             rules = {**rules, **profile['rules']}
         except (_api.HTTPException, _api.commercial.CommercialError) as exc:
             issues.append(str(exc.detail) if isinstance(exc, _api.HTTPException) else str(exc))
+    if medicare_plan and not is_aetna:
+        rates = []
+        for line in selected:
+            fee = medicare_fees.estimate_rate(line['code'], line.get('modifiers') or [], line.get('units'),
+                service_date=str(inputs.get('service_date') or ''),
+                place_of_service=str(rules.get('place_of_service') or ''),
+                provider_npi=str(rules.get('provider_npi') or ''),
+                patient_binding=rules['patient_binding'])
+            if fee:
+                rates.append({**fee, 'line_id': line['id'], 'units': line['units'],
+                              'product_binding': rules['product_binding']})
+        if len(rates) != len(selected):
+            issues.append('The approved Medicare fee schedule has no matching unmodified fee for every selected CPT and visit.')
     telehealth_pos_unresolved = _api.visit_estimate.telehealth_pos_unresolved(inputs)
-    if _api.visit_estimate.is_telehealth(inputs) and not is_aetna:
+    if _api.visit_estimate.is_telehealth(inputs) and not medicare_plan and not is_aetna:
         rates = []
         rules['place_of_service'] = inputs.get('place_of_service')
         issues.append('A contract rate for telehealth POS 10 or 02 is not established; the clinic office rate is not used.')

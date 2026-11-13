@@ -7,7 +7,7 @@ export function resolvedAllowedTotal(lines: VisitPricedLine[]): number | null {
       (line) =>
         line.rate_resolution?.status === 'RESOLVED' &&
         line.allowed_cents != null &&
-        ['clinic_contract', 'payer_out_of_network', 'cms_original_medicare_estimate', 'aetna_fee_schedule'].includes(
+        ['clinic_contract', 'payer_out_of_network', 'medicare_fee_schedule', 'aetna_fee_schedule'].includes(
           line.allowed_basis || '',
         ),
     )

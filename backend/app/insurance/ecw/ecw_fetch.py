@@ -329,10 +329,6 @@ async def fetch_inputs(backend: ModuleType, profile: dict[str, Any], practice: d
                                     ("payer" in str(item.get("system") or "").casefold() or
                                      "x12" in str(item.get("system") or "").casefold())],
               "location": location.get("name"), "location_id": str(location.get("id") or location_ref or ""),
-              "cms_service_zip": ((location.get('address') or {}).get('postalCode')
-                                  if isinstance(location.get('address'), dict) else None),
-              "cms_locality": location_config.get("cms_locality"),
-              "cms_qp_status": rendering.get("cms_qp_status"),
               "billing_provider": {"name": _display(billing_resource), "npi": ecw_billing_npi,
                                    "tin": _tin(billing_resource),
                                    "tin_conflict": _tin_conflict(billing_resource)},

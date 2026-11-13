@@ -116,8 +116,8 @@ export default function VisitServices({
                             Allowed price source:{' '}
                             {row.allowed_basis === 'aetna_fee_schedule'
                               ? 'Aetna allowed fee schedule'
-                              : row.allowed_basis === 'cms_original_medicare_estimate'
-                              ? 'CMS Original Medicare benchmark estimate'
+                              : row.allowed_basis === 'medicare_fee_schedule'
+                              ? 'Clinic-approved Medicare fee schedule'
                               : row.allowed_basis === 'payer_out_of_network'
                                 ? 'Payer out-of-network amount'
                                 : 'Clinic contract'}{' '}

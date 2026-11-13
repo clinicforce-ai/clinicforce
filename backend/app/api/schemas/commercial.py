@@ -42,7 +42,7 @@ class CollectionPolicyInput(BaseModel):
     mode: Literal["defer_to_claim", "collect_verified_copay", "collect_supported_advance", "disabled"]
     reference: str = Field(min_length=10, max_length=500)
     allow_supported_oon_advance: bool = False
-    allow_cms_based_advance: bool = False
+    allow_medicare_schedule_advance: bool = Field(default=False, description='Approve a positive out-of-network advance calculated from the clinic-approved Medicare fee schedule; member billing protections and other collection checks still apply.')
     allow_blue_cross_proxy_advance: bool = False
     allow_bluecard_office_refundable_deposit: bool = Field(default=False, description=(
         'Approve a refundable check-in deposit for one bound, in-network BlueCard CPT 99203 office visit '
@@ -60,9 +60,6 @@ class AgreementInventoryScopeInput(BaseModel):
     place_of_service: str = Field(min_length=1, max_length=20)
     effective_from: date
     effective_to: date | None = None
-    cms_locality: str | None = Field(default=None, pattern=r"^\d{2}$")
-    cms_qp_status: Literal['qp', 'non_qp'] | None = None
-    cms_payment_reference: str | None = Field(default=None, min_length=10, max_length=500)
 
 
 class AgreementInventoryInput(BaseModel):

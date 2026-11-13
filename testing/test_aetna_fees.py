@@ -84,7 +84,7 @@ def test_ambiguous_aetna_product_never_falls_back_to_a_different_schedule():
                 'network_status': 'in_network'}
     line = {'id': 'office', 'code': '99213', 'units': 1, 'modifiers': []}
     with patch('app.api.routers.commercial_flow.commercial_previsit_pricing.aetna_fees.matching_rates') as lookup, \
-         patch('app.api.routers.commercial_flow.commercial_previsit_pricing.cms_pfs.estimate_rate') as medicare, \
+         patch('app.api.routers.commercial_flow.commercial_previsit_pricing.medicare_fees.estimate_rate') as medicare, \
          patch('app.api.routers.commercial_flow.commercial_previsit_pricing._api.commercial_store.matching_rates') as contract, \
          patch('app.api.routers.commercial_flow.commercial_previsit_pricing._api.visit_estimate.price_lines',
                return_value={'complete': False, 'lines': []}) as price:

@@ -9,7 +9,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'backend'))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.insurance.historical_replay import replay  # noqa: E402
-from testing.test_historical_replay import _bundle, _positive_policy, _row  # noqa: E402
+from app.insurance import medicare_fees  # noqa: E402
+from testing.test_historical_replay import _bundle, _positive_policy, _row, synthetic_fee_rate  # noqa: E402
+
+medicare_fees.estimate_rate = synthetic_fee_rate
 
 
 def main() -> None:
@@ -21,12 +24,10 @@ def main() -> None:
         'multi_service': _bundle([_row('C', 50, '30'), _row('G', 500, '30'),
                                   _row('A', .20, '98'), _row('A', .20, '73')],
                                  [{'id': key, 'code': code, 'units': 1, 'modifiers': []}
-                                  for key, code in [('office', '99204'), ('ncs', '95907'),
+                                  for key, code in [('office', '99204'), ('ncs', '95911'),
                                                     ('emg', '95886')]], policy=_positive_policy()),
         'incomplete': _bundle([]),
     }
-    for field in ('cms_locality', 'cms_qp_status', 'cms_payment_reference'):
-        scenarios['fixed_copay']['payer_route']['rules']['agreement_inventory']['scopes'][0].pop(field)
     print(json.dumps({name: replay(bundle)['result'] for name, bundle in scenarios.items()}))
 
 
