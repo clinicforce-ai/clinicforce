@@ -4,7 +4,7 @@ from __future__ import annotations
 from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_rate_reference import refresh_saved_temporary_rates
-from app.insurance import blue_cross_proxy, choice_plus_emg_proxy, cigna_clinic_quote, group_contract_support, published_plan_benefits, uhc_dsnp_office_proxy
+from app.insurance import aetna_fees, blue_cross_proxy, choice_plus_emg_proxy, cigna_clinic_quote, group_contract_support, published_plan_benefits, uhc_dsnp_office_proxy
 from app.insurance.identity import patient_plan_applies
 from app.insurance.stedi_benefits.normalize import ambiguous_combined_zero_oop
 
@@ -209,7 +209,8 @@ def _reprice_saved_new_network(result: dict, case: dict, practice_id: str, payer
     result['price_range'] = price
     result.pop('arrival_collection', None)
     result.pop('planning_estimate', None)
-    if not payer or not case.get('previsit_raw_object_key') or not case.get('previsit_raw_sha256'):
+    is_aetna = aetna_fees.is_aetna_payer(str((payer or {}).get('display_name') or result.get('payer') or ''))
+    if (not payer and not is_aetna) or not case.get('previsit_raw_object_key') or not case.get('previsit_raw_sha256'):
         return
     try:
         raw = _api.object_store.get_object_bytes(case['previsit_raw_object_key'])
@@ -228,11 +229,13 @@ def _reprice_saved_new_network(result: dict, case: dict, practice_id: str, payer
                  'payer_plan_bound': patient_plan_applies(benefits, identity, str(inputs.get('service_date') or '')),
                  'payer_plan_names': [plan['identified_product']] if plan.get('identified_product') else plan.get('names') or [],
                  'payer_network_names': plan.get('network_names') or []}
-        price, _ = _api._previsit_range(practice_id, inputs, exact, payer['id'],
+        price, _ = _api._previsit_range(practice_id, inputs, exact,
+                                       str((payer or {}).get('id') or context.get('payer_id') or ''),
                                        result.get('codes') or [], benefits, payload=payload,
                                        review=case.get('visit_review'),
                                        payer_route_id=context.get('payer_id'),
-                                       network_evidence=result.get('network_evidence'))
+                                       network_evidence=result.get('network_evidence'),
+                                       payer_name=str((payer or {}).get('display_name') or result.get('payer') or ''))
     except Exception:
         # A saved view must not fail when its protected response or current
         # clinic pricing configuration is temporarily unavailable.
@@ -246,7 +249,8 @@ def refresh_saved_network_pricing(result: dict, case: dict, practice_id: str,
     current_network = (benefits.get('network_status'), benefits.get('network_source'))
     network_changed = (prior_network != current_network and current_network[1] in {
         'clinic_group_agreement', 'clinic_nonparticipation_rule', 'clinic_attested_phcs_roster'})
-    if network_changed or saved_fep_standard_office_needs_reprice(result):
+    is_aetna = aetna_fees.is_aetna_payer(str((route_payer or {}).get('display_name') or result.get('payer') or ''))
+    if network_changed or saved_fep_standard_office_needs_reprice(result) or is_aetna:
         payer_id = str((case.get('previsit_context') or {}).get('payer_id') or '')
         route = group_contract_support.eligibility_route(result, payer_id, route_payer)
         _reprice_saved_new_network(result, case, practice_id, route)

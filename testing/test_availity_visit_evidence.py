@@ -63,22 +63,20 @@ def test_no_participation_or_conflicting_specialist_copay_is_rejected():
         _parse(_pdf(conflicting=True))
 
 
-def test_dated_availity_reference_exposes_only_office_fee_reference(monkeypatch):
+def test_dated_availity_reference_does_not_supply_an_aetna_allowed_fee():
     from app.api.routers.commercial_flow import commercial_previsit_rate_reference as rates
 
-    monkeypatch.setattr(rates._api.network_participation, 'is_nmct_practice', lambda _: True)
     result = {
+        'payer': 'Aetna',
         'payment_mode': 'insurance',
         'benefits': {'active': False},
         'availity_visit_reference': _parse(_pdf()),
         'codes': [{'id': 'office', 'code': '99203', 'units': 1, 'modifiers': []}],
     }
-    rates._attach_temporary_aetna_rates(result, 'synthetic-practice',
-        {'service_date': '2026-11-03', 'place_of_service': '11'}, {})
-    reference = result['temporary_rate_reference']
-    assert reference['lines'][0]['unit_reference_cents'] == 11960
-    assert 'planning reference' in reference['message']
-    assert 'allowed_cents' not in result
+    rates.refresh_saved_temporary_rates(result, 'synthetic-practice',
+        {'service_date': '2026-11-03', 'place_of_service': '11'}, {}, None)
+    assert 'temporary_rate_reference' not in result
+    assert result['availity_visit_reference']['copay_cents'] == 7000
 
 
 def test_admin_upload_binds_saved_visit_and_keeps_source_protected(monkeypatch):

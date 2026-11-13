@@ -114,11 +114,13 @@ export default function VisitServices({
                         {row.allowed_cents != null ? (
                           <small>
                             Allowed price source:{' '}
-                            {row.allowed_basis === 'medicare_fee_schedule'
-                              ? 'Clinic-approved Medicare fee schedule'
-                              : row.allowed_basis === 'payer_out_of_network'
-                                ? 'Payer out-of-network amount'
-                                : 'Clinic contract'}{' '}
+                            {row.allowed_basis === 'aetna_fee_schedule'
+                              ? 'Aetna allowed fee schedule'
+                              : row.allowed_basis === 'medicare_fee_schedule'
+                                ? 'Clinic-approved Medicare fee schedule'
+                                : row.allowed_basis === 'payer_out_of_network'
+                                  ? 'Payer out-of-network amount'
+                                  : 'Clinic contract'}{' '}
                             · {rateSource(row.rate_source) || 'Source not retained'}
                             {row.rate_row_number ? ` · row ${row.rate_row_number}` : ''}
                           </small>

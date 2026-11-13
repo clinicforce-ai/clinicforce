@@ -111,11 +111,11 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     no conflicting evidence, collection_guidance uses basis
     published_geha_pshb_zero_office and amount_cents 0; the missing 271
     deductible/out-of-pocket rows remain missing member-specific evidence.
-    temporary_rate_reference identifies a dated CPT planning source: scoped
-    Blue Cross Clinical Library prices for eligible cross-payer routes,
-    including the exact Choice POS II two-code diagnostic scenario, or draft
-    Aetna MEPPO portal values for the exact Signature PPO diagnostic scenario.
-    A Blue Cross reference never becomes an Aetna allowance or collect-now amount.
+    Aetna Advantage and commercial allowed fees for unmodified selected CPTs
+    come from the clinic-wide aetna_fee_schedule database table when the payer
+    and one medical product identify the category. The rate is an allowed fee,
+    not a patient share or permission to collect. temporary_rate_reference
+    remains a separate planning source for other supported payers.
     The NMCT Cigna PPO single-CPT 99203 refundable office quote may equal the matched clinic fee less prior payments when same-plan deductible and out-of-pocket balances exceed the fee and the 20% office benefit has no copay; it is not a Cigna allowance or final liability.
     For a Cigna office E/M visit, temporary_rate_reference.alternatives lists matching BCBSTX fee rows
     for available, unselected levels in the same E/M family. These are separate

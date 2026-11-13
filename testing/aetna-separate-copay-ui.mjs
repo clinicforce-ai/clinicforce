@@ -248,33 +248,4 @@ const savedSummary = renderToStaticMarkup(React.createElement(ArrivalAmountSumma
 assert.match(savedSummary, /Aetna office copay · Medicare review/)
 assert.match(savedSummary, /\$60\.00/)
 assert.doesNotMatch(savedSummary, /Confirm payer order/)
-const depositResult = { ...result,
-  plan_details: { stedi: { names: ['Aetna Choice POS II'] } },
-  benefits: { ...result.benefits, oop_remaining_cents: null, family_oop_remaining_cents: 28407 },
-  price_range: { ...result.price_range, lines: [{ ...result.price_range.lines[0],
-    benefits: { active: true, service_date_matches: true, deductible_applies: false } }] },
-  collection_guidance: { amount_cents: 7553, status: 'estimated',
-    basis: 'aetna_office_refundable_deposit',
-    reason: 'Refundable clinic deposit from the dated Availity MPPO Office reference; final share follows the claim.',
-    services: [], patient_actions: [], assumptions: [] },
-  encounter_summary: { collect_today_cents: 7553, estimated_total_patient_min_cents: null,
-    estimated_total_patient_max_cents: null, payments_verified_cents: null, components: {} } }
-const depositModel = { ...model, supportedAmount: true, amount: '$75.53',
-  amountText: '$75.53', amountLabel: 'Refundable deposit to collect now' }
-const derivedDeposit = deriveCommercialEstimateView({ result: depositResult,
-  appointments: [], selectedVisit: null, busy: null, error: null, readOnly: false,
-  recovering: false })
-assert.equal(derivedDeposit.amount, '$75.53')
-assert.equal(derivedDeposit.amountLabel, 'Refundable deposit to collect now')
-const depositRow = collectionAtVisitRow(depositResult, depositModel, {
-  combinedPlan: null, feeProxy: null, aetnaPlanning: null, aetnaCopayPlanning: null,
-  officeReferenceCopay: null, humanaReferenceCopay: null, partialOfficeCopay: null,
-  pendingAetnaCopay: null, cardPlanningCopay: null, automaticCashFallback: false,
-  cignaFeeProxy: false, proxyFormula: undefined })
-assert.equal(depositRow.label, 'Refundable deposit at visit')
-assert.match(depositRow.value, /\$75\.53/)
-const depositSummary = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
-  { model: depositModel, result: depositResult, partialCopay: null, visibleAmount: true }))
-assert.match(depositSummary, /Refundable deposit to collect now/)
-assert.match(depositSummary, /\$75\.53/)
 console.log('Aetna separate copay: $40 office reference; $0 general OOP does not erase the separate cap')
