@@ -11,7 +11,6 @@ from app.insurance.collection.blue_ppo_family_quote import apply as apply_blue_p
 from app.insurance.collection.cigna_quotes import apply as apply_cigna_quotes
 from app.insurance.collection.office_copay import (cigna_oap_televisit_office_copay, diagnostic_day_copay_amount, office_copay_amount, preview_office_copay_applies)
 from app.insurance.collection.billing_note import apply_billing_note
-from app.insurance.collection.aetna_office_deposit import apply as apply_aetna_office_deposit
 from app.insurance.collection.benefit_gates import apply_family_oop_deferrals, apply_trs_hd_office_refundable_deposit, prepare_benefit_evidence, preview_zero_individual_oop_applies
 from app.insurance.collection.healthselect_zero import applies as healthselect_zero_applies
 from app.insurance.collection import secondary_order
@@ -447,7 +446,6 @@ def build(result: dict, review: dict | None = None) -> dict:
                 patient_message='Your visit payment is pending a Cigna estimate; this does not mean you owe $0.')
     secondary_order.apply_part_b_deferral(result, guidance, source_errors, member_bound, ma_ppo)
     apply_family_oop_deferrals(result, guidance, member_bound=member_bound, source_errors=source_errors, adverse=bool(adverse), same_policy_conflict=same_policy_conflict)
-    apply_aetna_office_deposit(result, guidance, review, safe=bool(safe), adverse=bool(adverse), source_errors=source_errors, same_policy_conflict=same_policy_conflict)
     apply_trs_hd_office_refundable_deposit(result, guidance, member_bound=member_bound, source_errors=source_errors, adverse=bool(adverse), same_policy_conflict=same_policy_conflict, review=review)
     apply_bluecard_family_deposit(result, guidance, review, safe=bool(safe),
         qmb_protected=bool(qmb_protected), qmb_unresolved=bool(qmb_unresolved))
@@ -476,7 +474,7 @@ def build(result: dict, review: dict | None = None) -> dict:
             if note['kind'] == 'no_collection' else 'This advance uses the office copay recorded by the clinic. Additional services and final responsibility follow claim processing.')
         for service in guidance['services']:
             service['patient_cents'] = None
-    if guidance['amount_cents'] is not None and guidance['basis'] in {'patient_obligations', 'anticipated_services', 'bcbstx_proxy_advance', 'cigna_fee_proxy_advance', 'bcbstx_refundable_advance', 'aetna_office_refundable_deposit'}:
+    if guidance['amount_cents'] is not None and guidance['basis'] in {'patient_obligations', 'anticipated_services', 'bcbstx_proxy_advance', 'cigna_fee_proxy_advance', 'bcbstx_refundable_advance'}:
         error = encounter_summary.build({**result, 'collection_guidance': guidance}, review)['integrity_error']
         if error:
             reasons = {

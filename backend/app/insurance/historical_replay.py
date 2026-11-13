@@ -7,7 +7,7 @@ import base64
 import hashlib
 import json
 
-from app.insurance import (amount_explanation, cms_locality, cms_pfs, collection_guidance,
+from app.insurance import (aetna_fees, amount_explanation, cms_locality, cms_pfs, collection_guidance,
                            commercial, encounter_summary, insurance_product, inventory_certification,
                            library_network_exclusions, payer_allowance, stedi_discovery,
                            visit_estimate)
@@ -154,10 +154,19 @@ def replay(bundle: dict) -> dict:
         service_date=service_date, provider_npi=str((inputs.get('rendering_provider') or {}).get('npi') or ''),
         place_of_service=str(inputs.get('place_of_service') or ''), patient_binding=str(identity.get('binding') or ''),
         product_binding=payer_allowance.product_binding(product))
+    is_aetna = aetna_fees.is_aetna_payer(str(payer.get('display_name') or ''))
+    aetna_category = aetna_fees.category(str(payer.get('display_name') or ''), named)
     scope = (inventory or {}).get('scope') or {}
-    locality, locality_evidence = cms_locality.pricing_locality(source.get('cms_service_zip'),
-        str(scope.get('cms_locality') or source.get('cms_locality') or '') or None)
-    if inventory:
+    locality, locality_evidence = (None, {}) if is_aetna else cms_locality.pricing_locality(
+        source.get('cms_service_zip'), str(scope.get('cms_locality') or source.get('cms_locality') or '') or None)
+    if is_aetna:
+        rates = (aetna_fees.matching_rates(aetna_category, service_date, codes,
+            place_of_service=str(inputs.get('place_of_service') or ''),
+            provider_npi=str((inputs.get('rendering_provider') or {}).get('npi') or ''),
+            patient_binding=str(identity.get('binding') or ''),
+            product_binding=payer_allowance.product_binding(product))
+            if aetna_category and benefits.get('network_status') != 'out_of_network' else [])
+    elif inventory:
         for line in codes:
             if any(rate.get('line_id') == line['id'] for rate in rates):
                 continue
@@ -171,7 +180,8 @@ def replay(bundle: dict) -> dict:
                 rates.append({**rate, 'line_id': line['id'], 'units': line['units'],
                               'product_binding': payer_allowance.product_binding(product)})
     rules = {'cost_share': 'payer_returned', 'office_service_types': ['98'],
-             'medicare_advantage': insurance_product.is_medicare_advantage(named),
+             'aetna_schedule': is_aetna,
+             'medicare_advantage': aetna_category == 'advantage' or insurance_product.is_medicare_advantage(named),
              'patient_binding': identity.get('binding'),
              'product_binding': payer_allowance.product_binding(product),
              'cms_locality': locality, 'cms_locality_evidence': locality_evidence,

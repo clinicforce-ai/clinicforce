@@ -350,7 +350,7 @@ export function ServicePlanner({
                       ['payer_out_of_network', 'cms_original_medicare_estimate'].includes(
                         row.allowed_basis || '',
                       ))
-                      ? `${row.allowed_basis === 'cms_original_medicare_estimate' ? 'CMS benchmark' : row.allowed_basis === 'payer_out_of_network' ? 'Payer allowed' : 'Contract'} / unit ${money(row.unit_allowed_cents)}`
+                      ? `${row.allowed_basis === 'aetna_fee_schedule' ? 'Aetna allowed' : row.allowed_basis === 'cms_original_medicare_estimate' ? 'CMS benchmark' : row.allowed_basis === 'payer_out_of_network' ? 'Payer allowed' : 'Contract'} / unit ${money(row.unit_allowed_cents)}`
                       : row.unit_cash_cents != null
                         ? `Cash / unit ${money(row.unit_cash_cents)}`
                         : 'Price follows plan and clinic schedule'}

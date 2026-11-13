@@ -348,7 +348,7 @@ export function commercialPricedCptRows({
     const resolved =
       !automaticCashFallback &&
       line.rate_resolution?.status === 'RESOLVED' &&
-      ['clinic_contract', 'payer_out_of_network', 'cms_original_medicare_estimate'].includes(
+      ['clinic_contract', 'payer_out_of_network', 'cms_original_medicare_estimate', 'aetna_fee_schedule'].includes(
         line.allowed_basis || '',
       )
     return {
