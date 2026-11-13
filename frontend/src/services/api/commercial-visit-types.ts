@@ -112,7 +112,8 @@ export type VisitCode = {
   catalogue_version?: number
   unit_allowed_cents?: number | null
   unit_cash_cents?: number | null
-  allowed_basis?: 'clinic_contract' | 'payer_out_of_network' | 'medicare_fee_schedule' | 'aetna_fee_schedule'
+  allowed_basis?:
+    'clinic_contract' | 'payer_out_of_network' | 'medicare_fee_schedule' | 'aetna_fee_schedule'
   rate_source?: string
 }
 
@@ -141,7 +142,8 @@ export type VisitPricedLine = VisitCode & {
   id: string
   allowed_cents?: number | null
   unit_allowed_cents?: number | null
-  allowed_basis?: 'clinic_contract' | 'payer_out_of_network' | 'medicare_fee_schedule' | 'aetna_fee_schedule'
+  allowed_basis?:
+    'clinic_contract' | 'payer_out_of_network' | 'medicare_fee_schedule' | 'aetna_fee_schedule'
   cash_cents?: number | null
   cash_source?: string
   cash_rule?: { locator?: string; document_id?: string }

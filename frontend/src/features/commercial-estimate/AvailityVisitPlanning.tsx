@@ -55,7 +55,9 @@ export function AvailityVisitTable({
       : null
   const rate = code
     ? result.price_range?.lines?.find(
-        (line) => line.id === code.id && line.allowed_basis === 'aetna_fee_schedule' &&
+        (line) =>
+          line.id === code.id &&
+          line.allowed_basis === 'aetna_fee_schedule' &&
           line.rate_resolution?.status === 'RESOLVED',
       )
     : null

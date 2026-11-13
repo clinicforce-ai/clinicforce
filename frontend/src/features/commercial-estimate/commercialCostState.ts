@@ -44,9 +44,13 @@ export function visibleRateReference(result: PrevisitEstimate) {
       : result.temporary_rate_reference
   return {
     temporaryRateReference,
-    aetnaRateReference: Boolean(result.price_range?.lines?.some(
-      (line) => line.allowed_basis === 'aetna_fee_schedule' && line.rate_resolution?.status === 'RESOLVED',
-    )),
+    aetnaRateReference: Boolean(
+      result.price_range?.lines?.some(
+        (line) =>
+          line.allowed_basis === 'aetna_fee_schedule' &&
+          line.rate_resolution?.status === 'RESOLVED',
+      ),
+    ),
   }
 }
 
