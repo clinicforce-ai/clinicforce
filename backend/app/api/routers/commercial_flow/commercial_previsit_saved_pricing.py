@@ -157,6 +157,37 @@ def refresh_saved_cigna_office_benefits(result: dict, case: dict, practice_id: s
     result.setdefault('appointment_context', {})['place_of_service'] = inputs['place_of_service']
 
 
+def refresh_saved_uhc_registration_benefits(result: dict, case: dict) -> None:
+    """Rebind a saved Choice Plus response after the eCW name rule changes."""
+    context = case.get('previsit_context') or {}
+    inputs = context.get('inputs') or {}
+    old = result.get('benefits') or {}
+    if (str(result.get('payer') or '').casefold().replace(' ', '') != 'unitedhealthcare'
+            or (result.get('identity') or {}).get('status') != 'review'
+            or old.get('active') is not True or old.get('has_secondary')
+            or old.get('coverage_status_conflict') or old.get('source_errors')
+            or case.get('previsit', {}).get('request_state') != 'complete'
+            or inputs.get('place_of_service') != '10'
+            or not case.get('previsit_raw_object_key') or not case.get('previsit_raw_sha256')):
+        return
+    try:
+        raw = _api.object_store.get_object_bytes(case['previsit_raw_object_key'])
+        if _api.hashlib.sha256(raw).hexdigest() != case['previsit_raw_sha256']:
+            return
+        payload = _api.json.loads(raw)
+        source = context.get('source') or {}
+        fresh = _api._case_benefits(payload, inputs, source, case)
+        matched = fresh.get('identity') or {}
+        if (matched.get('reconciliation_rule') != 'payer_registration_variant'
+                or not patient_plan_applies(fresh, matched, str(inputs.get('service_date') or ''))
+                or fresh.get('source_errors')):
+            return
+    except Exception:
+        return
+    result['benefits'] = fresh
+    result['identity'] = matched
+
+
 def restore_active_blue_cross_insurance(result: dict, case: dict) -> None:
     if ((result.get('benefits') or {}).get('active') is True
             and result.get('cash_fallback') is not None
@@ -249,13 +280,14 @@ def refresh_saved_network_pricing(result: dict, case: dict, practice_id: str,
     benefits = result.get('benefits') or {}
     current_network = (benefits.get('network_status'), benefits.get('network_source'))
     network_changed = (prior_network != current_network and current_network[1] in {
-        'clinic_group_agreement', 'clinic_nonparticipation_rule', 'clinic_attested_phcs_roster'})
+        'clinic_library_contract', 'clinic_group_agreement', 'clinic_nonparticipation_rule',
+        'clinic_attested_phcs_roster'})
     payer_name = str((route_payer or {}).get('display_name') or result.get('payer') or '')
     is_schedule_payer = aetna_fees.is_aetna_payer(payer_name) or bool(payer_fees.schedule_for_result({**result, 'payer': payer_name}))
     if network_changed or saved_fep_standard_office_needs_reprice(result) or is_schedule_payer:
         payer_id = str((case.get('previsit_context') or {}).get('payer_id') or '')
         route = group_contract_support.eligibility_route(result, payer_id, route_payer)
-        _reprice_saved_new_network(result, case, practice_id, route)
+        _reprice_saved_new_network(result, case, practice_id, route or route_payer)
 
 
 def refresh_saved_cross_payer_planning(result: dict, case: dict, practice_id: str, route_payer: dict | None) -> None:

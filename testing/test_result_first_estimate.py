@@ -1,5 +1,6 @@
 """Synthetic regressions for the result-first workflow; no live payer traffic."""
 import asyncio
+import hashlib
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 import json
@@ -11,6 +12,7 @@ from app.api.routers import commercial_estimator as api, staff
 from app.api.routers.commercial_flow.commercial_previsit_catalog import build_catalog
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_pricing import _previsit_range
+from app.api.routers.commercial_flow import commercial_previsit_saved_pricing as saved_pricing
 from app.insurance import collection_guidance, commercial, ecw_backend, identity, network_participation, visit_estimate
 
 DAY = date.today().isoformat()
@@ -65,6 +67,112 @@ def test_dependent_patient_is_compared_separately_from_policyholder():
     raw = response('Mór-gan')
     raw['dependent']['dateOfBirth'] = '20010203'
     assert identity.compare(raw, policy())['status'] == 'matched'
+
+
+def test_uhc_choice_plus_self_registration_typo_uses_payer_identity():
+    recorded = {'patient_id': 'patient-a', 'coverage_id': 'coverage-a', 'active_coverages': 1,
+                'subscriber_patient_linked': True, 'relationship': '18', 'payer_id': '87726',
+                'member_id': '12345678900', 'patient_birth_date': '1967-12-14',
+                'subscriber_birth_date': '1967-12-14', 'patient_first': 'Scramento',
+                'subscriber_first': 'Scramento', 'patient_last': 'Hernandez',
+                'subscriber_last': 'Hernandez'}
+    payer = {'payerId': '87726', 'subscriber': {'memberId': '12345678900',
+             'dateOfBirth': '1967-12-14', 'name': {'person': {
+                 'firstName': 'Sacramento', 'lastName': 'Hernandez-Gonzalez'}},
+             'additionalInformation': {'group': {'number': 'GROUP1'}}},
+             'plans': [{'benefits': {'statuses': [{'service': {'system': 'STC', 'value': '30'},
+                 'status': 'ACTIVE_COVERAGE', 'planCoverageDescription': 'Choice Plus'}]}}]}
+    matched = identity.compare(payer, recorded)
+    assert matched['status'] == 'warning'
+    assert matched['reconciliation_rule'] == 'payer_registration_variant'
+    assert identity.patient_benefits_bound(matched)
+    assert identity.payer_identity_verified(matched)
+    for changed in ({'member_id': '12345678901'}, {'patient_birth_date': '1967-12-15'},
+                    {'active_coverages': 2}, {'subscriber_patient_linked': False},
+                    {'patient_last': 'Other'}, {'group_number': 'DIFFERENT'}):
+        assert identity.compare(payer, {**recorded, **changed})['status'] == 'review'
+
+
+def test_uhc_choice_plus_specialist_provider_role_copay_wins_over_generic_office_rows():
+    scope = {'coverageLevel': 'INDIVIDUAL', 'network': {'indicator': 'IN_NETWORK'},
+             'placesOfService': [{'code': '10'}]}
+    office = {**scope, 'service': {'system': 'STC', 'value': '98'}}
+    physician = {**scope, 'service': {'system': 'STC', 'value': 'BY'}}
+    payer = {'payerId': '87726', 'subscriber': {'memberId': 'SYNTHETIC1'},
+             'plans': [{'name': 'Choice Plus', 'benefits': {
+                 'statuses': [{'service': {'system': 'STC', 'value': '30'},
+                               'status': 'ACTIVE_COVERAGE'}],
+                 'coPayment': [{**office, 'amount': 25}, {**office, 'amount': 0},
+                               {**physician, 'amount': 25}, {**physician, 'amount': 0},
+                               {**physician, 'amount': 50, 'messages': ['Provider Role OTHER']}],
+                 'coInsurance': [{**physician, 'percent': 0}],
+             }}]}
+    specialist = commercial.normalize_stedi_271(payer, '98', True, office_visit=True,
+        procedure_code='99213', office_service_types=['98', 'BQ', 'BY', '1'],
+        place_of_service='10', provider_specialties=['Neurology'])
+    assert specialist['copay_cents'] == 5000
+    assert specialist['coinsurance_percent'] == '0'
+    assert commercial.normalize_stedi_271(payer, '98', True, office_visit=True,
+        procedure_code='99213', office_service_types=['98', 'BY', '1'],
+        place_of_service='10', provider_specialties=['Family Medicine'])['copay_cents'] is None
+    specialist.update(network_status='in_network', network_source='clinic_library_contract')
+    matched = {'status': 'warning', 'match_version': 2, 'binding': 'synthetic-binding',
+               'reconciliation_rule': 'payer_registration_variant'}
+    line = {'id': 'office', 'code': '99213', 'units': 1, 'benefits': deepcopy(specialist),
+            'conditions': ['Estimated using the returned policy; patient names differ between eCW and the payer.']}
+    result = {'payer': 'United Healthcare', 'benefits': specialist, 'identity': matched,
+              'plan_details': {'stedi': {'names': ['Choice Plus']}},
+              'telehealth': {'place_of_service': '10', 'modality': 'audio_video'},
+              'appointment_context': {'place_of_service': '10',
+                                      'rendering_provider': {'roles': ['Neurology']}},
+              'price_range': {'mode': 'services', 'complete': False, 'conditional': True,
+                              'lines': [line], 'service_issues': []},
+              'service_selection_status': 'preview', 'service_plan': {'recommended_ids': ['office']},
+              'codes': [{'id': 'office', 'code': '99213'}]}
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 5000
+    assert guidance['collection_rule']['mode'] == 'uhc_choice_plus_registration_copay'
+    assert collection_guidance.build(result, {'payments': {'reference': 'synthetic receipt',
+        'amount_cents': 1500}})['amount_cents'] == 3500
+    wrong_role = deepcopy(result)
+    wrong_role['appointment_context']['rendering_provider']['roles'] = ['Family Medicine']
+    assert collection_guidance.build(wrong_role)['amount_cents'] is None
+    wrong_network = deepcopy(result)
+    wrong_network['benefits']['network_status'] = 'unknown'
+    assert collection_guidance.build(wrong_network)['amount_cents'] is None
+
+
+def test_saved_uhc_registration_response_rebinds_and_reprices_with_library_contract(monkeypatch):
+    raw = json.dumps({'payerId': '87726', 'subscriber': {'memberId': 'SYNTHETIC1'}}).encode()
+    case = {'previsit': {'request_state': 'complete'}, 'previsit_raw_object_key': 'synthetic-key',
+            'previsit_raw_sha256': hashlib.sha256(raw).hexdigest(),
+            'previsit_context': {'payer_id': '87726', 'inputs': {'service_date': '2026-11-14',
+                'place_of_service': '10'}, 'source': {}}}
+    result = {'payer': 'United Healthcare', 'identity': {'status': 'review'},
+              'benefits': {'active': True}, 'price_range': {'lines': []}}
+    fresh = {'active': True, 'service_date_matches': True,
+             'identity': {'status': 'warning', 'match_version': 2, 'binding': 'synthetic',
+                          'reconciliation_rule': 'payer_registration_variant'}}
+    monkeypatch.setattr(saved_pricing._api.object_store, 'get_object_bytes', lambda _: raw)
+    monkeypatch.setattr(saved_pricing._api, '_case_benefits', lambda *_: fresh)
+    saved_pricing.refresh_saved_uhc_registration_benefits(result, case)
+    assert result['identity']['reconciliation_rule'] == 'payer_registration_variant'
+    assert result['benefits'] is fresh
+    tampered = deepcopy(case)
+    tampered['previsit_raw_sha256'] = '0' * 64
+    blocked = {'payer': 'United Healthcare', 'identity': {'status': 'review'},
+               'benefits': {'active': True}}
+    saved_pricing.refresh_saved_uhc_registration_benefits(blocked, tampered)
+    assert blocked['identity']['status'] == 'review'
+    called = []
+    monkeypatch.setattr(saved_pricing.payer_fees, 'schedule_for_result', lambda _: None)
+    monkeypatch.setattr(saved_pricing, '_reprice_saved_new_network',
+                        lambda *args: called.append(args))
+    result['benefits'].update(network_status='in_network', network_source='clinic_library_contract')
+    route = {'id': 'route-a', 'display_name': 'United Healthcare',
+             'status': 'staff_guidance_enabled'}
+    saved_pricing.refresh_saved_network_pricing(result, case, 'primary', route, ('unknown', None))
+    assert called and called[0][-1] == route
 
 
 def test_payer_matched_dependent_does_not_trigger_repeat_policy_recovery():

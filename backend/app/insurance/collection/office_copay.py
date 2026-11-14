@@ -19,6 +19,42 @@ def preview_office_copay_applies(benefits: dict, price: dict, lines: list[dict])
         and (lines[0].get('benefits') or {}).get('copay_cents') is not None)
 
 
+def uhc_choice_plus_registration_copay(result: dict, benefits: dict, price: dict,
+                                       lines: list[dict], amount: int | None,
+                                       basis: str) -> bool:
+    """Allow a payer-bound specialist copay despite a bounded eCW name typo."""
+    identity = result.get('identity') or benefits.get('identity') or {}
+    names = (((result.get('plan_details') or {}).get('stedi') or {}).get('names') or [])
+    provider = (result.get('appointment_context') or {}).get('rendering_provider') or {}
+    telehealth = result.get('telehealth') or {}
+    card = result.get('card_check') or {}
+    line = lines[0] if len(lines) == 1 else {}
+    terms = line.get('benefits') or {}
+    selected = [row for row in terms.get('reported_options') or benefits.get('reported_options') or []
+                if row.get('id') == terms.get('copay_id')]
+    return (identity.get('reconciliation_rule') == 'payer_registration_variant'
+            and str(result.get('payer') or '').casefold().replace(' ', '') == 'unitedhealthcare'
+            and [re.sub(r'[^a-z]', '', str(name).casefold()) for name in names] == ['choiceplus']
+            and telehealth.get('place_of_service') == '10'
+            and telehealth.get('modality') == 'audio_video'
+            and office_role(provider.get('roles') or []) == 'specialist'
+            and verified_in_network(benefits)
+            and basis == 'office_copay' and type(amount) is int and 0 < amount <= 100_000
+            and price.get('mode') == 'services' and not price.get('service_issues')
+            and all('patient names differ between eCW and the payer' in condition
+                    for condition in line.get('conditions') or [])
+            and line.get('code') in {str(n) for n in (*range(99202, 99206), *range(99212, 99216))}
+            and line.get('units') == 1 and not line.get('modifiers')
+            and terms.get('active') is True and terms.get('copay_period') in {'', 'VISIT', '27'}
+            and terms.get('deductible_applies') is not True
+            and terms.get('coinsurance_percent') in {'0', '0.0', '0.00'}
+            and type(terms.get('copay_cents')) is int and amount <= terms['copay_cents']
+            and len(selected) == 1 and selected[0].get('service_type_code') == 'BY'
+            and re.fullmatch(r'provider role other', str(selected[0].get('payer_note') or '').strip(), re.I) is not None
+            and selected[0].get('amount_cents') == terms['copay_cents']
+            and card.get('status') not in {'conflict', 'mismatch'} and not card.get('conflicts'))
+
+
 def cigna_oap_televisit_office_copay(result: dict, benefits: dict, price: dict,
                                      lines: list[dict], guidance: dict,
                                      assumptions: list[str]) -> int | None:

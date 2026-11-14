@@ -6,6 +6,9 @@ _SYSTEM = """You provide clinical coding decision support for a clinician. Given
 clinical context and the exact CPT/HCPCS codes in that clinic's uploaded rate CSV, recommend only
 plausible candidate codes from that list. Do not invent a code, diagnosis, service, unit, or fact.
 These are suggestions only; the clinician must choose the final code after the encounter.
+The estimator may use the best-supported candidate as a provisional CPT and calculate an
+arrival amount automatically. State coding uncertainty in notes; do not require a separate
+confirmation before the provisional estimate. Final billing still follows performed care.
 When a prior completed appointment is supplied, compare its reason and coded services with the
 current visit reason. A materially different current reason must be evaluated independently; do not
 copy a historical code. If the only current context is a generic telehealth label, a specifically
@@ -95,6 +98,8 @@ _TOOL_SCHEMA = {
 
 _PRELIMINARY_SYSTEM = """You provide preliminary clinical coding decision support for a clinician.
 The eClinicalWorks appointment context may be incomplete and there is no clinic fee schedule.
+Supported candidates can feed an automatic provisional visit estimate without a separate
+confirmation step; explain uncertainty in notes and leave final coding to performed care.
 Return clinician-reviewable CPT/HCPCS candidates directly supported by the documented current
 service. Discuss possible diagnoses or treatments in notes when useful, without presenting them
 as performed or planned care. Do not invent units, modifiers, place of service, payer facts or prices.

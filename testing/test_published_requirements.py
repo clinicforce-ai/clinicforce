@@ -88,6 +88,32 @@ def case(payer, product, *codes, pos='11', day='2026-10-14', indication=None):
     return result, context
 
 
+def test_uhc_choice_epo_99203_office_requirements_follow_published_2026_rules():
+    result, context = case('UnitedHealthcare', 'CHOICE EPO', '99203', day='2026-11-14')
+    decision = evaluate(result, context, [])
+    assert decision['referral']['status'] == 'Not required'
+    assert decision['authorization']['status'] == 'Not required'
+    for changed in ({'plans': ['Select EPO']}, {'pos': '22'}, {'service_date': '2027-01-01'}):
+        altered = {**context, **changed}
+        assert evaluate(result, altered, [])['authorization']['status'] != 'Not required'
+    other, _ = case('UnitedHealthcare', 'CHOICE EPO', '95908', day='2026-11-14')
+    assert evaluate(other, context, [])['authorization']['status'] != 'Not required'
+
+
+def test_uhc_choice_plus_99213_video_needs_no_referral_or_prior_authorization():
+    result, context = case('UnitedHealthcare', 'Choice Plus', '99213',
+                           pos='10', day='2026-11-14')
+    result['benefits'].update(service_date_matches=None, coverage_evidence={
+        'status': 'ACTIVE', 'start': '2026-01-01'})
+    result['benefits']['identity']['reconciliation_rule'] = 'payer_registration_variant'
+    result['benefits']['identity']['status'] = 'warning'
+    decisions = evaluate(result, context, [])
+    assert decisions['referral']['status'] == 'Not required'
+    assert decisions['authorization']['status'] == 'Not required'
+    for changed in ({'plans': ['Navigate']}, {'pos': '22'}, {'service_date': '2027-01-01'}):
+        assert evaluate(result, {**context, **changed}, [])['authorization']['status'] != 'Not required'
+
+
 def test_bluecard_ppo_office_referral_and_home_plan_authorization_are_distinct():
     result, context = case('BCBSTX', 'Example PPO ALTNET', '99204', day='2026-11-03')
     result['benefits']['plan_details'] = {'verification_payer': {

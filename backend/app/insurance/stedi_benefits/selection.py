@@ -7,9 +7,10 @@ from typing import Any
 
 from app.insurance.stedi_benefits.fields import (
     _benefit_notes, _dates_apply, _network_indicator, _procedure,
-    _provider_participation, _stedi_entries, coverage_kind,
+    _provider_participation, _stedi_entries, coverage_kind, plan_details,
 )
 from app.insurance.cpt_rules import EMG_ADD_ONS, NCS_CODES, STANDALONE_EMG_CODES
+from app.insurance.provider_specialty import office_role
 
 
 @dataclass
@@ -70,6 +71,17 @@ def select_benefit_rows(payload: dict[str, Any], service_type_code: str,
             service_type_code = '98'
             entries = [row for row in entries if '98' not in (row.get('serviceTypeCodes') or []) or row in diagnostic_rows]
     office = office_visit or procedure_code in {str(n) for n in (*range(99202, 99206), *range(99212, 99216))}
+    # Choice Plus labels its specialist physician-office copay "Provider Role
+    # OTHER" under BY. The generic 98 schedule includes other provider roles.
+    if (office and place_of_service == '10' and str(payload.get('payerId') or '') in {'87726', 'KMQTZ'}
+            and [re.sub(r'[^a-z]', '', name.casefold()) for name in plan_details(payload)['names']] == ['choiceplus']
+            and office_role(provider_specialties or []) == 'specialist' and 'BQ' in priorities
+            and any(row.get('code') == 'B' and 'BY' in (row.get('serviceTypeCodes') or [])
+                    and _network_indicator(row) in {'Y', 'YES', 'IN_NETWORK', 'W', 'IN_AND_OUT_OF_NETWORK'}
+                    and any(re.fullmatch(r'provider role other', note.strip(), re.I)
+                            for note in _benefit_notes([row.get('messages'), row.get('additionalInformation')]))
+                    for row in entries)):
+        priorities = ['BY', *[stc for stc in priorities if stc != 'BY']]
     if office and place_of_service == '11':
         # STC 98 is broad: a specialist telemedicine or ABA copay is not the
         # in-person office copay, even when the payer omits POS on that row.

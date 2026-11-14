@@ -13,7 +13,7 @@ BCBSTX_PAYER_NAMES = {'bcbstx', 'bcbstexas', 'bluecrossblueshieldoftexas',
                       'bluecrossandblueshieldoftexas', 'bluecrossblueshieldtx',
                       'bluecrossblueshieldtexas'}
 # Saved estimates re-evaluate requirement decisions when a published rule changes.
-PUBLISHED_RULESET_VERSION = '2026-11-12-fep-standard-office-v14'
+PUBLISHED_RULESET_VERSION = '2026-11-13-uhc-choice-plus-office-v16'
 BLUECARD_PPO_REFERRAL_SOURCE = {
     'label': 'BCBSTX BlueCard provider manual, PPO definition',
     'url': 'https://www.bcbstx.com/content/dam/hcsc/docs/provider/tx/claims/bluecard/bluecard-program-prov-manual.pdf',
@@ -80,6 +80,12 @@ UHC_2026_GUIDE = {
     'url': 'https://www.uhcprovider.com/content/dam/provider/docs/public/admin-guides/2026-UHC-Administrative-Guide.pdf',
     'source_version': '2026 administrative guide', 'verified_at': '2026-10-21',
     'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
+}
+UHC_COMMERCIAL_OFFICE_2026_PA = {
+    'label': 'UnitedHealthcare commercial prior authorization requirements, November 2026',
+    'url': 'https://www.uhcprovider.com/content/dam/provider/docs/public/prior-auth/pa-requirements/commercial/UHC-Commercial-PA-Requirements-11-2026.pdf',
+    'source_version': 'November 1, 2026 list; CPT 99203 and 99213 absent', 'verified_at': '2026-11-13',
+    'effective_from': '2026-11-01', 'effective_to': '2026-12-31',
 }
 UHC_COMMERCIAL_2026_PA = {
     'label': 'UnitedHealthcare commercial prior authorization list, transplant evaluation row',
@@ -259,6 +265,24 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
     if prudent_buyer_99203:
         return rule('Not required', 'Clinic-confirmed CPT 99203 physician-office rule for this Prudent Buyer PPO group.',
                     PRUDENT_BUYER_99203_SOURCE, source_type='clinic_confirmation')
+    choice_plus_99213 = (in_network and office and codes == {'99213'}
+        and str(context.get('pos') or '') in {'10', '11'}
+        and bool({'unitedhealthcare', 'uhc'} & names)
+        and len(plans) == 1 and product in {'choiceplus', 'poschoiceplus'}
+        and day >= '2026-11-01')
+    if choice_plus_99213:
+        if kind == 'referral':
+            return rule('Not required', 'UnitedHealthcare Texas Choice Plus permits a direct specialist visit without a PCP referral.', UHC_TEXAS_CHOICE_PLUS_SOURCE)
+        return rule('Not required', 'CPT 99213 is absent from the November 2026 UnitedHealthcare commercial prior authorization requirements for participating office providers.', UHC_COMMERCIAL_OFFICE_2026_PA)
+    choice_epo_99203 = (in_network and office and codes == {'99203'}
+        and str(context.get('pos') or '') == '11'
+        and bool({'unitedhealthcare', 'uhc'} & names)
+        and len(plans) == 1 and product == 'choiceepo'
+        and day >= '2026-11-01')
+    if choice_epo_99203:
+        if kind == 'referral':
+            return rule('Not required', 'The 2026 UnitedHealthcare Choice network permits a direct specialist office visit without a PCP referral.', UHC_2026_GUIDE)
+        return rule('Not required', 'CPT 99203 is absent from the November 2026 UnitedHealthcare commercial prior authorization requirements for participating office providers.', UHC_COMMERCIAL_OFFICE_2026_PA)
     if bluecard_ppo_office:
         if kind == 'referral':
             return rule('Not required', 'This member product is labeled PPO; BlueCard PPO access does not require a PCP specialist referral.', BLUECARD_PPO_REFERRAL_SOURCE)
@@ -444,7 +468,7 @@ def _uhc_choice_plus_referral(result: dict, context: dict, plans: list[str]) -> 
     benefits = result.get('benefits') or {}
     identity = result.get('identity') or benefits.get('identity') or {}
     if (not '2026-01-01' <= str(context.get('service_date') or '') <= '2026-12-31'
-            or benefits.get('active') is not True or benefits.get('service_date_matches') is not True
+            or not stedi_cpt_authorization.visit_coverage_bound(benefits, str(context.get('service_date') or ''))
             or not payer_identity_verified(identity)
             or not result.get('benefit_source') or not context.get('member_id')
             or (result.get('recovery') or {}).get('reason_code') == 'multiple_active_policies'

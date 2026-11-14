@@ -364,6 +364,8 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
         _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, rate_payer_name)
     if payer_fees.schedule_for_service(payer_name, (source.get('payer_plan_names') or
                                       (benefits.get('plan_details') or {}).get('names')), service_date):
+        if nmct_contract and source.get('payer_plan_bound') is True and not exclusion:
+            apply_nmct_library_contract(result, benefits, nmct_contract)
         for key in ('temporary_rate_reference', 'cigna_clinic_rates', 'cigna_rate_conflict'):
             result.pop(key, None)
         result['price_range'], issues = _api._previsit_range(

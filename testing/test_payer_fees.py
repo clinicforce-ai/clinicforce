@@ -7,8 +7,9 @@ from unittest.mock import patch
 import pytest
 
 from app.insurance import payer_fees
+from app.insurance import collection_guidance
 from app.api.routers import commercial_estimator  # noqa: F401
-from app.api.routers.commercial_flow.commercial_previsit_pricing import _previsit_range
+from app.api.routers.commercial_flow.commercial_previsit_pricing import _attach_previsit_pricing, _previsit_range
 
 
 def test_sql_import_contains_approved_payers_and_only_verified_bcbstx_fallbacks():
@@ -146,3 +147,48 @@ def test_selected_visit_prices_from_imported_database_row(payer, plan, code, exp
     assert priced['lines'][0]['allowed_cents'] == expected
     assert priced['lines'][0]['allowed_basis'] == 'payer_fee_schedule'
     assert not issues
+
+
+def test_uhc_choice_epo_fee_schedule_keeps_clinic_network_decision(monkeypatch):
+    from app.api.routers.commercial_flow import commercial_previsit_pricing as pricing
+
+    agreement = {'id': 'synthetic-uhc-agreement', 'kind': 'contract',
+                 'payer': 'UnitedHealthcare', 'effective_from': '2026-01-01'}
+    connection = {'id': 'synthetic-uhc-route', 'stedi_payer_id': '87726',
+                  'display_name': 'UnitedHealthcare', 'status': 'staff_guidance_enabled'}
+    monkeypatch.setattr(pricing._api.staff_store, 'list_library', lambda _: [agreement])
+    monkeypatch.setattr(pricing._api.commercial_store, 'list_connections', lambda _: [connection])
+    monkeypatch.setattr(pricing.library_network_exclusions, 'applicable_exclusion', lambda *args: None)
+    monkeypatch.setattr(pricing.payer_fees, 'schedule_for_service', lambda *args: ('uhc', 'commercial'))
+    monkeypatch.setattr(pricing, '_attach_temporary_uhc_rates', lambda *args: None)
+    monkeypatch.setattr(pricing.payer_fees, 'matching_rates', lambda *args, **kwargs: [{
+        'id': 'synthetic-fee', 'line_id': 'office', 'code': '99203', 'modifier': '',
+        'units': 1, 'allowed_cents': 10036, 'basis': 'payer_fee_schedule',
+        'source_reference': 'Synthetic clinic fee'}])
+    result = {'payer': 'UnitedHealthcare', 'codes': [{'id': 'office', 'code': '99203', 'units': 1}],
+              'issues': [], 'service_date': '2026-11-14', 'service_selection_status': 'selected',
+              'selected_ids': ['office']}
+    identity = {'status': 'matched', 'binding': 'synthetic-person', 'match_version': 2}
+    benefits = {'network_status': 'unknown', 'active': True, 'service_date_matches': True,
+                'identity': identity, 'coverage_level': 'individual',
+                'plan_details': {'names': ['CHOICE EPO']}, 'copay_cents': 3000,
+                'copay_period': 'VISIT', 'deductible_applies': False,
+                'deductible_remaining_cents': 0, 'coinsurance_percent': '0',
+                'oop_remaining_cents': 0, 'oop_annual_cents': 240000,
+                'has_secondary': False, 'cost_share': 'copay'}
+    _attach_previsit_pricing(result, 'primary',
+        {'service_date': '2026-11-14', 'place_of_service': '11',
+         'rendering_provider': {'npi': '1234567890'}},
+        {'plan': 'CHOICE EPO', 'payer_plan_bound': True,
+         'payer_plan_names': ['CHOICE EPO'],
+         'rendering_provider': {'npi': '1234567890'}}, '87726', benefits)
+    result.update(benefits=benefits, identity=identity)
+    guidance = collection_guidance.build(result)
+    assert benefits['network_source'] == 'clinic_library_contract'
+    assert benefits['network_status'] == 'in_network'
+    assert result['network_evidence']['document_id'] == agreement['id']
+    assert result['price_range']['complete'] is True
+    assert result['price_range']['allowed_min_cents'] == 10036
+    assert result['price_range']['patient_min_cents'] == 0
+    assert guidance['amount_cents'] == 0
+    assert guidance['basis'] == 'out_of_pocket_limit'

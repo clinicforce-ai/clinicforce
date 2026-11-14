@@ -7,7 +7,7 @@ from app.insurance.collection.benefit_gates import uhc_choice_plus_zero_candidat
 from app.insurance import evidence_resolution, group_contract_support, published_plan_benefits
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence, recheck_saved_payer_message
-from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import guard_unresolved_telehealth, guard_telehealth_guidance, restore_active_blue_cross_insurance, restore_saved_fep_standard_product, retain_conflicted_insurance, refresh_saved_cigna_office_benefits, refresh_saved_network_pricing, upgrade_saved_biopsy_preview, refresh_saved_cross_payer_planning, suppress_saved_ambiguous_combined_zero_oop
+from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import guard_unresolved_telehealth, guard_telehealth_guidance, restore_active_blue_cross_insurance, restore_saved_fep_standard_product, retain_conflicted_insurance, refresh_saved_cigna_office_benefits, refresh_saved_uhc_registration_benefits, refresh_saved_network_pricing, upgrade_saved_biopsy_preview, refresh_saved_cross_payer_planning, suppress_saved_ambiguous_combined_zero_oop
 from app.api.routers.commercial_flow.commercial_previsit_requirements import refresh_saved_requirements
 from app.api.routers.commercial_flow.commercial_previsit_enrollment import _enrollment_failure
 from app.api.routers.commercial_flow.commercial_previsit_service_scope import retain_incomplete_service_evidence as _retain_incomplete_service_evidence
@@ -333,6 +333,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     result = _api.deepcopy(case['previsit_context']['result'])
     suppress_saved_ambiguous_combined_zero_oop(result)
     upgrade_saved_biopsy_preview(result, case)
+    refresh_saved_uhc_registration_benefits(result, case)
     refresh_saved_cigna_office_benefits(result, case, practice_id or '')
     availity = case.get('availity_visit_reference') or {}
     if (availity.get('evidence') and availity.get('context_token') == case['previsit_context'].get('context_token')

@@ -9,7 +9,7 @@ from app.insurance.collection.bluecard_epo import neurology_office_copay
 from app.insurance.collection.contract_advance import applies as contract_advance_applies
 from app.insurance.collection.blue_ppo_family_quote import apply as apply_blue_ppo_family_quote
 from app.insurance.collection.cigna_quotes import apply as apply_cigna_quotes
-from app.insurance.collection.office_copay import (cigna_oap_televisit_office_copay, diagnostic_day_copay_amount, office_copay_amount, preview_office_copay_applies)
+from app.insurance.collection.office_copay import (cigna_oap_televisit_office_copay, diagnostic_day_copay_amount, office_copay_amount, preview_office_copay_applies, uhc_choice_plus_registration_copay)
 from app.insurance.collection.billing_note import apply_billing_note
 from app.insurance.collection.benefit_gates import apply_family_oop_deferrals, apply_trs_hd_office_refundable_deposit, prepare_benefit_evidence, preview_zero_individual_oop_applies
 from app.insurance.collection.healthselect_zero import applies as healthselect_zero_applies
@@ -269,11 +269,13 @@ def build(result: dict, review: dict | None = None) -> dict:
     published_fep_standard = any((line.get('benefits') or {}).get('published_plan_rule') == FEP_STANDARD_2026 for line in lines)
     bluecard_epo_neurology_copay = neurology_office_copay(
         result, benefits, price, lines, amount, policy_approved, guidance['basis'])
+    uhc_registration_copay = uhc_choice_plus_registration_copay(
+        result, benefits, price, lines, amount, guidance['basis'])
     clinic_delegated_copay = (not policy_approved and guidance['basis'] == 'office_copay'
         and result.get('nmct_cigna_delegated_office') is True
         and verified_in_network(benefits)
         and result.get('benefit_source') == 'Stedi · plan administrator')
-    policy_allows_advance = bluecard_epo_neurology_copay or clinic_delegated_copay or (cigna_oap_televisit and not policy_approved) or (guidance['basis'] == 'cigna_refundable_office_copay' and (not policy_approved or policy_mode in {'collect_verified_copay', 'collect_supported_advance'})) or (policy_mode == 'collect_verified_copay' or published_fep_standard and fixed_copay and policy_mode == 'collect_supported_advance' if published_copay else
+    policy_allows_advance = uhc_registration_copay or bluecard_epo_neurology_copay or clinic_delegated_copay or (cigna_oap_televisit and not policy_approved) or (guidance['basis'] == 'cigna_refundable_office_copay' and (not policy_approved or policy_mode in {'collect_verified_copay', 'collect_supported_advance'})) or (policy_mode == 'collect_verified_copay' or published_fep_standard and fixed_copay and policy_mode == 'collect_supported_advance' if published_copay else
         policy_mode == 'collect_supported_advance' or
         fixed_copay and policy_mode == 'collect_verified_copay' or
         verified_out_of_network(benefits) and policy_mode == 'defer_to_claim'
@@ -302,7 +304,10 @@ def build(result: dict, review: dict | None = None) -> dict:
     if amount is not None and amount > 0 and calculated_in_network_advance:
         guidance['collection_rule'] = {'mode': 'calculated_in_network_advance',
                                        'reference': 'Selected CPTs, active clinic contract rates and member benefits'}
-    if amount is not None and amount > 0 and policy_approved and guidance['basis'] not in {'ecw_billing_note', 'cigna_refundable_office_copay'}:
+    if amount is not None and amount > 0 and uhc_registration_copay:
+        guidance['collection_rule'] = {'mode': 'uhc_choice_plus_registration_copay',
+            'reference': 'Current member-bound Choice Plus specialist office benefit and clinic network agreement'}
+    elif amount is not None and amount > 0 and policy_approved and guidance['basis'] not in {'ecw_billing_note', 'cigna_refundable_office_copay'}:
         guidance['collection_rule'] = {'mode': policy_mode, 'reference': policy['reference'],
                                        'approved_at': policy['approved_at']}
     elif amount is not None and amount > 0 and clinic_delegated_copay:
