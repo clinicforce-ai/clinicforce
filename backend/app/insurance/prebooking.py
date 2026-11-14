@@ -109,23 +109,30 @@ def plan(reason: str, visit_type: str, suggestions: dict) -> dict:
             code = str(candidate.get("code") or "").upper() if isinstance(candidate, dict) else ""
             if not re.fullmatch(r"(?:\d{5}|[A-Z]\d{4}|\d{4}[A-Z])", code) or code in seen:
                 continue
+            if code in cpt_rules.NCS_CODES and cpt_rules.documented_ncs_code(reason) != code:
+                continue
+            definition = cpt_rules.service_definition(code)
+            if definition["group"] == "visit" and (visit_type == "unknown" or not re.search(
+                    r"\b(?:medical decision.making|MDM|\d+\s*minutes?)\b", reason, re.I)):
+                continue
             seen.add(code)
-            codes.append({"code": code, "reason": str(candidate.get("reason") or "Possible planned service")[:500],
-                          "role": cpt_rules.service_definition(code)["role"],
+            codes.append({"code": code, "label": str(candidate.get("description") or group.get("label") or "Possible service")[:160],
+                          "reason": str(candidate.get("reason") or "Possible planned service")[:500],
+                          "role": definition["role"],
                           "service_type": visit_estimate.service_type(code, {})})
-        if codes:
+        if codes or group.get("description") or group.get("codes"):
             groups.append({"label": str(group.get("label") or "Possible services")[:120],
+                           "description": str(group.get("description") or (
+                               "Confirm the exact planned service details before pricing." if not codes else ""))[:500],
                            "selection_mode": "single" if group.get("selection_mode") == "single" else "multiple",
                            "codes": codes})
     if visit_type in {"new", "established"} and not any(
             cpt_rules.service_definition(row["code"])["group"] == "visit"
             for group in groups for row in group["codes"]):
-        levels = range(99202, 99206) if visit_type == "new" else range(99212, 99216)
-        groups.insert(0, {"label": "Office visit level (choose only if planned)", "selection_mode": "single",
-                          "codes": [{"code": str(code), "reason": "Clinician must confirm the anticipated visit level.",
-                                     "role": "consultation", "service_type": "98"} for code in levels]})
+        groups.insert(0, {"label": "Possible office visit", "description": "Ask the clinician for anticipated medical decision making or visit time before estimating an office visit level.",
+                          "selection_mode": "single", "codes": []})
     return {"groups": groups, "notes": [str(note)[:500] for note in (suggestions.get("notes") or [])[:5]],
-            "message": "These are possible services from the visit reason. Confirm the clinical plan and code before checking cost."}
+            "message": "Possible care based on the visit reason. Choose what the clinician expects; the system handles the codes and checks coverage before showing a conditional cost."}
 
 
 def validate_services(services: list[dict], visit_type: str, reason: str) -> list[dict]:

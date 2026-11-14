@@ -38,7 +38,6 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
   const [subscriber, setSubscriber] = useState({ given: '', family: '', birth: '' })
   const [plan, setPlan] = useState<PrebookingPlan | null>(null)
   const [selected, setSelected] = useState<Record<string, number>>({})
-  const [manualCode, setManualCode] = useState('')
   const [confirmed, setConfirmed] = useState(false)
   const [result, setResult] = useState<PrebookingEstimate | null>(null)
   const today = new Date().toLocaleDateString('en-CA')
@@ -121,18 +120,6 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
     })
     setConfirmed(false)
     setResult(null)
-  }
-  function addManualCode() {
-    const code = manualCode.trim().toUpperCase()
-    if (!/^(?:[0-9]{5}|[A-Z][0-9]{4}|[0-9]{4}[A-Z])$/.test(code)) {
-      setError('Enter one valid five-character CPT or HCPCS code.')
-      return
-    }
-    setSelected((current) => ({ ...current, [code]: current[code] || 1 }))
-    setManualCode('')
-    setConfirmed(false)
-    setResult(null)
-    setError('')
   }
   async function check(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -411,7 +398,7 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
           </label>
         </div>
         <label className="staff-field">
-          <span>Reason for visit and anticipated care *</span>
+          <span>Reason for visit and any care already discussed *</span>
           <textarea
             value={reason}
             required
@@ -421,7 +408,10 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
             onChange={(event) => changeReason(event.target.value)}
             placeholder="Example: Follow-up for hand numbness; EMG/NCS may be considered"
           />
-          <small>Possible tests stay unconfirmed until selected below.</small>
+          <small>
+            Use everyday words. Include any tests or treatments mentioned by the clinician; no CPT
+            code is needed.
+          </small>
         </label>
         <button
           type="button"
@@ -429,7 +419,7 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
           disabled={Boolean(busy) || reason.trim().length < 3}
           onClick={() => void preparePlan()}
         >
-          {busy === 'planning' ? 'Finding possible services…' : 'Find possible services'}
+          {busy === 'planning' ? 'Finding possible care…' : 'Find possible care'}
         </button>
         {plan && (
           <StaffPrebookingPlan
@@ -437,12 +427,9 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
             selected={selected}
             busy={Boolean(busy)}
             checking={busy === 'checking'}
-            manualCode={manualCode}
             confirmed={confirmed}
             payerSelected={Boolean(form.payer_id)}
             onToggle={toggle}
-            onManualCode={setManualCode}
-            onAddCode={addManualCode}
             onUnits={(code, units) => {
               setSelected({ ...selected, [code]: units })
               setConfirmed(false)
@@ -452,7 +439,7 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
           />
         )}
       </form>
-      {result && <StaffPrebookingResult result={result} />}
+      {result && plan && <StaffPrebookingResult result={result} plan={plan} />}
     </div>
   )
 }

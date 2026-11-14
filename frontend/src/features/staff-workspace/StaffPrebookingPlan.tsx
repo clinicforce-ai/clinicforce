@@ -5,12 +5,9 @@ type Props = {
   selected: Record<string, number>
   busy: boolean
   checking: boolean
-  manualCode: string
   confirmed: boolean
   payerSelected: boolean
   onToggle: (code: string, group?: PrebookingPlan['groups'][number]) => void
-  onManualCode: (value: string) => void
-  onAddCode: () => void
   onUnits: (code: string, units: number) => void
   onConfirm: (confirmed: boolean) => void
 }
@@ -20,22 +17,24 @@ export default function StaffPrebookingPlan({
   selected,
   busy,
   checking,
-  manualCode,
   confirmed,
   payerSelected,
   onToggle,
-  onManualCode,
-  onAddCode,
   onUnits,
   onConfirm,
 }: Props) {
+  const hasChoices = plan.groups.some((group) => group.codes.length > 0)
+  const labels = new Map(
+    plan.groups.flatMap((group) => group.codes.map((item) => [item.code, item.label] as const)),
+  )
   return (
     <section className="prebooking-plan" aria-labelledby="prebooking-plan-title">
-      <h2 id="prebooking-plan-title">2. Confirm anticipated services</h2>
+      <h2 id="prebooking-plan-title">2. Review possible care</h2>
       <p className="staff-muted">{plan.message}</p>
       {plan.groups.map((group, index) => (
         <div key={`${group.label}:${index}`} className="prebooking-service-group">
           <h3>{group.label}</h3>
+          {group.description && <p className="staff-small staff-muted">{group.description}</p>}
           {group.codes.map((candidate) => (
             <label key={candidate.code} className="prebooking-service-choice">
               <input
@@ -45,40 +44,37 @@ export default function StaffPrebookingPlan({
                 onChange={() => onToggle(candidate.code, group)}
               />
               <span>
-                <strong>{candidate.code}</strong>
+                <strong>{candidate.label}</strong>
                 {candidate.role !== 'consultation' && (
                   <em className="prebooking-procedure-label">Potential extra procedure or test</em>
                 )}{' '}
                 · {candidate.reason}
+                <small className="prebooking-code-reference">
+                  Coding reference {candidate.code}
+                </small>
               </span>
             </label>
           ))}
         </div>
       ))}
+      {!hasChoices && (
+        <p className="prebooking-detail-needed">
+          A specific service cannot be priced from this reason yet. Add any test, treatment, study
+          count, or visit details discussed with the clinician to the reason above, then find
+          possible care again. No code is needed.
+        </p>
+      )}
       {plan.notes.map((note, index) => (
         <p key={index} className="staff-small staff-muted">
           {note}
         </p>
       ))}
-      <div className="prebooking-manual-code">
-        <label className="staff-field">
-          <span>Add a clinician-confirmed CPT/HCPCS code</span>
-          <input
-            value={manualCode}
-            maxLength={5}
-            disabled={busy}
-            onChange={(event) => onManualCode(event.target.value.toUpperCase())}
-          />
-        </label>
-        <button type="button" className="staff-text-button" disabled={busy} onClick={onAddCode}>
-          Add code
-        </button>
-      </div>
       {Object.keys(selected).length > 0 && (
         <div className="prebooking-selected-services">
           {Object.entries(selected).map(([code, units]) => (
             <div key={code}>
-              <strong>{code}</strong>
+              <strong>{labels.get(code) || 'Planned service'}</strong>
+              <small className="prebooking-code-reference">{code}</small>
               <label>
                 Units{' '}
                 <input

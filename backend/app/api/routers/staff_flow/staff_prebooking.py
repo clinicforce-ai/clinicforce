@@ -17,7 +17,8 @@ from app.api.schemas.staff import (PrebookingEligibility, PrebookingOptions, Pre
                                    PrebookingPlanResponse, PrebookingContextsResponse,
                                    PrebookingEstimateResponse)
 from app.core import clinic_store
-from app.insurance import (commercial, commercial_store, cpt_suggester, identity,
+from app.insurance import (collection_guidance, commercial, commercial_store, cpt_suggester,
+                           encounter_summary, identity,
                            network_participation, prebooking, stedi, stedi_financial,
                            stedi_payers, visit_estimate)
 
@@ -103,11 +104,12 @@ async def prebooking_estimate_contexts(request: Request):
     return JSONResponse({"contexts": choices}, headers=_staff.NO_STORE)
 
 
-@router.post("/prebooking-estimate/plan", response_model=PrebookingPlanResponse, description="Suggest possible CPT/HCPCS services from a prospective visit reason, for clinician review. This makes no Stedi request and does not create a patient, case or appointment. Suggestions are never an order or a price.")
+@router.post("/prebooking-estimate/plan", response_model=PrebookingPlanResponse, description="Use the clinic's Bedrock model to suggest possible care in plain language from a prospective visit reason. Include a CPT/HCPCS candidate only when the reason supports its exact service details; otherwise return a possible procedure family and the clinical detail needed. This makes no Stedi request and creates no patient, case or appointment. Suggestions are never an order or a price.")
 async def prebooking_estimate_plan(value: PrebookingPlanRequest, request: Request):
     await _staff.require_staff(request)
     suggestions = await run_in_threadpool(cpt_suggester.suggest_preliminary_cpt_codes,
-                                           value.reason + f"\nPatient visit status: {value.visit_type}.")
+                                           value.reason + f"\nPatient visit status: {value.visit_type}.",
+                                           prospective=True)
     return JSONResponse(prebooking.plan(value.reason, value.visit_type, suggestions), headers=_staff.NO_STORE)
 
 
@@ -116,6 +118,39 @@ def _terms(benefits: dict) -> dict:
             "deductible_annual_cents", "deductible_remaining_cents", "oop_annual_cents",
             "oop_remaining_cents", "deductible_applicability", "authorization_signal",
             "referral_signal", "resolved_service_type")}
+
+
+def _prospective_collection(practice_id: str, payer_id: str, benefits: dict, comparison: dict,
+                            price: dict, lines: list[dict], network_evidence: dict | None,
+                            ready: bool) -> dict:
+    missing = {"amount_cents": None, "basis": "needs_review", "reason":
+               "A collection amount needs a priced service, matched member and plan, clinic network and rate evidence, and an approved collection rule.",
+               "components": None}
+    if not ready:
+        return missing
+    connections = [row for row in commercial_store.list_connections(practice_id)
+                   if row.get("stedi_payer_id") == payer_id]
+    policy = ((connections[0].get("rules") or {}).get("collection_policy") or {}) if len(connections) == 1 else {}
+    if not (isinstance(policy, dict) and policy.get("mode") in {
+            "defer_to_claim", "collect_verified_copay", "collect_supported_advance"}
+            and all(policy.get(key) for key in ("approved_by", "approved_at", "reference"))):
+        policy = None
+    evidence = {"benefits": benefits, "identity": comparison, "price_range": price,
+                "codes": lines, "selected_ids": [row["id"] for row in lines],
+                "network_evidence": network_evidence, "payment_mode": "insurance",
+                "service_selection_status": "confirmed", "collection_policy": policy}
+    try:
+        guidance = collection_guidance.build(evidence)
+        summary = encounter_summary.build({**evidence, "collection_guidance": guidance})
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError):
+        return {**missing, "reason": "The clinic collection formula could not be completed; review the payer check and clinic policy."}
+    amount = summary.get("collect_today_cents") if not summary.get("integrity_error") else None
+    components = summary.get("components") or {}
+    complete_components = (summary.get("complete") and len(components) == 5
+                           and all(type(value) is int for value in components.values()))
+    return {"amount_cents": amount, "basis": guidance.get("basis") or "needs_review",
+            "reason": guidance.get("reason") or missing["reason"],
+            "components": components if complete_components else None}
 
 
 def _estimate_from_payer(practice_id: str, details: dict, context: dict | None, payer: dict,
@@ -161,6 +196,8 @@ def _estimate_from_payer(practice_id: str, details: dict, context: dict | None, 
                                   or network_participation.verified_out_of_network(benefits))
     ready = (benefits.get("active") is True and identity.patient_benefits_bound(comparison)
              and verified and price.get("complete") is True and bool(plan))
+    collection = _prospective_collection(practice_id, payer["stediId"], benefits, comparison,
+                                         price, lines, result.get("network_evidence"), ready)
     priced_lines = []
     for row in price.get("lines") or []:
         priced_lines.append({"code": row["code"], "units": row["units"],
@@ -183,11 +220,12 @@ def _estimate_from_payer(practice_id: str, details: dict, context: dict | None, 
             "benefits": _terms(benefits), "lines": priced_lines,
             "patient_min_cents": price.get("patient_min_cents") if ready else None,
             "patient_max_cents": price.get("patient_max_cents") if ready else None,
+            "collection": collection,
             "estimate_status": "conditional" if ready and price.get("conditional") else "priced" if ready else "needs_review",
             "issues": issues[:20]}
 
 
-@router.post("/prebooking-estimate/check", response_model=PrebookingEstimateResponse, description="Run an unsaved Stedi 270/271 check for a staff-confirmed prospective service scenario and estimate date. Return payer benefits, the matched patient address when Stedi supplies one, NMCT network evidence and a conditional patient-cost estimate only when member, plan, provider, service and rate evidence agree. A reason alone never confirms a procedure or collectible amount. No patient, case or appointment is created; recheck after booking.")
+@router.post("/prebooking-estimate/check", response_model=PrebookingEstimateResponse, description="Run an unsaved Stedi 270/271 check for a staff-confirmed prospective service scenario and estimate date. Return entered patient identity, matched Stedi address, coverage, benefit terms, NMCT network evidence, and patient-share and clinic-collection planning amounts only when member, plan, provider, service, rate and approved collection-policy evidence support them. A reason alone never confirms a procedure or collectible amount. No patient, case or appointment is created; recheck after booking.")
 async def prebooking_estimate_check(value: PrebookingEstimateRequest, request: Request):
     staff = await _staff.require_staff(request)
     if (os.getenv("STEDI_EXECUTION_MODE", "off") != "commercial_pilot"
@@ -234,10 +272,15 @@ async def prebooking_estimate_check(value: PrebookingEstimateRequest, request: R
                       "coverage_start": None, "coverage_end": None})
     base = {"coverage": coverage, "payer": payer["displayName"], "checked_at": checked_at,
             "checked_on": service_date, "check_ids": check_ids,
+            "patient_given_name": details["given_name"], "patient_family_name": details["family_name"],
+            "patient_birth_date": details["birth_date"],
             "patient_address": prebooking.patient_address(payload, details) if response.get("outcome") == "complete" else None,
             "network_status": "unknown",
             "network_evidence": None, "plan_name": None, "benefits": None, "lines": [],
             "patient_min_cents": None, "patient_max_cents": None, "estimate_status": "needs_review",
+            "collection": {"amount_cents": None, "basis": "needs_review", "reason":
+                           "The payer did not confirm the selected care and a clinic collection amount is unavailable.",
+                           "components": None},
             "issues": []}
     if coverage["status"] != "active_today":
         return JSONResponse({**base, "issues": [coverage["message"]]}, headers=_staff.NO_STORE)
@@ -276,5 +319,7 @@ async def prebooking_estimate_check(value: PrebookingEstimateRequest, request: R
         estimate["estimate_status"] = "needs_review"
         estimate["patient_min_cents"] = estimate["patient_max_cents"] = None
         estimate["lines"] = [{**row, "allowed_cents": None, "patient_cents": None} for row in estimate["lines"]]
+        estimate["collection"] = {**estimate["collection"], "amount_cents": None, "components": None,
+                                  "basis": "needs_review", "reason": issues[0]}
     estimate["issues"] = list(dict.fromkeys([*issues, *estimate["issues"]]))[:20]
     return JSONResponse({**base, **estimate}, headers=_staff.NO_STORE)

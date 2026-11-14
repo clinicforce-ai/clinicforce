@@ -1,4 +1,8 @@
-import type { PrebookingEstimate, PrebookingTerms } from '../../services/api/prebooking-eligibility'
+import type {
+  PrebookingEstimate,
+  PrebookingPlan,
+  PrebookingTerms,
+} from '../../services/api/prebooking-eligibility'
 
 const money = (cents: number | null | undefined) =>
   cents == null
@@ -38,8 +42,17 @@ function BenefitTerms({ terms }: { terms: PrebookingTerms }) {
   )
 }
 
-export default function StaffPrebookingResult({ result }: { result: PrebookingEstimate }) {
+export default function StaffPrebookingResult({
+  result,
+  plan,
+}: {
+  result: PrebookingEstimate
+  plan: PrebookingPlan
+}) {
   const address = result.patient_address
+  const labels = new Map(
+    plan.groups.flatMap((group) => group.codes.map((item) => [item.code, item.label] as const)),
+  )
   const locality = [address?.city, address?.state].filter(Boolean).join(', ')
   const localityAndPostal = [locality, address?.postal_code].filter(Boolean).join(' ')
   const amount =
@@ -52,6 +65,24 @@ export default function StaffPrebookingResult({ result }: { result: PrebookingEs
   return (
     <section className="staff-panel prebooking-result" role="status" aria-live="polite">
       <h2>Prospective visit estimate</h2>
+      <p>
+        <strong>
+          {result.patient_given_name} {result.patient_family_name}
+        </strong>{' '}
+        · DOB {result.patient_birth_date}
+      </p>
+      <h3>Patient address from Stedi</h3>
+      {address ? (
+        <address className="prebooking-patient-address">
+          {address.line1 && <span>{address.line1}</span>}
+          {address.line2 && <span>{address.line2}</span>}
+          {localityAndPostal && <span>{localityAndPostal}</span>}
+          {address.country && <span>{address.country}</span>}
+        </address>
+      ) : (
+        <p className="staff-muted">Not available from a matched Stedi response.</p>
+      )}
+      <h3>Eligibility and coverage</h3>
       <p
         className={
           result.coverage.status === 'active_today'
@@ -71,17 +102,6 @@ export default function StaffPrebookingResult({ result }: { result: PrebookingEs
         {result.plan_name ? ` · ${result.plan_name}` : ''} · Checked for {result.checked_on}
         {result.check_ids.length ? ` · Stedi ${result.check_ids.join(', ')}` : ''}
       </p>
-      <h3>Patient address from Stedi</h3>
-      {address ? (
-        <address className="prebooking-patient-address">
-          {address.line1 && <span>{address.line1}</span>}
-          {address.line2 && <span>{address.line2}</span>}
-          {localityAndPostal && <span>{localityAndPostal}</span>}
-          {address.country && <span>{address.country}</span>}
-        </address>
-      ) : (
-        <p className="staff-muted">Not available from a matched Stedi response.</p>
-      )}
       <h3>Clinic network</h3>
       <p>
         {result.network_status === 'in_network'
@@ -105,8 +125,9 @@ export default function StaffPrebookingResult({ result }: { result: PrebookingEs
           {result.lines.map((line) => (
             <div className="prebooking-result-line" key={line.code}>
               <strong>
-                {line.code} × {line.units}
+                {labels.get(line.code) || 'Selected service'} × {line.units}
               </strong>
+              <small className="prebooking-code-reference">Coding reference {line.code}</small>
               {line.role !== 'visit' && (
                 <span className="prebooking-procedure-label">Additional procedure or test</span>
               )}
@@ -127,6 +148,24 @@ export default function StaffPrebookingResult({ result }: { result: PrebookingEs
         <span>Estimated patient share</span>
         <strong>{amount || 'Amount needs review'}</strong>
       </div>
+      {result.collection.components && (
+        <p className="staff-small staff-muted">
+          Patient share calculation: copay {money(result.collection.components.copay_cents)} +
+          deductible {money(result.collection.components.deductible_cents)} + coinsurance{' '}
+          {money(result.collection.components.coinsurance_cents)} − out-of-pocket adjustment{' '}
+          {money(result.collection.components.oop_adjustment_cents)} − allowed-rate cap{' '}
+          {money(result.collection.components.allowed_cap_adjustment_cents)}.
+        </p>
+      )}
+      <div className="prebooking-total">
+        <span>Estimated clinic collection after booking</span>
+        <strong>
+          {result.collection.amount_cents == null
+            ? 'Amount needs review'
+            : money(result.collection.amount_cents)}
+        </strong>
+      </div>
+      <p className="staff-small staff-muted">{result.collection.reason}</p>
       {result.estimate_status === 'conditional' && (
         <p className="staff-small staff-muted">
           Conditional planning estimate. Resolve benefit or approval conditions before collecting.

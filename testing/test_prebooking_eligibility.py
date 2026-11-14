@@ -122,12 +122,18 @@ def test_staff_route_checks_without_creating_a_patient_or_case():
 
 
 def test_prospective_plan_never_selects_or_prices_a_suggestion():
-    suggestions = {"groups": [{"label": "Possible testing", "selection_mode": "multiple",
-        "codes": [{"code": "95909", "reason": "Nerve studies may be considered."},
+    suggestions = {"groups": [{"label": "Possible nerve testing", "description": "A clinician may consider testing; the study count is unknown.",
+        "selection_mode": "multiple", "codes": []},
+        {"label": "Planned nerve testing", "description": "The clinician documented five studies.", "selection_mode": "multiple",
+        "codes": [{"code": "95909", "description": "Nerve conduction, five or six studies", "reason": "Five studies were planned."},
                   {"code": "invalid", "reason": "Bad code"}]}], "notes": []}
-    plan = prebooking.plan("Hand numbness; testing may be considered", "established", suggestions)
-    assert plan["groups"][0]["codes"][0]["code"] == "99212"
-    assert [row["code"] for row in plan["groups"][1]["codes"]] == ["95909"]
+    plan = prebooking.plan("Hand numbness; clinician plans 5 nerve conduction studies", "established", suggestions)
+    assert plan["groups"][0]["codes"] == []
+    assert plan["groups"][1]["codes"] == []
+    assert [row["code"] for row in plan["groups"][2]["codes"]] == ["95909"]
+    assert plan["groups"][2]["codes"][0]["label"] == "Nerve conduction, five or six studies"
+    vague = prebooking.plan("Follow-up for hand numbness", "unknown", suggestions)
+    assert all(not group["codes"] for group in vague["groups"])
     assert all("selected" not in row for group in plan["groups"] for row in group["codes"])
     assert prebooking.validate_services([{"code": "95909", "units": 1}], "established", "Hand numbness")[0]["confirmed"]
     try:
@@ -137,6 +143,28 @@ def test_prospective_plan_never_selects_or_prices_a_suggestion():
         pass
     else:
         assert False, "Alternative nerve study levels must be rejected"
+
+
+def test_plan_uses_prospective_llm_and_returns_plain_language_possibility():
+    async def run():
+        app = FastAPI()
+        app.include_router(staff.router)
+        suggestion = {"groups": [{"label": "Possible nerve testing", "description":
+            "A clinician may consider nerve testing; the planned study count is needed.",
+            "selection_mode": "single", "codes": []}],
+            "notes": ["Ask whether nerve testing is planned and how many studies are expected."]}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
+                                     headers={"Origin": "http://test"}) as client:
+            with patch.object(staff, "require_staff", AsyncMock(return_value={"practice_id": "clinic-1"})), \
+                 patch.object(staff_prebooking.cpt_suggester, "suggest_preliminary_cpt_codes",
+                              return_value=suggestion) as suggest:
+                result = await client.post("/api/staff/prebooking-estimate/plan", json={
+                    "reason": "Follow-up for hand numbness", "visit_type": "unknown"})
+                assert result.status_code == 200, result.text
+                assert result.json()["groups"][0]["codes"] == []
+                assert "nerve testing" in result.json()["groups"][0]["description"]
+                assert suggest.call_args.kwargs["prospective"] is True
+    asyncio.run(run())
 
 
 def test_dependent_inquiry_requires_matching_policyholder_and_patient():
@@ -210,8 +238,11 @@ def test_estimate_route_checks_identity_and_services_before_pricing():
                 assert result.status_code == 200, result.text
                 assert result.headers["cache-control"] == "no-store"
                 assert result.json()["coverage"]["status"] == "active_today"
+                assert result.json()["patient_given_name"] == "Pat"
+                assert result.json()["patient_birth_date"] == "1980-01-01"
                 assert result.json()["patient_address"]["line1"] == "100 Example Ave"
                 assert result.json()["patient_max_cents"] is None
+                assert result.json()["collection"]["amount_cents"] is None
                 assert result.json()["network_status"] == "unknown"
                 PrebookingEstimateResponse.model_validate(result.json())
                 assert check.await_count == 2
@@ -233,26 +264,40 @@ def test_prospective_amount_requires_member_binding_and_verified_network():
     def priced(result, practice_id, inputs, source, payer_id, benefits, **kwargs):
         benefits.update(network_status="in_network", network_source="clinic_library_contract")
         result["network_evidence"] = {"decision": "confirmed_participating", "reason": "Synthetic contract."}
-        result["price_range"] = {"complete": True, "conditional": False,
+        result["price_range"] = {"complete": True, "conditional": False, "mode": "services",
             "patient_min_cents": 2500, "patient_max_cents": 2500,
-            "lines": [{"code": "99213", "units": 1, "allowed_cents": 10000,
-                       "calculation": {"patient_cents": 2500}, "benefits": benefits,
+            "lines": [{"id": "prospective:99213", "code": "99213", "units": 1, "allowed_cents": 10000,
+                       "calculation": {"patient_cents": 2500, "copay_cents": 2500, "deductible_cents": 0,
+                                       "coinsurance_cents": 0, "oop_adjustment_cents": 0,
+                                       "allowed_cap_adjustment_cents": 0}, "benefits": benefits,
                        "issues": [], "conditions": []}]}
 
-    with patch.object(commercial_estimator, "_attach_previsit_pricing", side_effect=priced):
+    policy = {"mode": "collect_supported_advance", "approved_by": "synthetic-admin",
+              "approved_at": "2026-01-01T00:00:00Z", "reference": "synthetic-policy"}
+    with patch.object(commercial_estimator, "_attach_previsit_pricing", side_effect=priced), \
+         patch.object(staff_prebooking.commercial_store, "list_connections", return_value=[
+             {"stedi_payer_id": "EXAMPLE", "rules": {"collection_policy": policy}}]):
         result = staff_prebooking._estimate_from_payer("clinic-1", details, context, PAYER,
             PROVIDER, payload, "2026-10-27", lines)
         assert result["estimate_status"] == "priced"
         assert result["patient_max_cents"] == 2500
+        assert result["collection"]["amount_cents"] == 2500
         assert result["lines"][0]["benefits"]["copay_cents"] is None
+        with patch.object(staff_prebooking.commercial_store, "list_connections", return_value=[]):
+            no_policy = staff_prebooking._estimate_from_payer("clinic-1", details, context, PAYER,
+                PROVIDER, payload, "2026-10-27", lines)
+            assert no_policy["patient_max_cents"] == 2500
+            assert no_policy["collection"]["amount_cents"] is None
         PrebookingEstimateResponse.model_validate({"coverage": prebooking.evaluate(payload, details, "2026-10-27"),
             "payer": PAYER["displayName"], "checked_at": "2026-10-27T12:00:00Z", "checked_on": "2026-10-27",
-            "check_ids": [], "patient_address": None, **result})
+            "check_ids": [], "patient_given_name": "Pat", "patient_family_name": "Example",
+            "patient_birth_date": "1980-01-01", "patient_address": None, **result})
 
         no_member = staff_prebooking._estimate_from_payer("clinic-1", {**details, "member_id": ""},
             context, PAYER, PROVIDER, payload, "2026-10-27", lines)
         assert no_member["estimate_status"] == "needs_review"
         assert no_member["patient_max_cents"] is None
+        assert no_member["collection"]["amount_cents"] is None
 
     def unverified(result, practice_id, inputs, source, payer_id, benefits, **kwargs):
         priced(result, practice_id, inputs, source, payer_id, benefits, **kwargs)
@@ -263,6 +308,7 @@ def test_prospective_amount_requires_member_binding_and_verified_network():
             PROVIDER, payload, "2026-10-27", lines)
         assert no_network["network_status"] == "unknown"
         assert no_network["patient_max_cents"] is None
+        assert no_network["collection"]["amount_cents"] is None
 
 
 def test_uncertain_service_response_stops_further_inquiries_and_withholds_amount():
@@ -292,6 +338,8 @@ def test_uncertain_service_response_stops_further_inquiries_and_withholds_amount
                          "service_type": "98", "allowed_cents": 10000, "patient_cents": 2500,
                          "benefits": staff_prebooking._terms({}), "issues": [], "conditions": []}],
                      "patient_min_cents": 2500, "patient_max_cents": 2500,
+                     "collection": {"amount_cents": 2500, "basis": "anticipated_services",
+                                    "reason": "Synthetic advance.", "components": None},
                      "estimate_status": "priced", "issues": []}), \
                  patch.dict(os.environ, {"STEDI_EXECUTION_MODE": "commercial_pilot", "STEDI_LIVE_ELIGIBILITY_ENABLED": "true"}):
                 result = await client.post("/api/staff/prebooking-estimate/check", json=body)
@@ -299,6 +347,7 @@ def test_uncertain_service_response_stops_further_inquiries_and_withholds_amount
                 assert check.await_count == 2
                 assert result.json()["check_ids"] == ["ec_synthetic-123", "ec_synthetic-uncertain"]
                 assert result.json()["patient_max_cents"] is None
+                assert result.json()["collection"]["amount_cents"] is None
                 assert result.json()["lines"][0]["patient_cents"] is None
                 assert result.json()["lines"][0]["allowed_cents"] is None
                 assert result.json()["estimate_status"] == "needs_review"
