@@ -9,23 +9,14 @@ from app.insurance import medicare_fees
 from app.api.routers import commercial_estimator as api
 
 
-EXPECTED = {
-    '99203': 11960, '99204': 18049, '99205': 24151,
-    '99213': 9633, '99214': 13741, '99215': 19513,
-    '64612': 14502, 'J0585': 651, '95911': 22107,
-    '95886': 9997, '98006': 10555, '11104': 12195,
-    '11105': 6115, '96372': 1547, '95983': 5289,
-}
-
-
-def test_schema_seeds_all_fifteen_approved_cpt_fees():
+def test_schema_defines_fee_table_without_seeding_amounts():
     cursor = MagicMock()
     initialize_insurance(cursor)
-    sql, rows = cursor.executemany.call_args.args
-    assert 'INSERT INTO medicare_fee_schedule' in sql
-    assert {code: cents for code, _, cents, _, _ in rows} == EXPECTED
-    assert all(reference == medicare_fees.SOURCE_REFERENCE and date == '2026-11-13'
-               for _, _, _, reference, date in rows)
+    statements = [call.args[0] for call in cursor.execute.call_args_list]
+    assert any('CREATE TABLE IF NOT EXISTS medicare_fee_schedule' in sql for sql in statements)
+    assert not any('INSERT INTO medicare_fee_schedule' in sql for sql in statements)
+    assert not any('INSERT INTO medicare_fee_schedule' in call.args[0]
+                   for call in cursor.executemany.call_args_list)
 
 
 def test_lookup_reads_database_value_and_rejects_unpriced_scope(monkeypatch):
@@ -53,7 +44,7 @@ def test_live_visit_uses_medicare_database_fee_for_original_and_advantage(monkey
             return None
         return {'id': 'medicare:99204', 'code': code, 'modifier': '',
                 'allowed_cents': 18049, 'basis': 'medicare_fee_schedule',
-                'source_reference': medicare_fees.SOURCE_REFERENCE,
+                'source_reference': 'Synthetic approved database row',
                 'effective_from': '2026-11-13', 'service_date': service_date,
                 'place_of_service': place_of_service, 'provider_npi': provider_npi,
                 'patient_binding': patient_binding}

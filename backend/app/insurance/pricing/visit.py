@@ -160,15 +160,16 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
                 'cash_source': rate.get('source_reference') if rate.get('cash_cents') is not None else None,
                 'unit_allowed_cents': rate.get('allowed_cents'),
                 'allowed_cents': rate['allowed_cents'] * units if rate.get('allowed_cents') is not None and units else None,
-                'allowed_basis': rate.get('basis') or ('aetna_fee_schedule' if rules.get('aetna_schedule') else 'clinic_contract'),
+                'allowed_basis': rate.get('basis') or ('aetna_fee_schedule' if rules.get('aetna_schedule') else 'payer_fee_schedule' if rules.get('payer_schedule') else 'clinic_contract'),
                 'rate_source': rate.get('source_reference') or ('Payer out-of-network allowance needed' if out_of_network else
-                    'Aetna fee schedule unavailable' if rules.get('aetna_schedule') else 'Clinic contract'), 'rate_version': rate.get('version_id'),
+                    'Aetna fee schedule unavailable' if rules.get('aetna_schedule') else 'Payer fee schedule unavailable' if rules.get('payer_schedule') else 'Clinic contract'), 'rate_version': rate.get('version_id'),
                 'rate_source_sha256': rate.get('source_sha256'),
                 'rate_row_number': rate.get('row_number'),
                 'rate_effective_from': rate.get('effective_from'),
                 'rate_resolution': {'status': rate_status,
                                     'matched_candidate_count': len(matches),
                                     'source_checked': 'aetna_fee_schedule' if rules.get('aetna_schedule') else
+                                                      'payer_fee_schedule' if rules.get('payer_schedule') else
                                                       'payer_out_of_network_rate_candidates' if out_of_network else 'scoped_active_contract_rate_candidates',
                                     'provider_network_verified': benefits.get('network_status') in {'in_network', 'out_of_network'}},
                 'benefit_source': ('2026 FEP Blue Standard brochure' if
@@ -198,6 +199,7 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
         if line['allowed_cents'] is None:
             line['issues'].append('Get the payer allowed amount for this out-of-network CPT and visit.' if out_of_network else
                                   'Verify the Aetna plan category and active fee for this code, modifier and visit.' if rules.get('aetna_schedule') else
+                                  'Verify the payer plan category and active database fee for this code, modifier and visit.' if rules.get('payer_schedule') else
                                   'Verify the active clinic contract rate and exact plan mapping for this code, modifier and visit.')
         if benefits.get('network_status') == 'unknown':
             line['issues'].append('Verify provider participation for this plan and visit location.')

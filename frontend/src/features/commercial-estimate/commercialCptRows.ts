@@ -353,6 +353,7 @@ export function commercialPricedCptRows({
         'payer_out_of_network',
         'medicare_fee_schedule',
         'aetna_fee_schedule',
+        'payer_fee_schedule',
       ].includes(line.allowed_basis || '')
     return {
       label: serviceRowLabel({

@@ -115,3 +115,13 @@ def build_catalog(api: ModuleType, result: dict, session: dict, inputs: dict, so
         codes = [row for row in codes if row['code'] != '95900']
         available = [row for row in available if row['code'] != '95900']
     return payer_id, connections, codes, available, uploaded_cash
+
+def requirement_candidates(result: dict) -> list[dict]:
+    selected_ids = {row.get('id') for row in result.get('codes') or []}
+    suggested_codes = {str(candidate.get('code') or '').upper()
+                       for group in (result.get('suggestions') or {}).get('groups') or []
+                       for candidate in group.get('codes') or []}
+    recommended_ids = set((result.get('service_plan') or {}).get('recommended_ids') or [])
+    return [row for row in result.get('available_codes') or []
+            if row.get('id') not in selected_ids and
+            (row.get('id') in recommended_ids or row.get('code') in suggested_codes)]
