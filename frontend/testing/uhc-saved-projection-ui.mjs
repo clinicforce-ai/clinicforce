@@ -869,7 +869,7 @@ try {
   assert.equal(supportedModel.amountText, '$80.00')
   assert(supportedOverview.includes('Visit cost and collection'))
   assert(supportedOverview.includes('$50.00 applied to this visit'))
-  assert(supportedOverview.includes('Coinsurance</th><td><span>$30.00'))
+  assert(supportedOverview.includes('Coinsurance</th><td><span>20% · $30.00'))
   assert(supportedOverview.includes('20% of $150.00 after deductible'))
   assert(supportedOverview.includes('Amount to collect at visit</th><td><span>$80.00'))
   assert(supportedOverview.includes('Estimated patient share'))

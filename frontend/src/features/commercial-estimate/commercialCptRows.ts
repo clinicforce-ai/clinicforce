@@ -56,6 +56,9 @@ export function commercialAllowedTotalRow(
     result.collection_guidance?.collection_rule?.mode === 'trs_hd_office_refundable_deposit'
   return {
     label: 'Total payer allowed',
+    detail: price?.lines?.some((line) => line.allowed_basis === 'payer_fee_schedule')
+      ? 'Clinic-approved payer fee schedule estimate; the processed claim determines the final allowance.'
+      : undefined,
     value: trsDeposit
       ? `Not established · ${money(result.collection_guidance!.reference_total_cents!)} clinic fee reference`
       : healthselectZero
@@ -376,7 +379,7 @@ export function commercialPricedCptRows({
         : trsDeposit
           ? `${money(result.collection_guidance!.reference_total_cents!)} per unit × 1; insured allowed amount unknown`
           : resolved && line.unit_allowed_cents != null
-            ? `${money(line.unit_allowed_cents)} per unit × ${line.units || 1}`
+            ? `${money(line.unit_allowed_cents)} per unit × ${line.units || 1}${line.allowed_basis === 'payer_fee_schedule' ? '; clinic fee reference, not a payer-confirmed allowance' : ''}`
             : proxyRate
               ? `${money(proxyRate.unit_reference_cents)} per unit × ${line.units || 1}; ${result.payer || 'payer'} allowed amount unknown`
               : line.description || undefined,

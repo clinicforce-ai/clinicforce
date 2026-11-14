@@ -8,6 +8,37 @@ import type { bluecardOfficeDeductibleScenario } from './bluecardOfficeDeductibl
 export { pendingBluecardOfficeCopay, pendingCignaOfficeCopay } from './pendingOfficeCopays'
 import { pendingCignaOfficeCopay } from './pendingOfficeCopays'
 
+function pricedOfficeCopayDetail(result: PrevisitEstimate): string | null {
+  const price = result.price_range
+  const line = price?.mode === 'services' && price.lines?.length === 1 ? price.lines[0] : null
+  const calc = line?.calculation
+  const amount = result.collection_guidance?.amount_cents
+  if (
+    !price?.complete ||
+    !line ||
+    !calc ||
+    !/^992(?:0[2-5]|1[2-5])$/.test(line.code) ||
+    line.rate_resolution?.status !== 'RESOLVED' ||
+    !['clinic_contract', 'payer_fee_schedule'].includes(line.allowed_basis || '') ||
+    line.allowed_cents == null ||
+    calc.patient_cents == null ||
+    calc.plan_cents == null ||
+    calc.copay_cents !== calc.patient_cents ||
+    calc.deductible_cents !== 0 ||
+    calc.coinsurance_cents !== 0 ||
+    calc.allowed_cap_adjustment_cents !== 0 ||
+    calc.oop_adjustment_cents !== 0 ||
+    amount == null
+  )
+    return null
+  const paid = result.encounter_summary?.payments_verified_cents || 0
+  const source =
+    line.allowed_basis === 'payer_fee_schedule'
+      ? 'clinic payer fee reference'
+      : 'clinic contract rate'
+  return `${money(calc.copay_cents)} copay + $0.00 deductible + 0% coinsurance = ${money(calc.patient_cents)} estimated patient share. ${money(line.allowed_cents)} ${source} = ${money(calc.patient_cents)} patient + ${money(calc.plan_cents)} estimated plan share. ${paid ? `Less ${money(paid)} already paid = ${money(amount)} to collect.` : `Collect ${money(amount)} before any verified prior payment; check the clinic ledger.`} Final responsibility follows the processed claim.`
+}
+
 export function collectionAtVisitRow(
   result: PrevisitEstimate,
   model: CommercialEstimateModel,
@@ -330,7 +361,8 @@ export function collectionAtVisitRow(
                                                               ? 'Provisional primary office copay; the secondary claim may change final responsibility'
                                                               : result.collection_guidance
                                                                     ?.basis === 'office_copay'
-                                                                ? 'Office copay advance; the payer allowed amount and final share remain unresolved'
+                                                                ? pricedOfficeCopayDetail(result) ||
+                                                                  'Office copay advance; the payer allowed amount and final share remain unresolved'
                                                                 : result.collection_guidance
                                                                       ?.basis ===
                                                                     'out_of_pocket_limit'

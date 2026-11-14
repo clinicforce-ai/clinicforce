@@ -76,7 +76,7 @@ def test_complete_contract_priced_in_network_visit_collects_calculated_share():
 def test_saved_uhc_oop_duplicate_is_reprojected_from_verified_evidence():
     import hashlib
     from app.api.routers.commercial_flow import commercial_previsit_saved_pricing as saved
-    raw = b'{"synthetic":true}'
+    raw = b'{"payer":{"name":{"organization":"Synthetic Administrator"}}}'
     matched = {'status': 'matched', 'binding': 'synthetic-person', 'match_version': 2}
     result = {'payer': 'United Healthcare', 'identity': matched,
               'benefits': {'active': True, 'identity': matched, 'oop_remaining_conflict_ids': ['row-a', 'row-b']}}
@@ -90,6 +90,7 @@ def test_saved_uhc_oop_duplicate_is_reprojected_from_verified_evidence():
         saved.refresh_saved_uhc_registration_benefits(result, case)
     assert result['benefits']['oop_remaining_cents'] == 337064
     assert not result['benefits'].get('oop_remaining_conflict_ids')
+    assert result['plan_details']['stedi']['response_payer_name'] == 'Synthetic Administrator'
 
 
 def test_successful_saved_database_reprice_clears_old_draft_pricing_notice():

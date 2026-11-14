@@ -7,12 +7,7 @@ import { collectionAtVisitRow, pendingBluecardOfficeCopay } from './collectionAt
 import { money, range } from './format'
 import * as healthselectHelpers from './healthselectRows'
 import * as copay from './payerReportedPartialCopay'
-import {
-  memberGroupRow,
-  networkRow,
-  payerOrderRow,
-  referenceCoverageRow,
-} from './referenceCoverageRow'
+import * as reference from './referenceCoverageRow'
 import { aetnaPriorDateTable } from './aetnaPriorDateReferenceCopay'
 import { limitSummary, unknown } from './limitSummary'
 import { resolvedAllowedTotal } from './resolvedAllowedTotal'
@@ -30,7 +25,7 @@ import { commercialOopRows, familyOopLimitApplied } from './commercialOopRows'
 import { choicePlusDeductibleRows, familyDeductibleRow } from './familyDeductibleRow'
 import { suggestedDiagnosisRows } from './suggestedDiagnosisRows'
 import { cignaCardReference, cignaCardRows } from './cignaCardReference'
-import { hasGeneralOnlyOfficeDeductible } from './deductibleSource'
+import { hasGeneralOnlyOfficeDeductible, selectedDeductibleValue } from './deductibleSource'
 import { bluecardOfficeDeductibleScenario } from './bluecardOfficeDeductibleScenario'
 import * as costState from './commercialCostState'
 export default function CommercialCostBreakdown({
@@ -93,11 +88,13 @@ export default function CommercialCostBreakdown({
   const aetnaPlanning = copay.visibleAetnaDiagnosticPlanning(result, model)
   const aetnaCopayPlanning = copay.aetnaOfficePlanningCopay(result, model, lines)
   const insuredRows: CostBreakdownRow[] = [
-    referenceCoverageRow(result, model, benefits),
-    ...[payerOrderRow(result, benefits)].filter((row): row is CostBreakdownRow => row != null),
-    ...[memberGroupRow(result)].filter((row): row is CostBreakdownRow => row != null),
+    reference.referenceCoverageRow(result, model, benefits),
+    ...[reference.payerOrderRow(result, benefits)].filter(
+      (row): row is CostBreakdownRow => row != null,
+    ),
+    ...[reference.memberGroupRow(result)].filter((row): row is CostBreakdownRow => row != null),
     ...healthselectRows.card,
-    networkRow(model, dsnpOffice, result),
+    reference.networkRow(model, dsnpOffice, result),
     {
       label: result.reason ? 'Reason for visit' : 'Planned service',
       value: commercialVisitReason(result, model.anticipatedService || ''),
@@ -247,7 +244,7 @@ export default function CommercialCostBreakdown({
                     ? individualDeductible.value
                     : surgicalIndividualDeductible.value !== unknown
                       ? `${surgicalIndividualDeductible.value} · surgical services`
-                      : unknown),
+                      : selectedDeductibleValue(lines)),
       detail: bluecardDeductible?.familyDeductible
         ? 'The payer returned a family remaining balance; this estimate assumes it applies to the office visit.'
         : aetnaNoOfficeDeductible
@@ -312,7 +309,10 @@ export default function CommercialCostBreakdown({
                       ? `${reportedCoinsurance}% reported; $0 payable after out-of-pocket limit`
                       : '$0 payable after out-of-pocket limit'
                     : calculated && components?.coinsurance_cents != null
-                      ? money(components.coinsurance_cents)
+                      ? costState.calculatedCoinsurance(
+                          components.coinsurance_cents,
+                          reportedCoinsurance,
+                        )
                       : aetnaTable.coinsurance != null
                         ? aetnaTable.coinsurance
                         : reportedCoinsurance != null
@@ -496,5 +496,5 @@ export default function CommercialCostBreakdown({
       bluecardDeductible,
     }),
   )
-  return <CommercialCostTables result={result} cash={model.cash} rows={rows} />
+  return <CommercialCostTables result={result} model={model} rows={rows} />
 }

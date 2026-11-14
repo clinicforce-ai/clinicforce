@@ -2,16 +2,18 @@ import type { PrevisitEstimate } from '../../services/api/commercial-previsit'
 import CostBreakdownTable, { type CostBreakdownRow } from '../insurance-estimate/CostBreakdownTable'
 import { feeProxyFormula } from './coinsuranceFormula'
 import { money } from './format'
+import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 
 export default function CommercialCostTables({
   result,
-  cash,
+  model,
   rows,
 }: {
   result: PrevisitEstimate
-  cash: boolean
+  model: CommercialEstimateModel
   rows: CostBreakdownRow[]
 }) {
+  const cash = model.cash
   const proxy = result.fee_proxy_estimate
   const aetnaFamilyZero =
     result.collection_guidance?.amount_cents === 0 &&
@@ -70,7 +72,7 @@ export default function CommercialCostTables({
             payments={result.encounter_summary?.payments_verified_cents || 0}
           />
         )}
-      <CostBreakdownTable rows={visibleRows} />
+      <CostBreakdownTable rows={visibleRows} open={model.supportedAmount && !cash} />
     </>
   )
 }

@@ -1,4 +1,11 @@
 import type { PrevisitBenefits } from '../../services/api/commercial-benefits'
+import type { VisitPricedLine } from '../../services/api/commercial-visit-types'
+
+export function selectedDeductibleValue(lines: VisitPricedLine[]): string {
+  return lines.length && lines.every((line) => line.benefits?.deductible_applies === false)
+    ? 'Does not apply to selected CPTs'
+    : 'Not returned for this visit'
+}
 
 export function hasGeneralOnlyOfficeDeductible(benefits: PrevisitBenefits): boolean {
   const options = benefits?.reported_options || []

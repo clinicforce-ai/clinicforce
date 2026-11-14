@@ -91,6 +91,8 @@ jobs:
           node testing/member-benefits-ui.mjs
           node testing/uhc-hmopos-pending-ui.mjs
           node testing/uhc-saved-projection-ui.mjs
+          node testing/umr-choice-plus-collection-ui.mjs
+          node testing/umr-choice-plus-cost-table.mjs
           node ../testing/tic-options-ui.mjs
           node ../testing/uhc-biopsy-target-ui.mjs
           node testing/televisit-collection-ui.mjs

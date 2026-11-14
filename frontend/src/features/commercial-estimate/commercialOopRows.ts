@@ -4,7 +4,7 @@ import type { CostBreakdownRow } from '../insurance-estimate/CostBreakdownTable'
 import { money, visitDate } from './format'
 import { limitSummary } from './limitSummary'
 import { reportedLimit } from './reportedLimit'
-import { reportedMedicalLimit } from './reportedMedicalLimit'
+import { reportedMedicalLimit, reportedOfficeMedicalLimit } from './reportedMedicalLimit'
 import { patientBenefitsBound } from './identityBinding'
 
 export function ambiguousCombinedZeroOop(result: PrevisitEstimate): boolean {
@@ -90,10 +90,12 @@ export function commercialOopRows(
   const combinedZeroNeedsReview = ambiguousCombinedZeroOop(reportedResult)
   const reportedIndividualAnnual =
     (combinedZeroNeedsReview ? null : benefits?.oop_annual_cents) ??
-    reportedMedicalLimit(reportedResult, 'INDIVIDUAL', 'CALENDAR_YEAR')
+    reportedMedicalLimit(reportedResult, 'INDIVIDUAL', 'CALENDAR_YEAR') ??
+    reportedOfficeMedicalLimit(reportedResult, 'INDIVIDUAL', 'CALENDAR_YEAR')
   const reportedIndividualRemaining =
     (combinedZeroNeedsReview ? null : benefits?.oop_remaining_cents) ??
-    reportedMedicalLimit(reportedResult, 'INDIVIDUAL', 'REMAINING')
+    reportedMedicalLimit(reportedResult, 'INDIVIDUAL', 'REMAINING') ??
+    reportedOfficeMedicalLimit(reportedResult, 'INDIVIDUAL', 'REMAINING')
   const individualOopAnnual = reportedIndividualAnnual ?? ehr?.individual_oop_annual_cents
   const individualOopRemaining = reportedIndividualRemaining ?? ehr?.individual_oop_remaining_cents
   const ehrIndividualUsed =
@@ -105,10 +107,14 @@ export function commercialOopRows(
       (reportedIndividualRemaining != null &&
         reportedIndividualRemaining !== ehr.individual_oop_remaining_cents))
   const reportedOopOnly =
-    (benefits?.oop_annual_cents == null && reportedIndividualAnnual != null) ||
-    (benefits?.oop_remaining_cents == null && reportedIndividualRemaining != null)
-  const reportedFamilyAnnual = reportedMedicalLimit(reportedResult, 'FAMILY', 'CALENDAR_YEAR')
-  const reportedFamilyRemaining = reportedMedicalLimit(reportedResult, 'FAMILY', 'REMAINING')
+    benefits?.oop_remaining_cents == null &&
+    (reportedIndividualAnnual != null || reportedIndividualRemaining != null)
+  const reportedFamilyAnnual =
+    reportedMedicalLimit(reportedResult, 'FAMILY', 'CALENDAR_YEAR') ??
+    reportedOfficeMedicalLimit(reportedResult, 'FAMILY', 'CALENDAR_YEAR')
+  const reportedFamilyRemaining =
+    reportedMedicalLimit(reportedResult, 'FAMILY', 'REMAINING') ??
+    reportedOfficeMedicalLimit(reportedResult, 'FAMILY', 'REMAINING')
   const familyOopAnnual = reportedFamilyAnnual ?? ehr?.family_oop_annual_cents
   const familyOopRemaining = reportedFamilyRemaining ?? ehr?.family_oop_remaining_cents
   const ehrFamilyUsed =
@@ -186,19 +192,22 @@ export function commercialOopRows(
                 ? 'Saved payer evidence and the dated EHR report disagree; verify current limits with the payer before using them.'
                 : ehrIndividualUsed
                   ? ehrDetail
-                  : reportedOopOnly
-                    ? 'Payer-reported medical limit; not used as a verified calculation input'
-                    : separateCopayRemaining != null
-                      ? 'The selected office copay has a separate copay maximum; the general limit does not erase that copay'
-                      : benefits?.oop_remaining_cents === 0
-                        ? 'Applicable in-network limit has $0 remaining for the selected covered care'
-                        : calculated && components?.oop_adjustment_cents != null
-                          ? `${money(components.oop_adjustment_cents)} reduction applied to this visit`
-                          : unconfirmedZeroOop
-                            ? 'Payer reports $0 remaining; confirm this is the applicable medical limit before collection'
-                            : individualReportedOop.unassigned
-                              ? 'Payer-reported plan amount; medical applicability needs confirmation before use as a cap'
-                              : 'Payer-reported limit; applicability to these CPTs depends on the completed estimate',
+                  : reportedIndividualAnnual != null &&
+                      benefits?.oop_remaining_cents === individualOopRemaining
+                    ? 'Payer-reported annual limit; the applicable remaining balance was used for this visit'
+                    : reportedOopOnly
+                      ? 'Payer-reported medical limit; not used as a verified calculation input'
+                      : separateCopayRemaining != null
+                        ? 'The selected office copay has a separate copay maximum; the general limit does not erase that copay'
+                        : benefits?.oop_remaining_cents === 0
+                          ? 'Applicable in-network limit has $0 remaining for the selected covered care'
+                          : calculated && components?.oop_adjustment_cents != null
+                            ? `${money(components.oop_adjustment_cents)} reduction applied to this visit`
+                            : unconfirmedZeroOop
+                              ? 'Payer reports $0 remaining; confirm this is the applicable medical limit before collection'
+                              : individualReportedOop.unassigned
+                                ? 'Payer-reported plan amount; medical applicability needs confirmation before use as a cap'
+                                : 'Payer-reported limit; applicability to these CPTs depends on the completed estimate',
     },
     ...(separateCopayRemaining != null
       ? [
@@ -250,7 +259,7 @@ export function commercialOopRows(
             : ehrFamilyUsed
               ? ehrDetail
               : familyOopAnnual != null || familyOopRemaining != null
-                ? 'Payer-reported medical limit; not used as a verified calculation input'
+                ? 'Payer-reported in-network medical limit; this balance is not an additional visit charge'
                 : limitSummary(reportedResult, 'out_of_pocket', 'FAMILY').unassigned
                   ? 'Payer-reported plan amount; medical applicability unverified and not used as a cap'
                   : undefined,

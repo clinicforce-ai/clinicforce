@@ -310,3 +310,16 @@ export type BotoxPreview = {
   rate_source: string
   benefit_source: string
 }
+export type StediPlanDetails = {
+  names?: string[]
+  supplementary_names?: string[]
+  network_names?: string[]
+  identified_product?: string | null
+  product_evidence?: Record<string, string> | null
+  plan_number?: string
+  group_number?: string
+  group_name?: string | null
+  response_payer_name?: string | null
+  verification_payer?: { name: string; payer_id: string; evidence_path: string } | null
+  source?: string
+}

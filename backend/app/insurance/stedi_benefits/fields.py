@@ -174,6 +174,10 @@ def payer_person(person: dict) -> dict:
 
 def plan_details(payload: dict) -> dict:
     rows = _stedi_entries(payload)
+    payer = payload.get('payer') or {}
+    response_payer = payer.get('name') if isinstance(payer, dict) else None
+    response_payer_name = (response_payer.get('organization') if isinstance(response_payer, dict)
+                           else response_payer if isinstance(response_payer, str) else None)
     names = list(dict.fromkeys(str(row.get("planCoverage") or row.get("planCoverageDescription") or "").strip()
                               for row in rows if not row.get("serviceTypeCodes") or "30" in row["serviceTypeCodes"]))
     names = list(dict.fromkeys([str(plan['name']).strip() for plan in payload.get('plans', [])
@@ -224,6 +228,7 @@ def plan_details(payload: dict) -> dict:
                     and re.fullmatch(r'R\d{8}', str(subscriber.get('memberId') or '').upper()) is not None)
     fep_product = 'FEP Blue Basic PSHB' if fep_basic else 'FEP Blue Standard FEHB' if fep_standard else None
     return {"names": names, "supplementary_names": supplementary,
+            "response_payer_name": str(response_payer_name).strip() if response_payer_name else None,
             "plan_number": subscriber.get("planNumber") or info.get("planNumber") or (additional.get('plan') or {}).get('number'),
             "group_number": group,
             "group_name": str((additional.get('group') or {}).get('name') or '').strip() or None,

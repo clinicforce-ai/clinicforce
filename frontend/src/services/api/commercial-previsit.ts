@@ -20,6 +20,7 @@ import type {
   FeeProxyBasis,
   CignaOfficeFeeScenarios,
   EcwEligibilityReference,
+  StediPlanDetails,
 } from './commercial-visit-types'
 import type { PrevisitBenefits } from './commercial-benefits'
 import type { PaymentExplanation } from './commercial-explanation'
@@ -428,18 +429,7 @@ export type PrevisitEstimate = {
   available_codes?: VisitCode[]
   plan_details?: {
     ecw: Record<string, string[]>
-    stedi: {
-      names?: string[]
-      supplementary_names?: string[]
-      network_names?: string[]
-      identified_product?: string | null
-      product_evidence?: Record<string, string> | null
-      plan_number?: string
-      group_number?: string
-      group_name?: string | null
-      verification_payer?: { name: string; payer_id: string; evidence_path: string } | null
-      source?: string
-    }
+    stedi: StediPlanDetails
   }
   calculated_at?: string
   ecw_retrieved_at?: string

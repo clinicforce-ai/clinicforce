@@ -10,12 +10,14 @@ export type CostBreakdownRow = {
 export default function CostBreakdownTable({
   title = 'Visit cost and collection',
   rows,
+  open = false,
 }: {
   title?: string
   rows: CostBreakdownRow[]
+  open?: boolean
 }) {
   return (
-    <details className="cost-breakdown" aria-label={title}>
+    <details className="cost-breakdown" aria-label={title} open={open}>
       <summary>{title}</summary>
       <div className="cost-breakdown-scroll">
         <table>

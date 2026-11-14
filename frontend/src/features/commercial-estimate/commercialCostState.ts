@@ -36,6 +36,13 @@ export function supportedOfficeCopayShare(
     : null
 }
 
+export function calculatedCoinsurance(
+  amountCents: number,
+  percent: string | number | null | undefined,
+) {
+  return `${percent != null ? `${Number(percent).toLocaleString()}% · ` : ''}${money(amountCents)}`
+}
+
 export function visibleRateReference(result: PrevisitEstimate) {
   const temporaryRateReference =
     /\bhumana\b/i.test(result.payer || '') &&

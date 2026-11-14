@@ -189,6 +189,10 @@ def refresh_saved_uhc_registration_benefits(result: dict, case: dict) -> None:
         return
     result['benefits'] = fresh
     result['identity'] = matched
+    current_plan = (result.get('plan_details') or {}).get('stedi') or {}
+    if not current_plan.get('response_payer_name'):
+        result.setdefault('plan_details', {})['stedi'] = {
+            **current_plan, 'response_payer_name': _api.commercial.plan_details(payload).get('response_payer_name')}
 
 
 def restore_active_blue_cross_insurance(result: dict, case: dict) -> None:
