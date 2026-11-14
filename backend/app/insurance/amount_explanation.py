@@ -288,7 +288,6 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
         elif basis == 'qmb_protection':
             sentence, code = ('Collect $0 now because confirmed QMB protection prohibits Medicare cost-sharing collection; any other liability requires separate covered-service and claim evidence', 'qmb_protected')
         elif basis == 'healthselect_ma_zero_televisit': sentence, code = ('Collect $0 now: this matched UHC HealthSelect Medicare Advantage PPO reports a $0 virtual-visit copay and 0% coinsurance, with no annual medical deductible. The proposed code, payer order and final claim remain open', basis)
-        elif basis == 'aetna_office_refundable_deposit': sentence, code = (f'Collect {_money(amount)} as a refundable clinic office deposit for CPT 99213. The clinic-supplied Availity MPPO Office maximum is a reference, not this member’s confirmed Aetna allowance or final patient share; apply it to the processed claim and refund any excess', basis)
         elif basis in {'cigna_clinic_fee_quote', 'cigna_fee_proxy_advance'}: sentence, code = (f'Collect {_money(amount)} as a clinic-directed refundable advance using Cigna rates where available and BCBS Texas fees for other selected CPTs; apply deductible, coinsurance, out-of-pocket cap and prior payments. This is not a Cigna Cost of Care Estimator result; reconcile after the claim' if basis == 'cigna_clinic_fee_quote' else f'Collect {_money(amount)} for the planned diagnostic services using Cigna exact-CPT benefits and the clinic BCBS Texas fee schedule', basis)
         elif basis in {'bcbstx_proxy_advance', 'bcbstx_refundable_advance'}:
             sentence, code = (f'Collect {_money(amount)} as the clinic-approved BCBS Texas fee proxy advance for the planned diagnostic services; the UHC allowed amount and final claim share remain unknown' if basis == 'bcbstx_proxy_advance' else
@@ -332,9 +331,9 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
                         sentence += (f', reduced by {_money(oop_reduction)} under the out-of-pocket limit'
                                      if all('allowed_cap_adjustment_cents' in row for row in calculations) else
                                      f', reduced by {_money(oop_reduction)} under plan limits')
-                    cms_based = any(line.get('allowed_basis') == 'cms_original_medicare_estimate' for line in lines)
-                    sentence += (' based on CMS Original Medicare benchmark prices, not payer-confirmed allowances'
-                                 if cms_based else
+                    medicare_schedule = any(line.get('allowed_basis') == 'medicare_fee_schedule' for line in lines)
+                    sentence += (' based on the clinic-approved Medicare fee schedule'
+                                 if medicare_schedule else
                                  ' based on the payer’s out-of-network CPT prices' if network == 'out_of_network'
                                  else ' based on the clinic’s contracted CPT prices' if network == 'in_network'
                                  else ' for the planned care')
@@ -354,9 +353,9 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
                 else:
                     sentence = 'No payment is due now under the applicable plan benefits'
             else:
-                cms_based = any(line.get('allowed_basis') == 'cms_original_medicare_estimate' for line in lines)
-                sentence = ('This estimate uses CMS Original Medicare benchmark prices, not payer-confirmed allowances'
-                            if cms_based else
+                medicare_schedule = any(line.get('allowed_basis') == 'medicare_fee_schedule' for line in lines)
+                sentence = ('This estimate uses the clinic-approved Medicare fee schedule and reported plan benefits'
+                            if medicare_schedule else
                             'This estimate uses the plan’s copay, deductible, and share of NMCT’s contract prices for the planned care'
                             if network == 'in_network' else
                             'This estimate uses the payer’s out-of-network allowed price under Medicare Advantage member billing protections'

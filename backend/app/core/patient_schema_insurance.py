@@ -1,6 +1,20 @@
 """Insurance cases and practice-scoped commercial configuration."""
 
 def initialize_insurance(cursor) -> None:
+    cursor.execute("""CREATE TABLE IF NOT EXISTS aetna_fee_schedule (
+        category TEXT NOT NULL CHECK (category IN ('advantage', 'commercial')),
+        code TEXT NOT NULL, description TEXT NOT NULL,
+        allowed_cents INTEGER NOT NULL CHECK (allowed_cents > 0),
+        source_reference TEXT NOT NULL, effective_from DATE NOT NULL,
+        PRIMARY KEY (category, code, effective_from)
+    )""")
+
+    cursor.execute("""CREATE TABLE IF NOT EXISTS medicare_fee_schedule (
+        code TEXT NOT NULL, description TEXT NOT NULL,
+        allowed_cents INTEGER NOT NULL CHECK (allowed_cents > 0),
+        source_reference TEXT NOT NULL, effective_from TEXT NOT NULL,
+        PRIMARY KEY (code,effective_from)
+    )""")
     cursor.execute("""CREATE TABLE IF NOT EXISTS insurance_cases (
         id TEXT PRIMARY KEY, patient_id TEXT NOT NULL REFERENCES patients(patient_id),
         share_manifest_id TEXT NOT NULL, evidence_manifest_id TEXT NOT NULL,

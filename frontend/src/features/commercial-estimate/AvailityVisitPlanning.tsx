@@ -54,12 +54,9 @@ export function AvailityVisitTable({
       ? result.codes[0]
       : null
   const rate = code
-    ? result.temporary_rate_reference?.lines.find(
-        (line) =>
-          line.code === '99203' &&
-          line.units === 1 &&
-          line.unit_reference_cents === 11960 &&
-          result.temporary_rate_reference?.source.startsWith('Aetna MEPPO'),
+    ? result.price_range?.lines?.find(
+        (line) => line.id === code.id && line.allowed_basis === 'aetna_fee_schedule' &&
+          line.rate_resolution?.status === 'RESOLVED',
       )
     : null
   const amount = plannedCollection(result, evidence.copay_cents)
@@ -95,16 +92,16 @@ export function AvailityVisitTable({
         : 'Review and select the office visit code before using the fee reference.',
     },
     {
-      label: 'CPT 99203 · office fee schedule maximum',
-      value: rate ? money(rate.unit_reference_cents) : 'Not available',
+      label: 'CPT 99203 · Aetna allowed fee',
+      value: rate?.allowed_cents != null ? money(rate.allowed_cents) : 'Not available',
       detail: rate
-        ? 'Clinic-supplied Aetna MEPPO Office fee screen; provider and contract scope unverified. Non-office maximum is $73.83 and does not apply to this office visit.'
-        : 'The dated fee reference requires one selected CPT 99203 office line.',
+        ? `${rate.rate_source || 'Clinic-approved Aetna fee schedule'}; final claim payment and patient share still depend on benefits and billing protection.`
+        : 'An applicable database fee requires an identified Aetna plan category and one unmodified CPT 99203 office line.',
     },
     {
       label: 'Total payer allowed',
-      value: 'Not established',
-      detail: 'The fee schedule maximum is not a processed claim allowance.',
+      value: rate?.allowed_cents != null ? money(rate.allowed_cents) : 'Not established',
+      detail: 'The scheduled fee is not a processed claim payment.',
     },
     {
       label: 'Copay',

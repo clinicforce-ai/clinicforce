@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
-from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_aetna_rates, _attach_temporary_uhc_rates, _attach_temporary_blue_cross_rates, attach_prudent_buyer_office_reference, attach_blue_cross_reference_if_unpriced, prudent_buyer_office_reference
+from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_uhc_rates, _attach_temporary_blue_cross_rates, attach_prudent_buyer_office_reference, attach_blue_cross_reference_if_unpriced, prudent_buyer_office_reference
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import apply_admin_nonparticipation, apply_nmct_cigna_administrator_attestation, apply_nmct_cigna_ppo_attestation, apply_nmct_library_contract, apply_nmct_contract_absence, scoped_admin_nonparticipation, record_confirmed_out_of_network, resolve_unlinked_blue_route, bluecard_pricing_route
 from app.api.routers.commercial_flow.commercial_previsit_service_scope import reviewed_service_types as _reviewed_service_types
 from app.api.routers.commercial_flow.commercial_previsit_context import ecw_case_data as _ecw_case_data
 from app.api.routers.commercial_flow.commercial_previsit_context import past_visit_with_saved_estimate as _past_visit_with_saved_estimate
 from app.api.routers.commercial_flow.commercial_previsit_tpa import merge_administrator_benefits
-from app.insurance import botox_review, cms_locality, cms_pfs, cpt_rules, fep_preferred, insurance_product, inventory_certification, library_network_exclusions, group_contract_support
+from app.insurance import aetna_fees, botox_review, cpt_rules, fep_preferred, insurance_product, inventory_certification, library_network_exclusions, group_contract_support, medicare_fees
 from app.insurance.stedi_benefits.payer_order import primary_secondary_order
 from app.insurance.stedi_benefits.linked import merge_linked_medical_oop
 from app.api.routers.commercial_flow.commercial_previsit_medicare import bind as bind_medicare_part_b
@@ -84,7 +84,7 @@ def _office_service_types(practice_id: str, source: dict) -> list[str]:
 
 def _benefit_context(inputs: dict, source: dict) -> dict:
     rendering = source.get('rendering_provider') or {}
-    # Eligibility submission still requires its own name fields; CMS pricing
+    # Eligibility submission still requires its own name fields; fee matching
     # uses a validated NPI and rejects contradictory visit/provider records.
     source_npi = str(rendering.get('npi') or '')
     visit_npi = str((inputs.get('rendering_provider') or {}).get('npi') or '')
@@ -100,7 +100,7 @@ def _benefit_context(inputs: dict, source: dict) -> dict:
 def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
                     codes: list[dict], benefits: dict, *, payload: dict | None = None,
                     review: dict | None = None, payer_route_id: str | None = None,
-                    network_evidence: dict | None = None) -> tuple[dict | None, list[str]]:
+                    network_evidence: dict | None = None, payer_name: str = '') -> tuple[dict | None, list[str]]:
     review = review or {}
     if (payload and benefits.get('network_status') == 'out_of_network'
             and any(str(benefits.get(source) or '').startswith('stc30:')
@@ -122,40 +122,35 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
     if rules['provider_npi_conflict']:
         issues.append('The eCW rendering NPI conflicts with the selected visit provider; resolve it before pricing.')
     medical_names = (benefits.get('plan_details') or {}).get('names') or []
-    rules['medicare_advantage'] = insurance_product.is_medicare_advantage(medical_names)
-    if benefits.get('network_status') == 'out_of_network':
-        binding = (benefits.get('identity') or {}).get('binding') or ''
-        rules['patient_binding'] = binding
-        rules['product_binding'] = _api.payer_allowance.product_binding(benefits.get('plan_details'))
-        rules['cms_locality'], rules['cms_locality_evidence'] = cms_locality.pricing_locality(
-            source.get('cms_service_zip'), source.get('cms_locality'))
-        if rules['cms_locality_evidence']['status'] == 'clinic_location_conflict':
-            issues.append('The eCW service ZIP does not match the clinic-configured CMS locality; resolve the service location before using a CMS benchmark.')
-        rules['cms_qp_status'] = source.get('cms_qp_status')
-        if review.get('selected_ids') and _api.network_participation.verified_out_of_network(benefits):
+    product_family = insurance_product.classify(medical_names, payer_id=payer_id)
+    is_aetna = aetna_fees.is_aetna_payer(payer_name)
+    aetna_category = aetna_fees.category(payer_name, medical_names)
+    medicare_plan = not is_aetna and (product_family == 'original_medicare' or product_family.startswith('medicare_advantage_'))
+    rules['medicare_advantage'] = aetna_category == 'advantage' or product_family.startswith('medicare_advantage_')
+    rules['patient_binding'] = (benefits.get('identity') or {}).get('binding') or ''
+    rules['product_binding'] = _api.payer_allowance.product_binding(benefits.get('plan_details'))
+    if aetna_category and benefits.get('network_status') != 'out_of_network':
+        rates = aetna_fees.matching_rates(aetna_category, str(inputs.get('service_date') or ''), selected,
+            place_of_service=str(rules.get('place_of_service') or ''),
+            provider_npi=str(rules.get('provider_npi') or ''),
+            patient_binding=rules['patient_binding'], product_binding=rules['product_binding'])
+        rules['cost_share'] = 'payer_returned'
+        if len(rates) != len(selected):
+            issues.append('The Aetna fee schedule has no applicable unmodified rate for every selected CPT and visit.')
+    elif aetna_category:
+        issues.append('Obtain the payer out-of-network allowed amount for each selected CPT; the Aetna in-network schedule does not apply.')
+    elif is_aetna:
+        issues.append('Identify one Aetna Advantage or Commercial medical product before applying its fee schedule.')
+    elif benefits.get('network_status') == 'out_of_network':
+        if not medicare_plan and review.get('selected_ids') and _api.network_participation.verified_out_of_network(benefits):
             rates = _api.payer_allowance.quoted_rates(review, selected, payer_id=payer_route_id or payer_id,
                 service_date=str(inputs.get('service_date') or ''),
                 provider_npi=str(rules.get('provider_npi') or ''),
-                place_of_service=str(rules.get('place_of_service') or ''), patient_binding=binding,
+                place_of_service=str(rules.get('place_of_service') or ''), patient_binding=rules['patient_binding'],
                 product_binding=_api.payer_allowance.product_binding(benefits.get('plan_details')))
-            quoted = {rate['line_id'] for rate in rates}
-            if rules['medicare_advantage']:
-                for line in selected:
-                    if line['id'] in quoted:
-                        continue
-                    estimated = cms_pfs.estimate_rate(line['code'], line.get('modifiers') or [],
-                        line.get('units'), service_date=str(inputs.get('service_date') or ''),
-                        locality=str(rules.get('cms_locality') or ''),
-                        qp_status=str(source.get('cms_qp_status') or ''),
-                        place_of_service=str(rules.get('place_of_service') or ''),
-                        provider_npi=str(rules.get('provider_npi') or ''),
-                        patient_binding=binding)
-                    if estimated:
-                        rates.append({**estimated, 'line_id': line['id'], 'units': line['units'],
-                                      'product_binding': rules['product_binding']})
-        if len(rates) != len(selected):
-            issues.append('Obtain the payer out-of-network allowed amount or complete CMS locality and provider payment scope for each selected CPT; clinic contract and cash prices cannot replace it.')
-    else:
+        if not medicare_plan and len(rates) != len(selected):
+            issues.append('Obtain the payer out-of-network allowed amount for each selected CPT; clinic contract and cash prices cannot replace it.')
+    elif not medicare_plan:
         try:
             _, network, profile = _api._previsit_practice_path(practice_id, {**inputs, "payer_id": payer_id}, source)
             if network.get("plan_matcher") and not source.get("plan"):
@@ -174,8 +169,21 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
             rules = {**rules, **profile['rules']}
         except (_api.HTTPException, _api.commercial.CommercialError) as exc:
             issues.append(str(exc.detail) if isinstance(exc, _api.HTTPException) else str(exc))
+    if medicare_plan:
+        rates = []
+        for line in selected:
+            fee = medicare_fees.estimate_rate(line['code'], line.get('modifiers') or [], line.get('units'),
+                service_date=str(inputs.get('service_date') or ''),
+                place_of_service=str(rules.get('place_of_service') or ''),
+                provider_npi=str(rules.get('provider_npi') or ''),
+                patient_binding=rules['patient_binding'])
+            if fee:
+                rates.append({**fee, 'line_id': line['id'], 'units': line['units'],
+                              'product_binding': rules['product_binding']})
+        if len(rates) != len(selected):
+            issues.append('The approved Medicare fee schedule has no matching unmodified fee for every selected CPT and visit.')
     telehealth_pos_unresolved = _api.visit_estimate.telehealth_pos_unresolved(inputs)
-    if _api.visit_estimate.is_telehealth(inputs):
+    if _api.visit_estimate.is_telehealth(inputs) and not medicare_plan and not aetna_category:
         rates = []
         rules['place_of_service'] = inputs.get('place_of_service')
         issues.append('A contract rate for telehealth POS 10 or 02 is not established; the clinic office rate is not used.')
@@ -370,9 +378,6 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     if _api.commercial.is_united_healthcare_payer(
             result, {'displayName': route_payer.get('display_name')} if route_payer else None):
         _attach_temporary_uhc_rates(result, practice_id, inputs, source)
-    elif nmct and _api.re.search(r'\baetna\b', ' '.join((str(result.get('payer') or ''),
-            str((route_payer or {}).get('display_name') or ''))), _api.re.I):
-        _attach_temporary_aetna_rates(result, practice_id, inputs, source)
     elif prudent_buyer_office_reference(result):
         attach_prudent_buyer_office_reference(result, practice_id, inputs, source)
     elif (rate_payer_name := str(result.get('payer') or (route_payer or {}).get('display_name') or '')) and not _api.re.search(
@@ -387,7 +392,7 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
             result['price_range'], issues = _api._previsit_range(
                 practice_id, inputs, priced_source, priced_payer_id, result['codes'], benefits,
                 payload=payload, review=review, payer_route_id=payer_id,
-                network_evidence=result.get('network_evidence'))
+                network_evidence=result.get('network_evidence'), payer_name=payer_name)
             result['issues'].extend(issues)
             attach_blue_cross_reference_if_unpriced(result, practice_id, inputs, source, payer_name)
             return
@@ -400,12 +405,18 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
             priced_source = {**source, **((result.get('network_evidence') or {}).get('scope') or {})}
             result['price_range'], issues = _api._previsit_range(
                 practice_id, inputs, priced_source, payer_id, result['codes'], benefits,
-                payload=payload, review=review, payer_route_id=payer_id)
+                payload=payload, review=review, payer_route_id=payer_id, payer_name=payer_name)
             result['issues'].extend(issues)
             attach_blue_cross_reference_if_unpriced(result, practice_id, inputs, source, payer_name)
             return
         draft = [row for row in payer_connections if row.get('stedi_payer_id') == payer_id
                  and row.get('status') == 'draft']
+        if aetna_fees.is_aetna_payer(payer_name):
+            result['price_range'], issues = _api._previsit_range(
+                practice_id, inputs, source, payer_id, result['codes'], benefits,
+                payload=payload, review=review, payer_route_id=payer_id, payer_name=payer_name)
+            result['issues'].extend(issues)
+            return
         result["issues"].append(
             "Clinic pricing: this payer's clinic estimator connection is still a draft."
             if not connections and len(draft) == 1 else
@@ -495,6 +506,6 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
         priced_source = group_contract_support.prebooking_pricing_source(priced_source, result.get('network_evidence') or {})
     result["price_range"], issues = _api._previsit_range(practice_id, inputs, priced_source, connection["id"], result["codes"], benefits,
                                                   payload=payload, review=review, payer_route_id=payer_id,
-                                                  network_evidence=result.get('network_evidence'))
+                                                  network_evidence=result.get('network_evidence'), payer_name=payer_name)
     result["issues"].extend(issues)
     attach_blue_cross_reference_if_unpriced(result, practice_id, inputs, source, payer_name)

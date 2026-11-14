@@ -35,7 +35,7 @@ export function networkEvidenceStatus(result: PrevisitEstimate | null) {
     !!price.lines?.length &&
     price.lines.every(
       (line) =>
-        ['payer_out_of_network', 'cms_original_medicare_estimate'].includes(
+        ['payer_out_of_network', 'medicare_fee_schedule'].includes(
           line.allowed_basis || '',
         ) &&
         Number.isInteger(line.allowed_cents) &&

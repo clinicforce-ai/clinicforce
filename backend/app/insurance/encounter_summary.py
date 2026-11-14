@@ -78,7 +78,7 @@ def build(result: dict, review: dict | None = None) -> dict:
     # known plan share, but cannot establish the full balance-billed total.
     out_of_network_share = bool(not cash and priced and verified_out_of_network(benefits)
         and price.get('mode') == 'services' and not price.get('conditional') and lines
-        and all(line.get('allowed_basis') in {'payer_out_of_network', 'cms_original_medicare_estimate'}
+        and all(line.get('allowed_basis') in {'payer_out_of_network', 'medicare_fee_schedule'}
                 and type(line.get('allowed_cents')) is int and line['allowed_cents'] >= 0
                 and (line.get('rate_resolution') or {}).get('status') == 'RESOLVED'
                 and isinstance(line.get('calculation'), dict) for line in lines))
@@ -123,7 +123,7 @@ def build(result: dict, review: dict | None = None) -> dict:
     if (guidance.get('basis') in {'bcbstx_proxy_advance', 'cigna_fee_proxy_advance'} and collect is not None
             and collect != max(0, (result.get('fee_proxy_estimate') or {}).get('patient_share_cents', -1) - (paid or 0))):
         integrity_error = 'collection_amount_mismatch'
-    refundable_advance = guidance.get('basis') in {'bcbstx_refundable_advance', 'cigna_refundable_office_copay', 'aetna_office_refundable_deposit'}
+    refundable_advance = guidance.get('basis') in {'bcbstx_refundable_advance', 'cigna_refundable_office_copay'}
     if (guidance.get('basis') == 'bcbstx_refundable_advance' and collect is not None
             and (type(guidance.get('reference_total_cents')) is not int
                  or collect != max(0, guidance['reference_total_cents'] - (paid or 0)))):
@@ -132,12 +132,8 @@ def build(result: dict, review: dict | None = None) -> dict:
             and (type(guidance.get('payer_reported_office_copay_cents')) is not int
                  or collect != max(0, guidance['payer_reported_office_copay_cents'] - (paid or 0)))):
         integrity_error = 'collection_amount_mismatch'
-    if (guidance.get('basis') == 'aetna_office_refundable_deposit' and collect is not None
-            and (type(guidance.get('reference_total_cents')) is not int
-                 or collect != max(0, guidance['reference_total_cents'] - (paid or 0)))):
-        integrity_error = 'collection_amount_mismatch'
     if (integrity_error and guidance.get('basis') in {'patient_obligations', 'anticipated_services', 'bcbstx_proxy_advance', 'cigna_fee_proxy_advance',
-                                                      'bcbstx_refundable_advance', 'cigna_refundable_office_copay', 'aetna_office_refundable_deposit', 'calculation_conflict'} and not clinic_zero_instruction):
+                                                      'bcbstx_refundable_advance', 'cigna_refundable_office_copay', 'calculation_conflict'} and not clinic_zero_instruction):
         collect = None
     if (unsupported_insurance or requirement_blocker(result) is not None) and collect is not None and not clinic_zero_instruction:
         collect = None
