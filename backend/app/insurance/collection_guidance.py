@@ -269,8 +269,7 @@ def build(result: dict, review: dict | None = None) -> dict:
     published_fep_standard = any((line.get('benefits') or {}).get('published_plan_rule') == FEP_STANDARD_2026 for line in lines)
     bluecard_epo_neurology_copay = neurology_office_copay(
         result, benefits, price, lines, amount, policy_approved, guidance['basis'])
-    uhc_registration_copay = uhc_choice_plus_registration_copay(
-        result, benefits, price, lines, amount, guidance['basis'])
+    uhc_registration_copay = uhc_choice_plus_registration_copay(result, benefits, price, lines, amount, guidance['basis'])
     clinic_delegated_copay = (not policy_approved and guidance['basis'] == 'office_copay'
         and result.get('nmct_cigna_delegated_office') is True
         and verified_in_network(benefits)
@@ -305,8 +304,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         guidance['collection_rule'] = {'mode': 'calculated_in_network_advance',
                                        'reference': 'Selected CPTs, active clinic contract rates and member benefits'}
     if amount is not None and amount > 0 and uhc_registration_copay:
-        guidance['collection_rule'] = {'mode': 'uhc_choice_plus_registration_copay',
-            'reference': 'Current member-bound Choice Plus specialist office benefit and clinic network agreement'}
+        guidance['collection_rule'] = {'mode': 'uhc_choice_plus_registration_copay', 'reference': 'Current member-bound Choice Plus specialist office benefit and clinic network agreement'}
     elif amount is not None and amount > 0 and policy_approved and guidance['basis'] not in {'ecw_billing_note', 'cigna_refundable_office_copay'}:
         guidance['collection_rule'] = {'mode': policy_mode, 'reference': policy['reference'],
                                        'approved_at': policy['approved_at']}

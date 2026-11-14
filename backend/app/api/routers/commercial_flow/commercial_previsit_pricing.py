@@ -1,6 +1,5 @@
 """Commercial previsit pricing workflow."""
 from __future__ import annotations
-
 from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_catalog import requirement_candidates as _requirement_candidates
 from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_uhc_rates, _attach_temporary_blue_cross_rates, attach_prudent_buyer_office_reference, attach_blue_cross_reference_if_unpriced, prudent_buyer_office_reference
@@ -364,8 +363,7 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
         _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, rate_payer_name)
     if payer_fees.schedule_for_service(payer_name, (source.get('payer_plan_names') or
                                       (benefits.get('plan_details') or {}).get('names')), service_date):
-        if nmct_contract and source.get('payer_plan_bound') is True and not exclusion:
-            apply_nmct_library_contract(result, benefits, nmct_contract)
+        if nmct_contract and source.get('payer_plan_bound') is True and not exclusion: apply_nmct_library_contract(result, benefits, nmct_contract)
         for key in ('temporary_rate_reference', 'cigna_clinic_rates', 'cigna_rate_conflict'):
             result.pop(key, None)
         result['price_range'], issues = _api._previsit_range(
