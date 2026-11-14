@@ -92,6 +92,31 @@ def test_saved_uhc_oop_duplicate_is_reprojected_from_verified_evidence():
     assert not result['benefits'].get('oop_remaining_conflict_ids')
 
 
+def test_successful_saved_database_reprice_clears_old_draft_pricing_notice():
+    import hashlib
+    from app.api.routers.commercial_flow import commercial_previsit_saved_pricing as saved
+    raw = b'{"synthetic":true}'
+    result = {'payer': 'United Healthcare', 'service_date': '2026-11-14',
+              'plan_details': {'stedi': {'network_names': ['UNITEDHEALTHCARE CHOICE PLUS']}},
+              'benefits': {'active': True}, 'identity': {'status': 'matched'},
+              'codes': [{'id': 'office', 'code': '99213', 'units': 1}],
+              'price_range': {'lines': [{'code': '99213'}]},
+              'issues': ["Clinic pricing: this payer's clinic estimator connection is still a draft."]}
+    case = {'previsit_context': {'inputs': {'service_date': '2026-11-14'},
+                                 'source': {}, 'payer_id': 'synthetic-route'},
+            'previsit_raw_object_key': 'synthetic-key',
+            'previsit_raw_sha256': hashlib.sha256(raw).hexdigest()}
+    current = {'complete': True, 'lines': [{'code': '99213', 'allowed_cents': 8178}]}
+    with patch.object(saved.payer_fees, 'schedule_for_result', return_value=('uhc', 'commercial')), \
+         patch.object(saved._api.object_store, 'get_object_bytes', return_value=raw), \
+         patch.object(saved._api, '_previsit_range', return_value=(current, [])), \
+         patch.object(saved, 'patient_plan_applies', return_value=True), \
+         patch.object(saved, '_payer_plan_pricing_source', return_value={}):
+        saved._reprice_saved_new_network(result, case, 'synthetic-practice', None)
+    assert result['price_range'] == current
+    assert result['issues'] == []
+
+
 def test_cigna_calculated_share_defers_deductible_and_coinsurance_collection():
     result = scenario(22910)
     result['payer'] = 'Cigna'
@@ -1650,8 +1675,8 @@ def test_saved_uhc_fee_schedule_reprices_instead_of_reporting_old_clinic_rate():
                                              rate_version='old-clinic-rate')
     case = {'previsit_context': {'result': result, 'payer_id': 'synthetic-route',
             'inputs': {'service_date': '2026-11-14'}, 'source': {}},
-            'previsit_raw_object_key': 'synthetic-protected-271',
-            'previsit_raw_sha256': 'synthetic-digest'}
+            'previsit_raw_object_key': 'x',
+            'previsit_raw_sha256': 'x'}
     with patch('app.insurance.payer_fees.schedule_for_result',
                return_value=('uhc', 'commercial')), \
          patch.object(api.commercial_store, 'list_connections', return_value=[]):
