@@ -107,7 +107,7 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
         benefits, source, inputs, rules, network_evidence)
     if rules['provider_npi_conflict']:
         issues.append('The eCW rendering NPI conflicts with the selected visit provider; resolve it before pricing.')
-    medical_names = (benefits.get('plan_details') or {}).get('names') or []
+    medical_names = payer_fees.fee_schedule_products(payer_name, benefits.get('plan_details'))
     product_family = insurance_product.classify(medical_names, payer_id=payer_id)
     medicare_plan = product_family == 'original_medicare' or product_family.startswith('medicare_advantage_')
     is_aetna = aetna_fees.is_aetna_payer(payer_name)
@@ -361,8 +361,8 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     elif (rate_payer_name := str(result.get('payer') or (route_payer or {}).get('display_name') or '')) and not _api.re.search(
             r'blue cross|bcbstx|blue shield|aetna', rate_payer_name, _api.re.I):
         _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, rate_payer_name)
-    if payer_fees.schedule_for_service(payer_name, (source.get('payer_plan_names') or
-                                      (benefits.get('plan_details') or {}).get('names')), service_date):
+    if payer_fees.schedule_for_service(payer_name, (payer_fees.fee_schedule_products(payer_name,
+        benefits.get('plan_details')) or source.get('payer_plan_names')), service_date):
         if nmct_contract and source.get('payer_plan_bound') is True and not exclusion: apply_nmct_library_contract(result, benefits, nmct_contract)
         for key in ('temporary_rate_reference', 'cigna_clinic_rates', 'cigna_rate_conflict'):
             result.pop(key, None)

@@ -78,8 +78,8 @@ def test_choice_plus_zero_requires_patient_binding_and_clear_card():
     assert (collection_guidance.build(result).get('collection_rule') or {}).get('mode') != 'uhc_choice_plus_family_oop_deferral'
 
 
-@pytest.mark.parametrize('plan,keeps_network', [('POS CHOICE PLUS', True), ('OTHER PLAN', False)])
-def test_saved_rate_change_keeps_only_matching_zero_check_in_evidence(monkeypatch, plan, keeps_network):
+@pytest.mark.parametrize('plan,zero_supported', [('POS CHOICE PLUS', True), ('OTHER PLAN', False)])
+def test_saved_rate_change_keeps_only_matching_zero_check_in_evidence(monkeypatch, plan, zero_supported):
     result = estimate(plan=plan)
     line = result['price_range']['lines'][0]
     line.update(allowed_basis='clinic_contract', allowed_cents=10117,
@@ -101,7 +101,9 @@ def test_saved_rate_change_keeps_only_matching_zero_check_in_evidence(monkeypatc
         lambda *_: [{'code': '99203', 'modifier': '', 'version_id': 'new',
                      'allowed_cents': 9999}])
     status._recheck_saved_clinic_pricing(result, case, 'synthetic-practice')
-    assert (result['benefits']['network_status'] == 'in_network') is keeps_network
+    assert result['benefits']['network_status'] == 'in_network'
     assert result['price_range']['lines'][0]['allowed_cents'] is None
-    if keeps_network:
+    if zero_supported:
         assert collection_guidance.build(result)['amount_cents'] == 0
+    else:
+        assert collection_guidance.build(result)['amount_cents'] is None

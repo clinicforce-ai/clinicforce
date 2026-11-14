@@ -116,7 +116,7 @@ def replay(bundle: dict) -> dict:
     benefits = commercial.normalize_stedi_271(payload, response_service, False, service_date=service_date)
     benefits['identity'] = identity
     benefits['benefit_source'] = 'saved Stedi 271'
-    named = product.get('names') or []
+    named = payer_fees.fee_schedule_products(str(payer.get('display_name') or ''), product)
     bound = len(named) == 1 and patient_benefits_bound(identity) and benefits.get('active') is True
     exact_source = {**source, 'payer_plan_names': named, 'payer_plan_bound': bound}
     exclusion = library_network_exclusions.applicable_exclusion(practice_id,

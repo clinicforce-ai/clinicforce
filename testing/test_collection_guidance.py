@@ -73,6 +73,25 @@ def test_complete_contract_priced_in_network_visit_collects_calculated_share():
     assert collection_guidance.build(result)['amount_cents'] is None
 
 
+def test_saved_uhc_oop_duplicate_is_reprojected_from_verified_evidence():
+    import hashlib
+    from app.api.routers.commercial_flow import commercial_previsit_saved_pricing as saved
+    raw = b'{"synthetic":true}'
+    matched = {'status': 'matched', 'binding': 'synthetic-person', 'match_version': 2}
+    result = {'payer': 'United Healthcare', 'identity': matched,
+              'benefits': {'active': True, 'identity': matched, 'oop_remaining_conflict_ids': ['row-a', 'row-b']}}
+    case = {'previsit_context': {'inputs': {'place_of_service': '10', 'service_date': '2026-11-14'}},
+            'previsit': {'request_state': 'complete'}, 'previsit_raw_object_key': 'synthetic-key',
+            'previsit_raw_sha256': hashlib.sha256(raw).hexdigest()}
+    fresh = {'active': True, 'identity': matched, 'oop_remaining_cents': 337064}
+    with patch.object(saved._api.object_store, 'get_object_bytes', return_value=raw), \
+         patch.object(saved._api, '_case_benefits', return_value=fresh), \
+         patch.object(saved, 'patient_plan_applies', return_value=True):
+        saved.refresh_saved_uhc_registration_benefits(result, case)
+    assert result['benefits']['oop_remaining_cents'] == 337064
+    assert not result['benefits'].get('oop_remaining_conflict_ids')
+
+
 def test_cigna_calculated_share_defers_deductible_and_coinsurance_collection():
     result = scenario(22910)
     result['payer'] = 'Cigna'
@@ -1617,6 +1636,61 @@ def test_reopening_saved_estimate_rechecks_current_clinic_pricing(change):
         assert reopened['encounter_summary']['estimated_total_patient_min_cents'] is None
         assert reopened['price_range']['collection']['amount_cents'] is None
         assert 'rerun' in reopened['payment_explanation']['sentence'].lower()
+
+
+def test_saved_uhc_fee_schedule_reprices_instead_of_reporting_old_clinic_rate():
+    from app.api.routers.commercial_flow.commercial_previsit_status import _recheck_saved_clinic_pricing
+
+    result = scenario(5000)
+    result.update(payer='United Healthcare', service_date='2026-11-14',
+                  plan_details={'stedi': {'names': ['Choice Plus']}},
+                  network_evidence={'document_id': 'synthetic-contract'})
+    result['price_range']['lines'][0].update(allowed_basis='clinic_contract',
+                                             allowed_cents=10000, unit_allowed_cents=10000,
+                                             rate_version='old-clinic-rate')
+    case = {'previsit_context': {'result': result, 'payer_id': 'synthetic-route',
+            'inputs': {'service_date': '2026-11-14'}, 'source': {}},
+            'previsit_raw_object_key': 'synthetic-protected-271',
+            'previsit_raw_sha256': 'synthetic-digest'}
+    with patch('app.insurance.payer_fees.schedule_for_result',
+               return_value=('uhc', 'commercial')), \
+         patch.object(api.commercial_store, 'list_connections', return_value=[]):
+        _recheck_saved_clinic_pricing(result, case, 'synthetic-practice')
+    assert not result.get('issues')
+    assert result['benefits']['network_source'] == 'clinic_library_contract'
+
+
+def test_saved_rate_change_keeps_current_network_for_fixed_office_copay():
+    from app.api.routers.commercial_flow.commercial_previsit_status import _recheck_saved_clinic_pricing
+
+    result = scenario(5000)
+    result.update(payer='United Healthcare', service_date='2026-11-14',
+                  service_selection_status='preview', service_plan={'recommended_ids': ['office']},
+                  codes=[{'id': 'office', 'code': '99213', 'units': 1}],
+                  network_evidence={'document_id': 'synthetic-contract'})
+    result['identity'] = {'status': 'matched', 'binding': 'synthetic-binding', 'match_version': 2}
+    result['benefits'].update(identity=result['identity'], service_date_matches=True,
+        copay_cents=5000, copay_period='VISIT', deductible_applies=False,
+        coinsurance_percent='0', oop_remaining_cents=337064)
+    result['price_range']['lines'][0].update(code='99213', allowed_basis='clinic_contract',
+        allowed_cents=10000, unit_allowed_cents=10000, rate_version='old-rate',
+        benefits=dict(result['benefits']), rate_resolution={'status': 'RESOLVED'})
+    case = {'previsit_context': {'result': result, 'payer_id': 'synthetic-route',
+            'inputs': {'service_date': '2026-11-14'}, 'source': {}}}
+    connection = {'id': 'synthetic-connection', 'stedi_payer_id': 'synthetic-route',
+                  'status': 'staff_guidance_enabled'}
+    with patch('app.insurance.payer_fees.schedule_for_result', return_value=None), \
+         patch.object(api.commercial_store, 'list_connections', return_value=[connection]), \
+         patch.object(api, '_previsit_practice_path', return_value=({}, {}, {})), \
+         patch.object(api, '_network_contract_evidence',
+                      return_value={'document_id': 'synthetic-contract'}), \
+         patch.object(api.commercial_store, 'matching_rates', return_value=[{
+             'code': '99213', 'modifier': '', 'allowed_cents': 12000,
+             'version_id': 'new-rate'}]):
+        _recheck_saved_clinic_pricing(result, case, 'synthetic-practice')
+    assert result['price_range']['lines'][0]['allowed_cents'] is None
+    assert result['benefits']['network_source'] == 'clinic_library_contract'
+    assert collection_guidance.build(result)['amount_cents'] == 5000
 
 
 def test_saved_contract_recheck_uses_the_same_patient_bound_payer_product_as_initial_pricing():

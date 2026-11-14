@@ -49,7 +49,8 @@ def _status(value: object) -> str | None:
     return None
 
 def _source(document: dict, page: int | None = None) -> dict:
-    return {'filename': document['filename'], 'document_id': document['id'], **({'page': page} if page else {})}
+    return {'filename': document.get('filename') or 'Payer contract',
+            'document_id': document['id'], **({'page': page} if page else {})}
 
 def _date(value: object) -> date | None:
     if not value:

@@ -3,8 +3,7 @@ from __future__ import annotations
 from app.api.routers import commercial_estimator as _api
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies, payer_identity_verified
 from app.insurance.network_participation import verified_in_network, verified_out_of_network
-from app.insurance.collection.benefit_gates import uhc_choice_plus_zero_candidate
-from app.insurance import evidence_resolution, group_contract_support, published_plan_benefits
+from app.insurance import evidence_resolution, group_contract_support, payer_fees, published_plan_benefits
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence, recheck_saved_payer_message
 from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import guard_unresolved_telehealth, guard_telehealth_guidance, restore_active_blue_cross_insurance, restore_saved_fep_standard_product, retain_conflicted_insurance, refresh_saved_cigna_office_benefits, refresh_saved_uhc_registration_benefits, refresh_saved_network_pricing, upgrade_saved_biopsy_preview, refresh_saved_cross_payer_planning, suppress_saved_ambiguous_combined_zero_oop
@@ -202,6 +201,9 @@ def _recheck_saved_clinic_pricing(result: dict, case: dict, practice_id: str) ->
     clinic_network = benefits.get('network_source') == 'clinic_library_contract'
     if not clinic_network and not clinic_lines:
         return
+    if (payer_fees.schedule_for_result(result) and case.get('previsit_raw_object_key')
+            and case.get('previsit_raw_sha256')):
+        return  # The saved-read path replaces this quote with current database fees.
     reason = None
     payer_id = context.get('payer_id')
     connections = [row for row in _api.commercial_store.list_connections(practice_id)
@@ -254,11 +256,9 @@ def _recheck_saved_clinic_pricing(result: dict, case: dict, practice_id: str) ->
     if not reason:
         return
     result.setdefault('issues', []).append(reason + ' Rerun the insured estimate with the current clinic configuration.')
-    # A changed CPT rate cannot change a zero check-in deferral supported by
-    # current contract participation and this member's family benefit cap.
-    rate_only_zero = (reason == 'The active clinic rate for a selected CPT changed since this saved estimate was calculated.'
-                      and uhc_choice_plus_zero_candidate(result))
-    if clinic_network and not rate_only_zero:
+    # A changed CPT rate does not revoke a still-matched clinic contract.
+    rate_only_change = reason == 'The active clinic rate for a selected CPT changed since this saved estimate was calculated.'
+    if clinic_network and not rate_only_change:
         benefits.update(network_status='unknown', network_source=None)
         result['network_evidence'] = {'reason': reason}
     price.update(complete=False, patient_min_cents=None, patient_max_cents=None,
@@ -267,6 +267,7 @@ def _recheck_saved_clinic_pricing(result: dict, case: dict, practice_id: str) ->
                  collection={'action': 'rerun', 'amount_cents': None, 'reason': reason})
     for line in clinic_lines:
         line.update(allowed_cents=None, unit_allowed_cents=None, calculation=None)
+        line['rate_resolution'] = {'status': 'RATE_UNAVAILABLE', 'source_checked': 'saved_clinic_rate_changed'}
     result.pop('arrival_collection', None)
     result.pop('planning_estimate', None)
 

@@ -294,6 +294,25 @@ def test_named_specialist_exceptions_do_not_override_neurology_office_copay():
     assert collection_guidance.build(wrong_network)['amount_cents'] is None
 
 
+def test_identical_specialist_and_generic_office_oop_rows_share_one_balance():
+    office = {'service': {'system': 'STC', 'value': '98'},
+              'network': {'indicator': 'IN_NETWORK'}, 'coverageLevel': 'INDIVIDUAL',
+              'timePeriod': 'REMAINING', 'amount': '3370.64'}
+    payer = {'payerId': 'synthetic', 'subscriber': {'memberId': 'synthetic'},
+             'plans': [{'benefits': {'statuses': [{
+                 'service': {'system': 'STC', 'value': '30'}, 'status': 'ACTIVE_COVERAGE'}],
+                 'outOfPocket': [office, {**office, 'messages': ['PHY VISIT - SPECIALIST']}]}}]}
+    terms = commercial.normalize_stedi_271(payer, '98', True, office_visit=True,
+        procedure_code='99213', place_of_service='10', provider_specialties=['Neurology'])
+    assert terms['oop_remaining_cents'] == 337064
+    assert not terms['oop_remaining_conflict_ids']
+    payer['plans'][0]['benefits']['outOfPocket'][1]['amount'] = '3300'
+    conflicting = commercial.normalize_stedi_271(payer, '98', True, office_visit=True,
+        procedure_code='99213', place_of_service='10', provider_specialties=['Neurology'])
+    assert conflicting['oop_remaining_cents'] is None
+    assert len(conflicting['oop_remaining_conflict_ids']) == 2
+
+
 def test_dependent_with_one_letter_surname_error_and_stale_subscriber_still_binds():
     recorded = {**policy(), 'subscriber_first': 'Alex', 'subscriber_last': 'Morgan', 'relationship': '18',
                 'group_number': 'GROUP-A'}

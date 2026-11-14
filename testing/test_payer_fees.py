@@ -69,6 +69,64 @@ def test_missing_or_mixed_product_never_chooses_a_schedule():
     assert payer_fees.category('multiplan', ['MultiPlan PPO']) is None
 
 
+def test_member_bound_uhc_choice_plus_network_can_select_commercial_fee_category():
+    plan = {'names': [], 'network_names': ['UNITEDHEALTHCARE CHOICE PLUS'],
+            'group_number': 'SYNTHETIC-GROUP', 'group_name': 'Synthetic employer benefit plan'}
+    assert payer_fees.fee_schedule_products('United Healthcare', plan) == ['UnitedHealthcare Choice Plus']
+    assert payer_fees.fee_schedule_products('United Healthcare',
+        {**plan, 'group_name': 'Synthetic Medicare plan'}) == []
+    assert payer_fees.fee_schedule_products('United Healthcare',
+        {**plan, 'network_names': ['UNITEDHEALTHCARE CHOICE PLUS', 'Other network']}) == []
+    assert payer_fees.fee_schedule_products('Humana', plan) == []
+
+
+def test_uhc_network_only_product_prices_selected_televisit_from_database():
+    line = {'id': 'office', 'code': '99213', 'units': 1, 'modifiers': []}
+    benefits = {'plan_details': {'names': [], 'network_names': ['UNITEDHEALTHCARE CHOICE PLUS'],
+        'group_number': 'SYNTHETIC-GROUP', 'group_name': 'Synthetic employer benefit plan'},
+        'identity': {'binding': 'synthetic-person'}, 'network_status': 'in_network'}
+    inputs = {'service_date': '2026-11-14', 'place_of_service': '10',
+              'rendering_provider': {'npi': '1234567890'}}
+    rate = {'id': 'db:99213', 'line_id': 'office', 'code': '99213', 'modifier': '',
+            'allowed_cents': 8178, 'basis': 'payer_fee_schedule'}
+    with patch.object(payer_fees, 'active_schedule', return_value=True), \
+         patch.object(payer_fees, 'matching_rates', return_value=[rate]) as lookup, \
+         patch('app.api.routers.commercial_flow.commercial_previsit_pricing._api._previsit_practice_path',
+               side_effect=AssertionError('No clinic profile should be read')):
+        priced, issues = _previsit_range('synthetic-practice', inputs,
+            {'rendering_provider': {'npi': '1234567890'}, 'payer_plan_bound': True},
+            'synthetic-route', [line], benefits, payer_name='United Healthcare')
+    assert lookup.called
+    assert priced['lines'][0]['allowed_cents'] == 8178
+    assert not issues
+
+
+def test_current_database_fee_and_fixed_uhc_office_copay_set_checkin_amount():
+    identity = {'status': 'matched', 'match_version': 2, 'binding': 'synthetic-person'}
+    benefits = {'active': True, 'service_date_matches': True, 'identity': identity,
+        'network_status': 'in_network', 'network_source': 'clinic_library_contract',
+        'copay_cents': 5000, 'copay_period': 'VISIT', 'deductible_applies': False,
+        'coinsurance_percent': '0', 'oop_remaining_cents': 337064}
+    line = {'id': 'suggested:99213', 'code': '99213', 'units': 1, 'modifiers': [],
+            'allowed_cents': 8178, 'allowed_basis': 'payer_fee_schedule',
+            'rate_resolution': {'status': 'RESOLVED'}, 'benefits': benefits,
+            'calculation': {'patient_cents': 5000, 'plan_cents': 3178}}
+    result = {'payer': 'United Healthcare', 'benefits': benefits, 'identity': identity,
+        'service_selection_status': 'preview',
+        'service_plan': {'recommended_ids': ['suggested:99213']},
+        'codes': [{'id': 'suggested:99213', 'code': '99213', 'units': 1}],
+        'price_range': {'mode': 'services', 'complete': True, 'conditional': False,
+            'patient_min_cents': 5000, 'patient_max_cents': 5000, 'lines': [line]}}
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 5000
+    assert guidance['basis'] == 'office_copay'
+    line['rate_resolution']['status'] = 'RATE_UNAVAILABLE'
+    assert collection_guidance.build(result)['amount_cents'] is None
+    line['rate_resolution']['status'] = 'RESOLVED'
+    benefits['network_source'] = None
+    assert collection_guidance.build(result)['amount_cents'] is None
+
+
 def test_lookup_uses_database_amount_and_leaves_missing_code_unpriced():
     db = FakeDatabase([{'code': '99203', 'allowed_cents': 10117,
                         'source_reference': 'BCBSTX synthetic fee row',

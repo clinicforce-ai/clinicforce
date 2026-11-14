@@ -302,7 +302,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         guidance['unconfirmed_zero_oop'] = True
     if amount is not None and amount > 0 and calculated_in_network_advance:
         guidance['collection_rule'] = {'mode': 'calculated_in_network_advance',
-                                       'reference': 'Selected CPTs, active clinic contract rates and member benefits'}
+                                       'reference': 'Selected CPTs, active clinic rates and member benefits'}
     if amount is not None and amount > 0 and uhc_registration_copay:
         guidance['collection_rule'] = {'mode': 'uhc_choice_plus_registration_copay', 'reference': 'Current member-bound Choice Plus specialist office benefit and clinic network agreement'}
     elif amount is not None and amount > 0 and policy_approved and guidance['basis'] not in {'ecw_billing_note', 'cigna_refundable_office_copay'}:

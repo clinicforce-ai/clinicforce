@@ -158,12 +158,14 @@ def refresh_saved_cigna_office_benefits(result: dict, case: dict, practice_id: s
 
 
 def refresh_saved_uhc_registration_benefits(result: dict, case: dict) -> None:
-    """Rebind a saved Choice Plus response after the eCW name rule changes."""
+    """Reproject a saved Choice Plus response after identity or OOP row fixes."""
     context = case.get('previsit_context') or {}
     inputs = context.get('inputs') or {}
     old = result.get('benefits') or {}
+    identity_review = (result.get('identity') or {}).get('status') == 'review'
+    oop_conflict = bool(old.get('oop_remaining_conflict_ids'))
     if (str(result.get('payer') or '').casefold().replace(' ', '') != 'unitedhealthcare'
-            or (result.get('identity') or {}).get('status') != 'review'
+            or not (identity_review or oop_conflict)
             or old.get('active') is not True or old.get('has_secondary')
             or old.get('coverage_status_conflict') or old.get('source_errors')
             or case.get('previsit', {}).get('request_state') != 'complete'
@@ -178,7 +180,8 @@ def refresh_saved_uhc_registration_benefits(result: dict, case: dict) -> None:
         source = context.get('source') or {}
         fresh = _api._case_benefits(payload, inputs, source, case)
         matched = fresh.get('identity') or {}
-        if (matched.get('reconciliation_rule') != 'payer_registration_variant'
+        if (identity_review and matched.get('reconciliation_rule') != 'payer_registration_variant'
+                or oop_conflict and fresh.get('oop_remaining_conflict_ids')
                 or not patient_plan_applies(fresh, matched, str(inputs.get('service_date') or ''))
                 or fresh.get('source_errors')):
             return
@@ -261,7 +264,7 @@ def _reprice_saved_new_network(result: dict, case: dict, practice_id: str, payer
                  'payer_plan_bound': patient_plan_applies(benefits, identity, str(inputs.get('service_date') or '')),
                  'payer_plan_names': [plan['identified_product']] if plan.get('identified_product') else plan.get('names') or [],
                  'payer_network_names': plan.get('network_names') or []}
-        price, _ = _api._previsit_range(practice_id, inputs, exact,
+        price, issues = _api._previsit_range(practice_id, inputs, exact,
                                        str((payer or {}).get('id') or context.get('payer_id') or ''),
                                        result.get('codes') or [], benefits, payload=payload,
                                        review=case.get('visit_review'),
@@ -273,6 +276,11 @@ def _reprice_saved_new_network(result: dict, case: dict, practice_id: str, payer
         # clinic pricing configuration is temporarily unavailable.
         return
     result['price_range'] = price
+    if is_schedule_payer and price.get('complete') and not issues:
+        result['issues'] = [issue for issue in result.get('issues') or []
+                            if not (str(issue).startswith('Clinic pricing:') or
+                                    'clinic contract or CPT rate changed' in str(issue).lower() or
+                                    'single enabled clinic connection' in str(issue).lower())]
 
 
 def refresh_saved_network_pricing(result: dict, case: dict, practice_id: str,

@@ -47,6 +47,22 @@ def schedule_for(payer_name: str, plan_names: list[str] | None) -> tuple[str, st
     return (key, plan_category) if plan_category else None
 
 
+def fee_schedule_products(payer_name: str, plan: dict | None) -> list[str]:
+    """Use a member's exact UHC Choice Plus network when UMR omits a plan name."""
+    plan = plan or {}
+    names = plan.get('names') or []
+    if names:
+        return names
+    networks = plan.get('network_names') or []
+    group_name = str(plan.get('group_name') or '')
+    if (payer_key(payer_name) == 'uhc' and len(networks) == 1
+            and re.sub(r'[^a-z0-9]', '', str(networks[0]).casefold()) == 'unitedhealthcarechoiceplus'
+            and plan.get('group_number') and re.search(r'\b(?:employee|employer)\b', group_name, re.I)
+            and not re.search(r'\b(?:medicare|medicaid|chip)\b', group_name, re.I)):
+        return ['UnitedHealthcare Choice Plus']
+    return []
+
+
 def active_schedule(payer: str, plan_category: str, service_date: str) -> bool:
     try:
         day = date.fromisoformat(service_date)
@@ -69,9 +85,9 @@ def schedule_for_service(payer_name: str, plan_names: list[str] | None,
 
 def schedule_for_result(result: dict) -> tuple[str, str] | None:
     plan = (result.get('plan_details') or {}).get('stedi') or {}
-    names = [plan['identified_product']] if plan.get('identified_product') else plan.get('names') or []
+    names = [plan['identified_product']] if plan.get('identified_product') else fee_schedule_products(str(result.get('payer') or ''), plan)
     if not names:
-        names = ((result.get('benefits') or {}).get('plan_details') or {}).get('names') or []
+        names = fee_schedule_products(str(result.get('payer') or ''), (result.get('benefits') or {}).get('plan_details'))
     return schedule_for_service(str(result.get('payer') or ''), names,
                                 str(result.get('service_date') or ''))
 
