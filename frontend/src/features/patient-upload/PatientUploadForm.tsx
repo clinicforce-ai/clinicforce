@@ -69,7 +69,7 @@ export default function PatientUploadForm({
         <h2>Patient receiving care</h2>
         <p className="staff-small staff-muted">
           {patientSpecific
-            ? 'Details from the clinic record appear here. The card fills any missing details.'
+            ? 'Your clinic record fills your name and birth date. The card fills a missing member ID.'
             : 'We fill available details from your signed-in account and card. Correct them if the card shows a different policyholder.'}
         </p>
         {cardMessage && (
@@ -87,6 +87,7 @@ export default function PatientUploadForm({
               autoComplete="given-name"
               maxLength={100}
               required
+              readOnly={patientSpecific}
               disabled={busy}
             />
           </label>
@@ -99,6 +100,7 @@ export default function PatientUploadForm({
               autoComplete="family-name"
               maxLength={100}
               required
+              readOnly={patientSpecific}
               disabled={busy}
             />
           </label>
@@ -113,6 +115,7 @@ export default function PatientUploadForm({
               min="1900-01-01"
               max={new Date().toLocaleDateString('en-CA')}
               required
+              readOnly={patientSpecific}
               disabled={busy}
             />
           </label>

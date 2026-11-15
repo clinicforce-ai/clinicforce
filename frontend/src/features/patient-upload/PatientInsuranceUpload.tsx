@@ -194,7 +194,9 @@ export default function PatientInsuranceUpload({
       setCardFields(result.fields)
       setCardMessage(
         Object.keys(result.fields).length
-          ? 'Available details were filled automatically. You can correct them before sending.'
+          ? patientSpecific
+            ? 'Available details were filled automatically. You can correct the member ID before sending.'
+            : 'Available details were filled automatically. You can correct them before sending.'
           : 'Some details could not be read. Enter the missing fields below.',
       )
     } catch (caught) {
