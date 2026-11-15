@@ -1,11 +1,12 @@
 """Account-free, write-only insurance submissions and authenticated clinic link management."""
 
 import asyncio
+import logging
 from datetime import date
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, File, Form, HTTPException, Path as ApiPath, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Path as ApiPath, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -74,6 +75,14 @@ async def prepared_cards(files: list[UploadFile]) -> list[tuple[str, bytes, str]
 def card_fields(prepared: list[tuple[str, bytes, str]]) -> dict:
     fields, _, _ = v1_sources.read_card_fields([content for _, content, _ in prepared])
     return {key: fields[key] for key in ("member_name", "birth_date", "member_id") if fields.get(key)}
+
+
+def read_submitted_card(link_id: str, practice_id: str, prepared: list[tuple[str, bytes, str]]) -> None:
+    try:
+        extracted, evidence, counts = v1_sources.read_card_fields([content for _, content, _ in prepared])
+        links.save_submitted_card_ocr(link_id, practice_id, extracted, evidence, counts)
+    except Exception:
+        logging.getLogger(__name__).warning("Automatic OCR unavailable for a saved patient card upload")
 
 
 def public_link(row: dict) -> dict:
@@ -170,7 +179,7 @@ async def read_patient_card(clinic_code: LegacyClinicCode, upload_code: UploadCo
 
 
 @router.post("/api/insurance-upload/{clinic_code}/{upload_code}")
-async def submit(clinic_code: LegacyClinicCode, upload_code: UploadCode, request: Request,
+async def submit(clinic_code: LegacyClinicCode, upload_code: UploadCode, request: Request, background_tasks: BackgroundTasks,
                  files: list[UploadFile] = File(...), given_name: str = Form(default="", max_length=100),
                  family_name: str = Form(default="", max_length=100), birth_date: date | None = Form(default=None),
                  consent: bool = Form(...), member_id: str = Form(default="", max_length=80),
@@ -178,7 +187,7 @@ async def submit(clinic_code: LegacyClinicCode, upload_code: UploadCode, request
                  email: str = Form(default="", max_length=254), link_account: bool = Form(default=False)):
     """Save PDF/images and receipt; a patient-specific link uses its requested clinic record.
 
-    No card OCR or staff confirmation is required for that link. Generic links
+    Automatic OCR runs after receipt without staff confirmation. Generic links
     require a patient name and birth date for a new unverified intake. Receipt
     does not establish coverage or card authenticity.
     """
@@ -208,6 +217,8 @@ async def submit(clinic_code: LegacyClinicCode, upload_code: UploadCode, request
         raise
     except Exception:
         raise HTTPException(503, "The card could not be saved. Please try again with the same files.", headers=HEADERS) from None
+    if is_new and row["expected_patient_id"]:
+        background_tasks.add_task(read_submitted_card, row["id"], row["practice_id"], prepared)
     return JSONResponse(result, status_code=201 if is_new else 200, headers=HEADERS)
 
 

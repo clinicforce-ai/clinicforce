@@ -91,9 +91,8 @@ class PatientUploadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(link["url"], f"http://test/{self.clinic['npi']}/{link['upload_code']}")
         self.assertEqual(set((await self.public.get(self.route(link))).json()), {"clinic_name", "expires_at", "status", "patient_specific"})
         content = card_pdf()
-        with patch.object(patient_uploads.v1_sources, "read_pages", side_effect=AssertionError("Public upload must not call OCR")):
-            response = await self.public.post(self.route(link), data={"consent": "true"},
-                                              files=[("files", ("original-card.pdf", content, "application/pdf"))])
+        response = await self.public.post(self.route(link), data={"consent": "true"},
+                                          files=[("files", ("original-card.pdf", content, "application/pdf"))])
         self.assertEqual(response.status_code, 201, response.text)
         self.assertEqual(set(response.json()), {"receipt_id", "status", "received_at", "clinic_name"})
         self.assertEqual(response.headers["cache-control"], "no-store")
@@ -104,6 +103,8 @@ class PatientUploadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(intake["expected_patient_id"], "expected-patient")
         self.assertEqual(intake["source"], "patient_upload"); self.assertEqual(intake["status"], "ready")
         self.assertEqual(intake["field_sources"]["given_name"], "clinic_record")
+        self.assertEqual(intake["ocr_fields"]["member_id"], "CARD123")
+        self.assertEqual(intake["field_sources"]["member_id"], "card_ocr")
         self.assertEqual(intake["events"][0]["actor"], "Patient upload"); self.assertIsNone(intake["events"][0]["actor_id"])
         self.assertEqual(self.objects[intake["documents"][0]["object_key"]], content)
         dashboard = (await self.client.get("/api/staff/patients/dashboard")).json()
@@ -118,6 +119,22 @@ class PatientUploadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.get(f"/api/staff/intakes/{row['intake_id']}")).status_code, 404)
         self.assertEqual((await self.client.get("/api/staff/upload-links")).json()["upload_links"], [])
         self.assertEqual((await self.client.post(f"/api/staff/upload-links/{link['id']}/revoke")).status_code, 404)
+
+    async def test_ocr_failure_does_not_block_requested_card_receipt(self):
+        with staff_store._connection() as connection:
+            connection.execute("INSERT INTO staff_patients(id,practice_id,given_name,family_name,birth_date,created_at) VALUES ('ocr-target',%s,'Clinic','Patient','1980-01-01',%s)",
+                               (self.actor['practice_id'], staff_store.now()))
+        link = await self.new_link('ocr-target')
+        with patch.object(patient_uploads.v1_sources, 'read_card_fields', side_effect=RuntimeError('synthetic OCR unavailable')):
+            response = await self.upload(link)
+        self.assertEqual(response.status_code, 201, response.text)
+        intake_id = links.owned_request(link['id'], self.actor['practice_id'])['intake_id']
+        intake = staff_store.get_intake(intake_id, self.actor['practice_id'])
+        self.assertEqual((intake['patient_id'], intake['status']), ('ocr-target', 'ready'))
+        self.assertEqual(intake['ocr_fields'], {})
+        target = next(item for item in staff_store.patient_dashboard(self.actor['practice_id'])['patients']
+                      if item['clinic_patient_id'] == 'ocr-target')
+        self.assertEqual(target['card_status'], 'received')
 
     async def test_patient_specific_card_is_attached_only_to_target_patient(self):
         with staff_store._connection() as connection:

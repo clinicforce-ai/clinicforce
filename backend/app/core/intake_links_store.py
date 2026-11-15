@@ -223,6 +223,32 @@ def submit(clinic_code: str, code: str, fields: dict, prepared: list[tuple[str, 
         raise
 
 
+def save_submitted_card_ocr(link_id: str, practice_id: str, extracted: dict, evidence: dict, counts: list[int]) -> None:
+    with _connection() as connection:
+        row = connection.execute("""SELECT i.* FROM staff_intakes AS i
+            JOIN insurance_upload_links AS l ON l.intake_id=i.id AND l.practice_id=i.practice_id
+            WHERE l.id=%s AND l.practice_id=%s AND l.status='received' AND i.source='patient_upload'
+              AND i.patient_id=l.expected_patient_id FOR UPDATE OF i""", (link_id, practice_id)).fetchone()
+        if not row:
+            return
+        source_pages, offset = {}, 0
+        for document, count in zip(row["documents"], counts):
+            source_pages.update({page + offset: {"document_id": document["id"], "source_filename": document["filename"],
+                "source_page": page} for page in range(1, count + 1)})
+            offset += count
+        for item in evidence.values():
+            item.update(source_pages.get(item.get("page"), {}))
+        fields, sources = dict(row["fields"]), dict(row["field_sources"])
+        for key, value in extracted.items():
+            if key not in {"given_name", "family_name", "birth_date"} and value and not fields.get(key):
+                fields[key], sources[key] = value, "card_ocr"
+        connection.execute("""UPDATE staff_intakes SET fields=%s::jsonb,field_sources=%s::jsonb,
+            ocr_fields=%s::jsonb,ocr_evidence=%s::jsonb,events=events || %s::jsonb,updated_at=%s
+            WHERE id=%s AND practice_id=%s""", (json.dumps(fields), json.dumps(sources), json.dumps(extracted),
+            json.dumps(evidence), json.dumps([staff_store._event("Automatic card OCR completed", "ClinicForce")]),
+            staff_store.now(), row["id"], practice_id))
+
+
 def save_card_reading(intake_id: str, actor: dict, extracted: dict, evidence: dict, expected_updated_at: str) -> dict:
     with _connection() as connection:
         row = connection.execute("SELECT * FROM staff_intakes WHERE id=%s AND practice_id=%s FOR UPDATE", (intake_id, actor["practice_id"])).fetchone()
