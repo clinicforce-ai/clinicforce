@@ -21,6 +21,7 @@ import ClinicalPatientDetail from './ClinicalPatientDetail'
 import ClinicalPatientSections from './ClinicalPatientSections'
 import { ecwVisitDays, localVisitDay } from './ecwVisitDates'
 import { name } from './clinical-patient-labels'
+import { useClinicalCardRefresh } from './useClinicalCardRefresh'
 import {
   filterClinicalPatients,
   formatVisitDay,
@@ -110,37 +111,7 @@ export default function ClinicalPatientDashboard({
       active = false
     }
   }, [initialPatientId])
-  useEffect(() => {
-    if (!dashboard) return
-    let active = true
-    const timer = window.setInterval(() => {
-      if (document.visibilityState !== 'visible') return
-      void getClinicalPatients()
-        .then((updated) => {
-          if (!active) return
-          const previous = new Map(dashboard.patients.map((patient) => [patient.id, patient]))
-          if (
-            !updated.patients.some(
-              (patient) =>
-                previous.get(patient.id)?.card_status !== patient.card_status ||
-                previous.get(patient.id)?.latest_intake_id !== patient.latest_intake_id,
-            )
-          )
-            return
-          setDashboard(updated)
-          setSelected((current) =>
-            current
-              ? updated.patients.find((patient) => patient.id === current.id) || current
-              : null,
-          )
-        })
-        .catch(() => {})
-    }, 15_000)
-    return () => {
-      active = false
-      window.clearInterval(timer)
-    }
-  }, [dashboard])
+  useClinicalCardRefresh(dashboard, setDashboard, setSelected)
   useEffect(() => {
     if (!dashboard) return
     let active = true
