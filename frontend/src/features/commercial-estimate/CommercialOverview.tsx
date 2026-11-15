@@ -18,7 +18,10 @@ import CommercialCostBreakdown from './CommercialCostBreakdown'
 import CommercialCashQuoteForm from './CommercialCashQuoteForm'
 import { AvailityArrivalAmount, AvailityVisitTable } from './AvailityVisitPlanning'
 import { availityVisitPlanning } from './availityVisitPlanning'
-import { pendingHumanaSpecialistCopay } from './commercialCostState'
+import {
+  pendingHumanaSpecialistCopay,
+  supportedHumanaSpecialistAdvance,
+} from './commercialCostState'
 export default function CommercialOverview({
   model,
   result,
@@ -70,6 +73,7 @@ export default function CommercialOverview({
   const pendingAetnaCopay = copay.aetnaPendingOfficeCopay(result, model)
   const pendingBluecardCopay = pendingBluecardOfficeCopay(result, model)
   const humanaCopay = pendingHumanaSpecialistCopay(result, model)
+  const humanaAdvance = supportedHumanaSpecialistAdvance(result, model)
   const cardPlanningCents =
     payerReportedPartialCents == null ? copay.cardOfficePlanningCopay(result, model) : null
   const combinedPlan = !cash && !previousEstimate ? result.combined_emg_plan : null
@@ -132,7 +136,7 @@ export default function CommercialOverview({
       <div className="overview-heading">
         <h2 id={featured ? 'latest-payment-heading' : 'payment-heading'}>
           {readOnly
-            ? humanaCopay != null
+            ? humanaCopay != null || humanaAdvance
               ? 'Saved visit collection decision'
               : 'Saved visit estimate'
             : automaticCashFallback

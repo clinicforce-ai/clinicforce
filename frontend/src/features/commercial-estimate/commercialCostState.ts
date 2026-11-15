@@ -36,6 +36,22 @@ export function supportedOfficeCopayShare(
     : null
 }
 
+export function supportedHumanaSpecialistAdvance(
+  result: PrevisitEstimate,
+  model: CommercialEstimateModel,
+) {
+  const guidance = result.collection_guidance
+  return (
+    !model.cash &&
+    !model.previousEstimate &&
+    model.supportedAmount &&
+    guidance?.basis === 'humana_specialist_copay_advance' &&
+    guidance.amount_cents != null &&
+    result.billing_protection?.status !== 'qmb' &&
+    result.benefits?.qmb_status !== 'protected'
+  )
+}
+
 export function pendingHumanaSpecialistCopay(
   result: PrevisitEstimate,
   model: CommercialEstimateModel,
@@ -88,11 +104,16 @@ export function pendingHumanaPatientShare(
   model: CommercialEstimateModel,
 ): string | null {
   const copay = pendingHumanaSpecialistCopay(result, model)
+  const advanceCopay = supportedHumanaSpecialistAdvance(result, model)
+    ? result.collection_guidance!.payer_reported_office_copay_cents
+    : null
   return (
     model.estimatedShare ||
-    (copay == null
-      ? null
-      : `${money(copay)} payer-reported specialist office copay; full patient share unresolved`)
+    (advanceCopay != null
+      ? `${money(advanceCopay)} payer-reported specialist office copay; final share follows the claim`
+      : copay == null
+        ? null
+        : `${money(copay)} payer-reported specialist office copay; full patient share unresolved`)
   )
 }
 
@@ -126,7 +147,10 @@ export function applyCostRowCopy(
   result: PrevisitEstimate,
   model: CommercialEstimateModel,
 ) {
-  if (pendingHumanaSpecialistCopay(result, model) != null) {
+  if (
+    pendingHumanaSpecialistCopay(result, model) != null ||
+    supportedHumanaSpecialistAdvance(result, model)
+  ) {
     const copayRow = rows.find((row) => row.label === 'Copay')
     if (copayRow)
       copayRow.detail = 'Stedi reports this specialist office copay for the selected visit date.'

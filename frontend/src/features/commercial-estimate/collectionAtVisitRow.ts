@@ -7,7 +7,10 @@ import type { bluecardOfficeDeductibleScenario } from './bluecardOfficeDeductibl
 
 export { pendingBluecardOfficeCopay, pendingCignaOfficeCopay } from './pendingOfficeCopays'
 import { pendingCignaOfficeCopay } from './pendingOfficeCopays'
-import { pendingHumanaSpecialistCopay } from './commercialCostState'
+import {
+  pendingHumanaSpecialistCopay,
+  supportedHumanaSpecialistAdvance,
+} from './commercialCostState'
 
 function pricedOfficeCopayDetail(result: PrevisitEstimate): string | null {
   const price = result.price_range
@@ -434,6 +437,12 @@ export function collectionAtVisitRow(
     row.label = 'Amount approved to collect at visit'
     row.value = money(0)
     row.detail = `Stedi reports a ${money(pendingHumanaCopay)} specialist office copay and the clinic has a current CPT fee. No positive advance is approved from this record. Medicare billing protection and the full patient share remain unresolved; final responsibility follows the processed claim.`
+  }
+  if (supportedHumanaSpecialistAdvance(result, model)) {
+    row.label = 'Amount approved to collect at visit'
+    row.value = money(result.collection_guidance!.amount_cents!)
+    row.detail =
+      'Refundable advance from the matched Humana specialist office copay, less recorded payments. Final liability follows the processed claim and member billing protections.'
   }
   if (result.collection_guidance?.basis === 'cigna_refundable_office_copay') {
     row.label = 'Refundable Cigna copay advance at visit'

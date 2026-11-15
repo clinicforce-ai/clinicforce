@@ -8,7 +8,7 @@ import {
 } from './payerReportedPartialCopay'
 import { pendingBluecardOfficeCopay, pendingCignaOfficeCopay } from './collectionAtVisitRow'
 import { bluecardOfficeDeductibleScenario } from './bluecardOfficeDeductibleScenario'
-import { pendingHumanaSpecialistCopay } from './commercialCostState'
+import { humanaApprovedCollection } from './humanaApprovedCollection'
 
 function nextStep(model: CommercialEstimateModel, result: PrevisitEstimate) {
   const lines = result.price_range?.mode === 'services' ? result.price_range.lines || [] : []
@@ -100,19 +100,8 @@ export default function ArrivalAmountSummary({
   referenceOnly?: boolean
   visibleAmount: boolean
 }) {
-  const humanaCopay = pendingHumanaSpecialistCopay(result, model)
-  if (humanaCopay != null) {
-    return (
-      <>
-        <span>Amount approved to collect at visit</span>
-        <strong role="status">{money(0)}</strong>
-        <p>
-          Stedi reports a {money(humanaCopay)} specialist office copay. No positive advance is
-          approved from this record. Final responsibility follows the processed claim.
-        </p>
-      </>
-    )
-  }
+  const humanaDecision = humanaApprovedCollection(result, model)
+  if (humanaDecision) return humanaDecision
   if (
     !model.cash &&
     !model.previousEstimate &&
