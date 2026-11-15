@@ -14,6 +14,33 @@ from app.api.routers.commercial_flow.commercial_previsit_status import _enrollme
 from app.insurance import insurance_product, stedi_payers
 
 
+def test_cms_271_networkless_part_b_terms_reach_saved_benefits():
+    from app.api.routers import commercial_estimator as api
+
+    payload = {'payerId': 'CMS', 'subscriber': {'memberId': 'SYNTHETIC-MBI',
+        'dateOfBirth': '1950-01-01', 'name': {'person': {'firstName': 'Pat', 'lastName': 'Example'}}},
+        'plans': [{'name': 'Original Medicare Part B', 'benefits': {
+            'statuses': [{'status': 'ACTIVE_COVERAGE', 'service': {'system': 'STC', 'value': '98'}}],
+            'deductible': [{'amount': '150', 'coverageLevel': 'INDIVIDUAL',
+                'timePeriod': 'REMAINING', 'service': {'system': 'STC', 'value': '30'}}],
+            'coInsurance': [{'percent': '0.2', 'coverageLevel': 'INDIVIDUAL',
+                'service': {'system': 'STC', 'value': '98'}}]}}]}
+    coverage = {'active_coverages': 1, 'relationship': '18', 'member_id': 'SYNTHETIC-MBI',
+        'subscriber_first': 'Pat', 'subscriber_last': 'Example', 'subscriber_birth_date': '1950-01-01',
+        'patient_first': 'Pat', 'patient_last': 'Example', 'patient_birth_date': '1950-01-01'}
+    benefits = api._previsit_benefits(payload, coverage, '2026-11-16', ['98', '30'])
+    assert benefits['active'] is True
+    assert benefits['identity']['status'] == 'matched'
+    assert benefits['plan_details']['names'] == ['Original Medicare Part B']
+    assert benefits['deductible_remaining_cents'] == 15000
+    assert benefits['coinsurance_percent'] == '20.0'
+    assert benefits['network_status'] == 'unknown'
+    commercial = api._previsit_benefits({**payload, 'payerId': 'EXAMPLE'}, coverage,
+                                         '2026-11-16', ['98', '30'])
+    assert commercial['deductible_remaining_cents'] is None
+    assert commercial['coinsurance_percent'] is None
+
+
 def _run(payer: dict, *, source: dict | None = None, enrollment: str = 'MISSING') -> tuple[dict, SimpleNamespace]:
     result = {'issues': [], 'payer': payer.get('displayName')}
     case = {'id': 'synthetic-case'}
@@ -46,7 +73,8 @@ def _run(payer: dict, *, source: dict | None = None, enrollment: str = 'MISSING'
     asyncio.run(submit_previsit_eligibility(api, payer=payer, provider=provider,
         api_key='synthetic-key', session={'practice_id': 'synthetic-practice',
             'intake': {'id': 'synthetic-intake'}}, case=case, result=result,
-        coverage={}, inputs={'service_date': '2026-10-14'}, source=source or {},
+        coverage={}, inputs={'service_date': '2026-10-14'},
+        source={'_request_ip_chain': '192.0.2.1', **(source or {})},
         background_tasks=None, requested_stc=['98'], body={}, basic_body={}))
     return result, api
 
@@ -69,6 +97,54 @@ def test_enrolled_original_medicare_enters_normal_eligibility_submission():
     _, api = _run(_payer('CMS'), enrollment='LIVE')
     api.stedi_payers.eligibility_enrollment.assert_awaited_once_with('CMS', '2222222222', 'synthetic-key')
     api._post_stedi_eligibility.assert_awaited_once()
+
+
+def test_current_stedi_cms_route_uses_billing_enrollment():
+    payer = {**_payer('JDNSN', 'ENROLLMENT_REQUIRED'), 'primaryPayerId': 'CMS'}
+    result, api = _run(payer, enrollment='LIVE')
+    api.stedi_payers.eligibility_enrollment.assert_awaited_once_with('JDNSN', '2222222222', 'synthetic-key')
+    api._post_stedi_eligibility.assert_awaited_once()
+    assert api._post_stedi_eligibility.await_args.args[1]['X-Forwarded-For'] == '192.0.2.1'
+    assert result['enrollment']['route'] == 'original_medicare_hets'
+    assert insurance_product.classify([], payer_id='JDNSN') == 'original_medicare'
+
+
+def test_cms_skips_paid_request_when_origin_trace_is_missing():
+    result, api = _run(_payer('JDNSN', 'ENROLLMENT_REQUIRED'),
+                       source={'_request_ip_chain': None}, enrollment='LIVE')
+    assert result['eligibility_failure']['kind'] == 'request_trace_unavailable'
+    api._post_stedi_eligibility.assert_not_awaited()
+
+
+def test_live_texas_part_b_enrollment_unblocks_cms_for_same_billing_npi():
+    requests = []
+    def handler(request):
+        requests.append(request)
+        assert set(request.url.params.get_list('payerIds')) == {'JDNSN', 'TPTWE'}
+        return httpx.Response(200, json={'items': [
+            {'status': 'LIVE', 'payer': {'stediPayerId': 'TPTWE'},
+             'provider': {'npi': '0000000000'},
+             'transactions': {'eligibilityCheck': {'enroll': True}}},
+            {'status': 'LIVE', 'payer': {'stediPayerId': 'TPTWE'},
+             'provider': {'npi': '2222222222'},
+             'transactions': {'eligibilityCheck': {'enroll': True}}}]})
+    enrollment = asyncio.run(stedi_payers.eligibility_enrollment('JDNSN', '2222222222',
+        'synthetic-key', transport=httpx.MockTransport(handler)))
+    assert enrollment == {'status': 'LIVE', 'reason_code': 'enrollment_live'}
+    assert len(requests) == 1
+
+
+def test_recorded_texas_part_b_id_routes_to_cms_but_advantage_does_not():
+    def handler(request):
+        return httpx.Response(200, json={'items': [{'payer': {'stediId': 'JDNSN',
+            'primaryPayerId': 'CMS', 'displayName': 'National Centers for Medicare & Medicaid Services',
+            'coverageTypes': ['medical'],
+            'transactionSupport': {'eligibilityCheck': 'ENROLLMENT_REQUIRED'}}}]})
+    route = asyncio.run(stedi_payers.search_payer('Medicare Texas Part B', ['04412'],
+        'synthetic-key', plan='MB', transport=httpx.MockTransport(handler)))
+    assert route['stediId'] == 'JDNSN'
+    assert stedi_payers.original_medicare_route({'stediId': 'TPTWE'})
+    assert insurance_product.classify([], payer_id='TPTWE') == 'original_medicare'
 
 
 @pytest.mark.parametrize('route,plan', [

@@ -8,6 +8,7 @@ import httpx
 
 
 SEARCH_URL = "https://payers.us.stedi.com/2024-04-01/payers/search"
+ORIGINAL_MEDICARE_STEDI_IDS = frozenset({'CMS', 'CMSMED', 'JDNSN', 'TPTWE'})
 _FILLER = {"and", "of", "the", "inc", "company", "insurance"}
 _STATE_ABBREVIATIONS = dict(zip(
     "alabama alaska arizona arkansas california colorado connecticut delaware florida georgia hawaii idaho illinois indiana iowa kansas kentucky louisiana maine maryland massachusetts michigan minnesota mississippi missouri montana nebraska nevada newhampshire newjersey newmexico newyork northcarolina northdakota ohio oklahoma oregon pennsylvania rhodeisland southcarolina southdakota tennessee texas utah vermont virginia washington westvirginia wisconsin wyoming districtofcolumbia".split(),
@@ -17,7 +18,8 @@ _STATE_ABBREVIATIONS = dict(zip(
 
 def original_medicare_route(payer: dict | None) -> bool:
     """HETS attestation follows the actual CMS eligibility route, not a plan label."""
-    return str((payer or {}).get('stediId') or '').upper() == 'CMS'
+    return (str((payer or {}).get('primaryPayerId') or '').upper() == 'CMS'
+            or str((payer or {}).get('stediId') or '').upper() in ORIGINAL_MEDICARE_STEDI_IDS)
 
 
 def original_medicare_record(name: str, plan: str) -> bool:
@@ -118,8 +120,8 @@ async def search_payer(name: str, identifiers: list[str], api_key: str,
     # MAC labels. Never route Medicare Advantage or a supplement to CMS.
     identifiers = [value for value in identifiers if isinstance(value, str)]
     if (original_medicare_record(name, plan or '')
-            and not any(value.strip().upper() not in {'CMS', 'CMSMED', 'MB'} for value in identifiers)):
-        name, identifiers = 'CMS', ['CMSMED']
+            and not any(value.strip().upper() not in {'CMS', 'CMSMED', 'MB', '04412', 'TPTWE'} for value in identifiers)):
+        name, identifiers = 'CMS', ['CMS']
     async with httpx.AsyncClient(timeout=httpx.Timeout(10, connect=5), transport=transport) as client:
         # Search exact eCW payer IDs first; a name search may omit their record.
         by_id = []
@@ -172,7 +174,11 @@ async def eligibility_enrollment(payer_id: str, npi: str, api_key: str, *, trans
     Pagination uses only the documented token on the fixed Stedi endpoint.
     """
     statuses = set()
-    params = {'payerIds': payer_id, 'providerNpis': npi, 'transactions': 'eligibilityCheck', 'pageSize': 100}
+    # Stedi's LIVE Texas Part B HETS enrollment covers CMS eligibility for the
+    # same billing NPI; the directory exposes CMS and the state MAC separately.
+    payer_ids = {payer_id, 'TPTWE'} if original_medicare_route({'stediId': payer_id}) else {payer_id}
+    params = {'payerIds': sorted(payer_ids), 'providerNpis': npi,
+              'transactions': 'eligibilityCheck', 'pageSize': 100}
     async with httpx.AsyncClient(timeout=httpx.Timeout(10, connect=5), transport=transport) as client:
         try:
             seen = set()
@@ -184,7 +190,7 @@ async def eligibility_enrollment(payer_id: str, npi: str, api_key: str, *, trans
                 if not isinstance(payload, dict) or not isinstance(payload.get('items'), list):
                     raise ValueError('Invalid enrollment response')
                 for row in payload['items']:
-                    if (row.get('payer', {}).get('stediPayerId') == payer_id
+                    if (row.get('payer', {}).get('stediPayerId') in payer_ids
                             and row.get('provider', {}).get('npi') == npi
                             and row.get('transactions', {}).get('eligibilityCheck', {}).get('enroll') is True):
                         statuses.add(row.get('status'))

@@ -63,6 +63,15 @@ export function networkRow(
   dsnpOffice: boolean,
   result: PrevisitEstimate,
 ): CostBreakdownRow {
+  const originalMedicare = ['CMS', 'JDNSN', 'TPTWE'].includes(result.stedi_payer?.id || '')
+  if (originalMedicare && result.benefits?.active === true) {
+    return {
+      label: 'Provider billing status',
+      value: 'Not established by eligibility',
+      detail:
+        'Original Medicare has no plan network tier. Confirm the provider billing and assignment rules separately.',
+    }
+  }
   const texasEpo =
     /(?:blue cross.*blue shield.*(?:tx|texas)|bcbs\s*(?:tx|texas))/i.test(result.payer || '') &&
     result.plan_details?.stedi?.names?.some((name) => /\bEPO\b/i.test(name))

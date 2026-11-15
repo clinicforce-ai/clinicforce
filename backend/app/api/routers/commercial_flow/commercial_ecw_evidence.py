@@ -180,14 +180,19 @@ def stedi_request_body(payer: dict, network: dict, coverage: dict, service_date:
         raise _api.commercial.CommercialError("eClinicalWorks returned an invalid birth date for Stedi eligibility.")
     subscriber_birth_date = iso_birth_date(coverage.get('subscriber_birth_date'))
     patient_birth_date = iso_birth_date(coverage['patient_birth_date'])
-    if network.get("rendering_first") and network.get("rendering_last") and network.get("rendering_npi"):
+    original_medicare = _api.stedi_payers.original_medicare_route({'stediId': payer.get('stedi_payer_id')})
+    if original_medicare:
+        if not network.get('billing_npi'):
+            raise _api.commercial.CommercialError('Original Medicare eligibility needs the enrolled billing provider NPI.')
+        provider = {'npi': network['billing_npi']}
+    elif network.get("rendering_first") and network.get("rendering_last") and network.get("rendering_npi"):
         provider = {"npi": network["rendering_npi"], "name": {"person": {
             "firstName": network["rendering_first"], "lastName": network["rendering_last"]}}}
     elif network.get("billing_npi") and network.get("organization_name"):
         provider = {"npi": network["billing_npi"], "name": {"organization": network["organization_name"]}}
     else:
         raise _api.commercial.CommercialError("eClinicalWorks did not return one matching provider name and NPI for the Stedi inquiry.")
-    body = {"payerId": payer["stedi_payer_id"], "provider": provider,
+    body = {"payerId": "CMS" if original_medicare else payer["stedi_payer_id"], "provider": provider,
             "subscriber": {"memberId": coverage.get("member_id"), "dateOfBirth": subscriber_birth_date,
                            "name": {"person": {"firstName": coverage["subscriber_first"], "lastName": coverage["subscriber_last"]}}},
             "encounter": {"dates": {"service": {"start": service_date}}, "services": [{"system": "STC", "value": code} for code in ([stc] if isinstance(stc, str) else stc)]}}
@@ -204,7 +209,7 @@ def stedi_request_body(payer: dict, network: dict, coverage: dict, service_date:
     # eCW's group/plan/address/gender can improve a few payer matches, but must
     # never make a valid core check fail validation.  The caller retries once
     # without these optional hints when Stedi rejects their request shape.
-    if include_identity_hints:
+    if include_identity_hints and not original_medicare:
         subscriber = body['subscriber']
         additional = {}
         if coverage.get('group_number'):

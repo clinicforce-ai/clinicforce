@@ -1,6 +1,8 @@
 """Collection gates when a visit has a named secondary payer."""
 
 from app.insurance.stedi_benefits.payer_order import verified_primary_order
+from app.insurance.stedi_payers import original_medicare_route
+from app.insurance.insurance_product import classify
 
 
 def state(result: dict) -> tuple[bool, bool, bool, bool]:
@@ -24,6 +26,36 @@ def action(medicare_secondary: bool) -> str:
                 'submit the primary claim, then the Medicare secondary claim; collect any patient '
                 'balance only after the remittance.')
     return 'More than one plan may pay for this visit. The collection amount depends on how those plans coordinate benefits.'
+
+
+def apply_original_medicare_deferral(result: dict, guidance: dict, source_errors: list,
+                                     member_bound: bool, adverse: bool) -> None:
+    """Defer collection for a verified Original Medicare office visit, preserving liability."""
+    benefits = result.get('benefits') or {}
+    price = result.get('price_range') or {}
+    lines = price.get('lines') or []
+    payer_id = (result.get('stedi_payer') or {}).get('id')
+    names = ((benefits.get('plan_details') or {}).get('names') or
+             ((result.get('plan_details') or {}).get('stedi') or {}).get('names'))
+    if (original_medicare_route({'stediId': payer_id})
+            and classify(names, payer_id=payer_id) == 'original_medicare'
+            and benefits.get('active') is True and benefits.get('service_date_matches') is not False
+            and member_bound and not source_errors and not adverse
+            and not benefits.get('coverage_status_conflict') and not benefits.get('coverage_dates_invalid')
+            and not benefits.get('historical_only') and not benefits.get('network_conflict')
+            and result.get('refresh_requires_selection') is not True
+            and not result.get('eligibility_failure')
+            and price.get('mode') in {'services', 'alternatives'} and lines
+            and all(line.get('code') in {'99202', '99203', '99204', '99205',
+                                         '99212', '99213', '99214', '99215'}
+                    and line.get('units') == 1 for line in lines)):
+        guidance.update(amount_cents=0, status='zero_advance', basis='claim_after_service',
+            reason='Clinic policy collects no advance for a verified Original Medicare office visit. Submit the claim and use the remittance to determine any later patient balance.',
+            patient_message='No payment is requested at arrival. Final responsibility follows the processed Medicare claim and member protections.')
+        guidance.pop('policy_setup_required', None)
+        guidance.pop('positive_advance_policy_missing', None)
+        guidance['collection_rule'] = {'mode': 'original_medicare_office_deferral',
+            'reference': 'Clinic Original Medicare collection policy'}
 
 
 def apply_part_b_deferral(result: dict, guidance: dict, source_errors: list,

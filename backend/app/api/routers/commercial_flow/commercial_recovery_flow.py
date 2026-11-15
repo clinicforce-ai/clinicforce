@@ -201,6 +201,17 @@ async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict
                 case.update(await _api.run_in_threadpool(_api._save, case, session, 'stedi-discovery-enrollment-required'))
                 _api._recovery_event(case, session, 'eligibility', 'unavailable', reason=enrollment['reason_code'])
                 return
+        cms_route = _api.stedi_payers.original_medicare_route(payer)
+        ip_chain = source.get('_request_ip_chain')
+        if cms_route and not ip_chain:
+            discovery.update(request_state='complete', outcome='review_needed', stage='eligibility',
+                reason_code='request_trace_unavailable',
+                selection_error='The originating network IP chain required for CMS HETS was not available.')
+            case.update(await _api.run_in_threadpool(_api._save, case, session, 'stedi-cms-trace-required'))
+            return
+        headers = {'Authorization': api_key, 'Content-Type': 'application/json'}
+        if cms_route:
+            headers['X-Forwarded-For'] = ip_chain
         inquiry_pos = None if _api.visit_estimate.telehealth_pos_unresolved(inputs) else inputs.get('place_of_service')
         requested_stc = _api._payer_previsit_service_types(payer['stediId'], inputs)
         body = _api.stedi_request_body({'stedi_payer_id': payer['stediId']}, provider, coverage, inputs['service_date'], requested_stc,
@@ -224,7 +235,7 @@ async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict
             _api._recovery_event(case, session, 'eligibility', 'requested')
             submitted = True
             response, verified, _ = await _api._post_stedi_eligibility(
-                client, {'Authorization': api_key, 'Content-Type': 'application/json'}, body, basic_body)
+                client, headers, body, basic_body)
         if not isinstance(verified, dict):
             raise ValueError('Invalid eligibility response')
         saved_bytes = _api.json.dumps(verified).encode()

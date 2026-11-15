@@ -146,11 +146,11 @@ def test_original_medicare_routes_to_verified_cms_directory_entry_only():
     queries = []
     def handler(request):
         queries.append(request.url.params['query'])
-        return httpx.Response(200, json={'items': [{'payer': {'stediId': 'cms-example', 'primaryPayerId': 'CMSMED',
+        return httpx.Response(200, json={'items': [{'payer': {'stediId': 'JDNSN', 'primaryPayerId': 'CMS',
             'displayName': 'CMS', 'coverageTypes': ['medical'], 'transactionSupport': {'eligibilityCheck': 'SUPPORTED'}}}]})
     transport = httpx.MockTransport(handler)
     result = asyncio.run(stedi_payers.search_payer('Medicare of Texas', [], 'test', plan='MB', transport=transport))
-    assert result['stediId'] == 'cms-example' and queries == ['CMSMED']
+    assert result['stediId'] == 'JDNSN' and queries == ['CMS']
     assert asyncio.run(stedi_payers.search_payer('Medicare Advantage', [], 'test', plan='MB', transport=transport)) is None
 
 

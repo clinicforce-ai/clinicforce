@@ -25,6 +25,7 @@ async def submit_previsit_eligibility(api: ModuleType, *, payer: dict, provider:
     rendering_first = provider['rendering_first']
     rendering_last = provider['rendering_last']
     billing_npi = provider['billing_npi']
+    cms_route = api.stedi_payers.original_medicare_route(payer)
     if api.stedi_payers.original_medicare_routing_conflict(payer,
             product=str(source.get('plan') or ''), issuer=str(source.get('payer') or '')):
         result['eligibility_failure'] = {'kind': 'payer_routing_unresolved',
@@ -38,12 +39,26 @@ async def submit_previsit_eligibility(api: ModuleType, *, payer: dict, provider:
         await api.run_in_threadpool(api._finish_previsit, result, case, inputs, source, None, session, payer_id)
         await api.run_in_threadpool(api._save, case, session, 'previsit-payer-route-review')
         return result
+    if cms_route and not source.get('_request_ip_chain'):
+        result['eligibility_failure'] = {'kind': 'request_trace_unavailable',
+            'title': 'Medicare request trace unavailable',
+            'detail': 'The originating network IP chain required for CMS HETS was not available.',
+            'action': 'Retry from the clinic application after the request network trace is available.', 'codes': []}
+        result['issues'].append(result['eligibility_failure']['action'])
+        case['previsit'] = {'request_state': 'not_requested'}
+        result['benefits'] = api._previsit_benefits({}, coverage, inputs['service_date'])
+        await api.run_in_threadpool(api._finish_previsit, result, case, inputs, source, None, session, payer_id)
+        await api.run_in_threadpool(api._save, case, session, 'previsit-cms-trace-required')
+        return result
+    headers = {'Authorization': api_key, 'Content-Type': 'application/json'}
+    if cms_route:
+        headers['X-Forwarded-For'] = source['_request_ip_chain']
     if api.stedi_payers.enrollment_required(payer):
-        npi = billing_npi if api.stedi_payers.original_medicare_route(payer) else (
+        npi = billing_npi if cms_route else (
             rendering_npi if rendering_first and rendering_last and rendering_npi else billing_npi)
         enrollment = await api.stedi_payers.eligibility_enrollment(payer_id, npi, api_key)
         result['enrollment'] = {**enrollment, 'payer_id': payer_id, 'provider_npi': npi,
-                                'route': 'original_medicare_hets' if api.stedi_payers.original_medicare_route(payer)
+                                'route': 'original_medicare_hets' if cms_route
                                 else 'payer_specific_eligibility'}
         if enrollment['status'] != 'LIVE':
             result['eligibility_failure'] = api._enrollment_failure(result['enrollment'])
@@ -63,7 +78,7 @@ async def submit_previsit_eligibility(api: ModuleType, *, payer: dict, provider:
     try:
         async with api.httpx.AsyncClient(timeout=api.httpx.Timeout(30, connect=5)) as client:
             response, payload, _ = await api._post_stedi_eligibility(
-                client, {"Authorization": api_key, "Content-Type": "application/json"}, body, basic_body)
+                client, headers, body, basic_body)
     except (api.httpx.HTTPError, ValueError):
         case["previsit"] = {"request_state": "indeterminate"}
         await api.run_in_threadpool(api._save, case, session, "previsit-stedi-indeterminate")
@@ -112,7 +127,7 @@ async def submit_previsit_eligibility(api: ModuleType, *, payer: dict, provider:
             try:
                 async with api.httpx.AsyncClient(timeout=api.httpx.Timeout(30, connect=5)) as client:
                     extra_response, extra, _ = await api._post_stedi_eligibility(
-                        client, {"Authorization": api_key, "Content-Type": "application/json"},
+                        client, headers,
                         next_body, next_basic)
             except (api.httpx.HTTPError, ValueError):
                 inquiry_state = 'indeterminate'
