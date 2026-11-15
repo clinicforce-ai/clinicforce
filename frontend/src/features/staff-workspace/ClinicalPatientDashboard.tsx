@@ -29,7 +29,6 @@ import {
   partitionPatientDates,
   type VisitResult,
 } from './clinical-patient-groups'
-
 interface Props {
   initialPatientId?: string
   onOpenIntake: (id: string) => void
@@ -94,8 +93,9 @@ export default function ClinicalPatientDashboard({
           if (initialPatientId) {
             setSelectedDay(null)
             setSelected(
-              result.patients.find((patient) => patient.clinic_patient_id === initialPatientId) ||
-                null,
+              result.patients.find(
+                (patient) => (patient.clinic_patient_id || patient.id) === initialPatientId,
+              ) || null,
             )
           }
         }
