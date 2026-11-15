@@ -18,6 +18,8 @@ export interface UploadReceipt {
   clinic_name: string
 }
 export interface InsuranceCardFields {
+  given_name?: string
+  family_name?: string
   member_name?: string
   birth_date?: string
   member_id?: string
@@ -42,11 +44,13 @@ export const getPatientUpload = (code: string, token: string) =>
     expires_at: string
     status: 'pending' | 'received'
     patient_specific: boolean
+    fields: InsuranceCardFields
   }>(`/api/insurance-upload/${encodeURIComponent(code)}/${encodeURIComponent(token)}`)
 export const readPatientInsuranceCard = (code: string, token: string, body: FormData) =>
   request<{ fields: InsuranceCardFields }>(
     `/api/insurance-upload/${encodeURIComponent(code)}/${encodeURIComponent(token)}/read-card`,
     { method: 'POST', body },
+    { timeoutMs: 120_000 },
   )
 export const submitPatientUpload = (code: string, token: string, body: FormData) =>
   request<UploadReceipt>(

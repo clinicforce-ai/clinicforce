@@ -114,6 +114,22 @@ def metadata(clinic_code: str, code: str) -> dict:
     return dict(_usable(row))
 
 
+def prefill_for_link(row: dict) -> dict:
+    """Expose only the intended clinic patient's existing upload fields to this private link."""
+    if not row["expected_patient_id"] or row["status"] != "pending":
+        return {}
+    with _connection() as connection:
+        patient = connection.execute("""SELECT given_name,family_name,birth_date FROM staff_patients
+            WHERE id=%s AND practice_id=%s""", (row["expected_patient_id"], row["practice_id"])).fetchone()
+        if not patient:
+            return {}
+        previous = connection.execute("""SELECT fields->>'member_id' AS member_id FROM staff_intakes
+            WHERE practice_id=%s AND patient_id=%s AND NULLIF(fields->>'member_id','') IS NOT NULL
+            ORDER BY updated_at DESC,id DESC LIMIT 1""", (row["practice_id"], row["expected_patient_id"])).fetchone()
+    return {"given_name": patient["given_name"], "family_name": patient["family_name"],
+            "birth_date": patient["birth_date"], "member_id": previous["member_id"] if previous else ""}
+
+
 def owned_request(link_id: str, practice_id: str) -> dict | None:
     with _connection() as connection:
         row = connection.execute("SELECT * FROM insurance_upload_links WHERE id=%s AND practice_id=%s", (link_id, practice_id)).fetchone()
@@ -157,7 +173,7 @@ def receipt(row: dict) -> dict:
     return {"receipt_id": row["receipt_id"], "status": "received", "received_at": row["submitted_at"], "clinic_name": row["clinic_name"]}
 
 
-def submit(clinic_code: str, code: str, fields: dict, prepared: list[tuple[str, bytes, str]], submission_id: str | None = None, source_portal_patient_id: str | None = None) -> tuple[dict, bool]:
+def submit(clinic_code: str, code: str, fields: dict, prepared: list[tuple[str, bytes, str]], submission_id: str | None = None, source_portal_patient_id: str | None = None, member_id_from_prior_intake: bool = False) -> tuple[dict, bool]:
     digest = _hash(json.dumps({"fields": fields, "files": [hashlib.sha256(content).hexdigest() for _, content, _ in prepared],
                               "source_portal_patient_id": source_portal_patient_id}, sort_keys=True, separators=(",", ":")))
     documents, intake_id = [], None
@@ -193,7 +209,7 @@ def submit(clinic_code: str, code: str, fields: dict, prepared: list[tuple[str, 
                 (id,practice_id,created_by,patient_id,status,fields,field_sources,documents,events,warning,created_at,updated_at,source,upload_link_id,expected_patient_id,auto_patient_id,source_portal_patient_id)
                 VALUES (%s,%s,NULL,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s,%s,%s,'patient_upload',%s,%s,%s,%s)""",
                 (intake_id, row["practice_id"], expected["id"] if expected else None, "ready" if expected else "needs_confirmation",
-                 json.dumps(fields), json.dumps({key: "clinic_record" if expected and key in ("given_name", "family_name", "birth_date") else "patient_provided" for key in fields}), json.dumps(documents), json.dumps([event]),
+                 json.dumps(fields), json.dumps({key: "clinic_record" if expected and key in ("given_name", "family_name", "birth_date") else "prior_intake" if key == "member_id" and member_id_from_prior_intake else "patient_provided" for key in fields}), json.dumps(documents), json.dumps([event]),
                  None if expected else "Patient-submitted details have not been confirmed. Read the saved card and confirm the patient before starting insurance review.",
                  stamp, stamp, row["id"], row["expected_patient_id"], auto_patient_id, source_portal_patient_id if not expected else None))
             saved = connection.execute("""UPDATE insurance_upload_links SET status='received',submitted_at=%s,intake_id=%s,

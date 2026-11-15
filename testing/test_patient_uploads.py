@@ -89,7 +89,7 @@ class PatientUploadTests(unittest.IsolatedAsyncioTestCase):
             connection.execute("INSERT INTO staff_patients(id,practice_id,given_name,family_name,birth_date,created_at) VALUES ('expected-patient',%s,'Other','Person','1980-01-01',%s)", (self.actor["practice_id"], staff_store.now()))
         link = await self.new_link("expected-patient")
         self.assertEqual(link["url"], f"http://test/{self.clinic['npi']}/{link['upload_code']}")
-        self.assertEqual(set((await self.public.get(self.route(link))).json()), {"clinic_name", "expires_at", "status", "patient_specific"})
+        self.assertEqual(set((await self.public.get(self.route(link))).json()), {"clinic_name", "expires_at", "status", "patient_specific", "fields"})
         content = card_pdf()
         response = await self.public.post(self.route(link), data={"consent": "true"},
                                           files=[("files", ("original-card.pdf", content, "application/pdf"))])
@@ -119,6 +119,43 @@ class PatientUploadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.get(f"/api/staff/intakes/{row['intake_id']}")).status_code, 404)
         self.assertEqual((await self.client.get("/api/staff/upload-links")).json()["upload_links"], [])
         self.assertEqual((await self.client.post(f"/api/staff/upload-links/{link['id']}/revoke")).status_code, 404)
+
+    async def test_complete_patient_link_prefills_and_skips_card_ocr(self):
+        with staff_store._connection() as connection:
+            connection.execute("INSERT INTO staff_patients(id,practice_id,given_name,family_name,birth_date,created_at) VALUES ('known-patient',%s,'Alex','Example','1980-04-03',%s)",
+                               (self.actor['practice_id'], staff_store.now()))
+            connection.execute("""INSERT INTO staff_intakes(id,practice_id,created_by,patient_id,status,fields,created_at,updated_at)
+                VALUES ('known-card',%s,%s,'known-patient','ready',%s::jsonb,%s,%s)""",
+                (self.actor['practice_id'], self.actor['id'], json.dumps({'member_id': 'KNOWN123'}), staff_store.now(), staff_store.now()))
+        link = await self.new_link('known-patient')
+        metadata = (await self.public.get(self.route(link))).json()
+        self.assertEqual(metadata['fields'], {'given_name': 'Alex', 'family_name': 'Example',
+                                              'birth_date': '1980-04-03', 'member_id': 'KNOWN123'})
+        with patch.object(patient_uploads.patient_card_extraction, 'read_identity', side_effect=AssertionError('OCR should be skipped')):
+            with patch.object(patient_uploads.v1_sources, 'read_card_fields', side_effect=AssertionError('background OCR should be skipped')):
+                read = await self.public.post(f"{self.route(link)}/read-card", files=[('files', ('card.pdf', card_pdf(), 'application/pdf'))])
+                self.assertEqual(read.status_code, 200, read.text)
+                self.assertEqual(read.json()['fields'], metadata['fields'])
+                sent = await self.public.post(self.route(link), data={'consent': 'true'},
+                    files=[('files', ('card.pdf', card_pdf(), 'application/pdf'))])
+        self.assertEqual(sent.status_code, 201, sent.text)
+        record = staff_store.get_intake(links.owned_request(link['id'], self.actor['practice_id'])['intake_id'], self.actor['practice_id'])
+        self.assertEqual(record['fields']['member_id'], 'KNOWN123')
+        self.assertEqual(record['field_sources']['member_id'], 'prior_intake')
+        self.assertEqual(record['patient_id'], 'known-patient')
+
+    async def test_patient_link_reads_missing_member_id_from_card(self):
+        with staff_store._connection() as connection:
+            connection.execute("INSERT INTO staff_patients(id,practice_id,given_name,family_name,birth_date,created_at) VALUES ('missing-member',%s,'Alex','Example','1980-04-03',%s)",
+                               (self.actor['practice_id'], staff_store.now()))
+        link = await self.new_link('missing-member')
+        self.assertEqual((await self.public.get(self.route(link))).json()['fields']['member_id'], '')
+        read = await self.public.post(f"{self.route(link)}/read-card", files=[('files',
+            ('card.pdf', card_pdf('Member Name: SOMEONE ELSE\nMember ID: NEW456\nDOB: 03/02/1970'), 'application/pdf'))])
+        self.assertEqual(read.status_code, 200, read.text)
+        self.assertEqual(read.json()['fields']['member_id'], 'NEW456')
+        self.assertEqual(read.json()['fields']['given_name'], 'Alex')
+        self.assertEqual(read.json()['fields']['birth_date'], '1980-04-03')
 
     async def test_ocr_failure_does_not_block_requested_card_receipt(self):
         with staff_store._connection() as connection:
@@ -276,7 +313,8 @@ class PatientUploadTests(unittest.IsolatedAsyncioTestCase):
         link = await self.new_link()
         preview = await self.public.post(f"{self.route(link)}/read-card", files=[("files", ("original-card.pdf", card_pdf("Member Name: PAT EXAMPLE\nDOB: 01/02/1990\nMember ID: CARD123"), "application/pdf"))])
         self.assertEqual(preview.status_code, 200, preview.text)
-        self.assertEqual(preview.json(), {"fields": {"member_name": "PAT EXAMPLE", "birth_date": "1990-01-02", "member_id": "CARD123"}})
+        self.assertEqual(preview.json(), {"fields": {"given_name": "PAT", "family_name": "EXAMPLE",
+                                                      "member_name": "PAT EXAMPLE", "birth_date": "1990-01-02", "member_id": "CARD123"}})
         self.assertEqual(self.objects, {}, "Reading a card for autofill must not save it")
         self.assertEqual((await self.upload(link, data={"consent": "false"})).status_code, 422)
         self.assertEqual((await self.upload(link, data={"birth_date": "2999-01-01"})).status_code, 422)
@@ -344,7 +382,7 @@ class PatientUploadTests(unittest.IsolatedAsyncioTestCase):
         with staff_store._connection() as connection:
             count = connection.execute("SELECT count(*) AS total FROM staff_patients WHERE practice_id=%s", (self.actor["practice_id"],)).fetchone()["total"]
         self.assertEqual(count, 2, "A targeted upload must not create a duplicate clinic record")
-        self.assertEqual(set((await self.public.get(self.route(link))).json()), {"clinic_name", "expires_at", "status", "patient_specific"})
+        self.assertEqual(set((await self.public.get(self.route(link))).json()), {"clinic_name", "expires_at", "status", "patient_specific", "fields"})
 
     async def test_dashboard_cohorts_history_and_portal_identifiers_are_clinic_scoped(self):
         fields = {"given_name": "Pat", "family_name": "Example", "birth_date": "1990-01-01", "email": "patient@example.test"}
