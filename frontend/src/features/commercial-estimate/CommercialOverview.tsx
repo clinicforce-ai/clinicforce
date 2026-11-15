@@ -18,6 +18,7 @@ import CommercialCostBreakdown from './CommercialCostBreakdown'
 import CommercialCashQuoteForm from './CommercialCashQuoteForm'
 import { AvailityArrivalAmount, AvailityVisitTable } from './AvailityVisitPlanning'
 import { availityVisitPlanning } from './availityVisitPlanning'
+import { pendingHumanaSpecialistCopay } from './commercialCostState'
 export default function CommercialOverview({
   model,
   result,
@@ -92,6 +93,7 @@ export default function CommercialOverview({
     payerReportedPartialCents != null ||
     pendingAetnaCopay != null ||
     pendingBluecardCopay != null ||
+    pendingHumanaSpecialistCopay(result, model) != null ||
     copay.aetnaPriorDateReferenceCopay(result, model) != null ||
     cardPlanningCents != null
   const patientBenefitsBound = hasPatientBinding(result.identity)

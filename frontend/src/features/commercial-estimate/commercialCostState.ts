@@ -53,10 +53,15 @@ export function pendingHumanaSpecialistCopay(
     Boolean(plan?.medicare_ppo_evidence) &&
     ['matched', 'reconciled'].includes(identity?.status || '') &&
     result.benefits?.active === true &&
+    !result.benefits.has_secondary &&
+    !result.benefits.network_conflict &&
     !result.benefits.coverage_status_conflict &&
+    !result.benefits.source_errors?.length &&
     result.benefits.service_date_matches !== false &&
     result.benefits.network_status === 'in_network' &&
     result.benefits.network_source === 'clinic_library_contract' &&
+    !price?.service_issues?.length &&
+    result.card_check?.status !== 'conflict' &&
     line != null &&
     /^992(?:0[2-5]|1[2-5])$/.test(line.code) &&
     line.units === 1 &&
