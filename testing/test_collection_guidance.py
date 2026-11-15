@@ -61,6 +61,38 @@ def test_patient_share_and_collection_policy_are_independent():
     assert encounter_summary.build({**result, 'collection_guidance': deferred})['estimated_total_patient_min_cents'] == 3800
 
 
+def test_original_medicare_office_collects_zero_without_zeroing_patient_liability():
+    result = scenario(3800)
+    result.pop('collection_policy')
+    result['stedi_payer'] = {'id': 'JDNSN'}
+    result['identity'] = {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2}
+    result['benefits']['identity'] = result['identity']
+    guidance = collection_guidance.build(result)
+    summary = encounter_summary.build({**result, 'collection_guidance': guidance})
+    assert guidance['amount_cents'] == 0
+    assert guidance['basis'] == 'claim_after_service'
+    assert guidance['collection_rule']['mode'] == 'original_medicare_office_deferral'
+    assert summary['collect_today_cents'] == 0
+    assert summary['estimated_total_patient_min_cents'] == 3800
+    assert guidance['services'][0]['patient_cents'] is None
+    result['price_range']['mode'] = 'alternatives'
+    result['price_range']['complete'] = False
+    result['price_range']['lines'].append({**result['price_range']['lines'][0], 'id': 'office-alt', 'code': '99204'})
+    assert collection_guidance.build(result)['amount_cents'] == 0
+    result['price_range']['lines'].pop()
+    result['price_range']['mode'] = 'services'
+    result['benefits']['active'] = None
+    assert collection_guidance.build(result)['amount_cents'] is None
+    result['benefits']['active'] = True
+    result['stedi_payer']['id'] = 'TPTWE'
+    assert collection_guidance.build(result)['amount_cents'] == 0
+    result['benefits']['plan_details'] = {'names': ['Example Medicare Advantage PPO']}
+    assert collection_guidance.build(result)['amount_cents'] is None
+    result['benefits'].pop('plan_details')
+    result['stedi_payer']['id'] = 'EXAMPLE'
+    assert collection_guidance.build(result)['amount_cents'] is None
+
+
 def test_missing_price_does_not_request_an_already_approved_policy():
     result = scenario()
     result['price_range'].update(complete=False, patient_min_cents=None, patient_max_cents=None)

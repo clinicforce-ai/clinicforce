@@ -447,6 +447,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         if guidance.get('cigna_estimate_required') and guidance['basis'] != 'claim_after_service':
             guidance.update(reason='The Cigna visit share needs its Explanation of Estimate before a check-in amount can be set.',
                 patient_message='Your visit payment is pending a Cigna estimate; this does not mean you owe $0.')
+    secondary_order.apply_original_medicare_deferral(result, guidance, source_errors, member_bound, bool(adverse))
     secondary_order.apply_part_b_deferral(result, guidance, source_errors, member_bound, ma_ppo)
     apply_family_oop_deferrals(result, guidance, member_bound=member_bound, source_errors=source_errors, adverse=bool(adverse), same_policy_conflict=same_policy_conflict)
     apply_trs_hd_office_refundable_deposit(result, guidance, member_bound=member_bound, source_errors=source_errors, adverse=bool(adverse), same_policy_conflict=same_policy_conflict, review=review)

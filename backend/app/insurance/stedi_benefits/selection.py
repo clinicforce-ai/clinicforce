@@ -11,6 +11,7 @@ from app.insurance.stedi_benefits.fields import (
 )
 from app.insurance.cpt_rules import EMG_ADD_ONS, NCS_CODES, STANDALONE_EMG_CODES
 from app.insurance.provider_specialty import office_role
+from app.insurance.stedi_payers import ORIGINAL_MEDICARE_STEDI_IDS
 
 
 @dataclass
@@ -254,9 +255,11 @@ def select_benefit_rows(payload: dict[str, Any], service_type_code: str,
     selected_tier = 'out_of_network' if (negative_provider_ids or provider_out_of_network_verified) and not network_conflict else 'in_network'
     accepted_networks = ({'N', 'NO', 'OUT_OF_NETWORK', 'W', 'IN_AND_OUT_OF_NETWORK'} if selected_tier == 'out_of_network'
                          else {'Y', 'YES', 'IN_NETWORK', 'W', 'IN_AND_OUT_OF_NETWORK'})
+    cms_unqualified = str(payload.get('payerId') or '').upper() in ORIGINAL_MEDICARE_STEDI_IDS
     entries = [row for row in entries if relevant_service(row)
                and (_network_indicator(row) in accepted_networks or
-                    not _network_indicator(row) and row.get('code') in {'status', '1', '2', '3', '4', '5', '6', '7', '8', 'I', 'R', 'D'})]
+                    not _network_indicator(row) and (cms_unqualified or
+                        row.get('code') in {'status', '1', '2', '3', '4', '5', '6', '7', '8', 'I', 'R', 'D'}))]
     return BenefitRows(entries, service_type_code, excluded_service_ids, office,
                        priorities, selected_tier, accepted_networks, network_conflict,
                        provider_rows, negative_provider_ids)

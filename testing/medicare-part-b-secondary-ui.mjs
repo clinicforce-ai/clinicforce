@@ -59,3 +59,33 @@ assert.match(table, /\$0\.00/)
 assert.match(table, /\$60\.00/)
 assert.match(table, /\$1,200\.00/)
 assert.match(table, /\$4,434\.28/)
+
+const primary = structuredClone(result)
+primary.payer = 'Medicare of Texas'
+primary.stedi_payer = { id: 'JDNSN', name: 'National Centers for Medicare & Medicaid Services' }
+primary.benefits.has_secondary = false
+primary.benefits.medicare_part_b_secondary = null
+primary.benefits.copay_cents = null
+primary.benefits.deductible_annual_cents = 20000
+primary.benefits.deductible_remaining_cents = 15000
+primary.benefits.coinsurance_percent = '20'
+primary.price_range = { mode: 'services', complete: true,
+  patient_min_cents: 3800, patient_max_cents: 3800,
+  lines: [{ id: 'office', code: '99203', units: 1, allowed_cents: 10000,
+    allowed_basis: 'medicare_fee_schedule', calculation: { patient_cents: 3800,
+      plan_cents: 6200 }, benefits: { active: true, deductible_remaining_cents: 15000,
+      coinsurance_percent: '20' } }] }
+primary.collection_guidance = { amount_cents: 0, status: 'zero_advance', basis: 'claim_after_service',
+  reason: 'Clinic policy collects no advance for a verified Original Medicare office visit.',
+  collection_rule: { mode: 'original_medicare_office_deferral', reference: 'Clinic policy' } }
+primary.encounter_summary = { collect_today_cents: 0, complete: true,
+  estimated_total_patient_min_cents: 3800, estimated_total_patient_max_cents: 3800 }
+const primaryModel = { ...model, supportedAmount: true, amountText: '$0.00' }
+const primaryTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+  { model: primaryModel, result: primary }))
+assert.match(primaryTable, /Amount to collect at visit/)
+assert.match(primaryTable, /\$0\.00/)
+assert.match(primaryTable, /\$38\.00/)
+assert.match(primaryTable, /20%/)
+assert.match(primaryTable, /Provider billing status/)
+assert.match(primaryTable, /Original Medicare has no plan network tier/)

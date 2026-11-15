@@ -102,6 +102,28 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('groupNumber', body['subscriber'])
         self.assertNotIn('planNumber', body['subscriber'])
 
+    def test_cms_outbound_request_uses_enrolled_billing_provider(self):
+        from app.api.routers.commercial_flow.commercial_ecw_evidence import stedi_request_body
+
+        provider = {'billing_npi': '1811853260', 'organization_name': 'Example Clinic',
+                    'rendering_npi': '1234567890', 'rendering_first': 'Ada', 'rendering_last': 'Clinician'}
+        coverage = {'active_coverages': 1, 'relationship': '18', 'member_id': 'SYNTHETIC-MBI',
+                    'group_number': 'SYNTHETIC-GROUP', 'plan_number': 'SYNTHETIC-PLAN',
+                    'subscriber_first': 'Pat', 'subscriber_last': 'Example',
+                    'subscriber_birth_date': '1950-01-01', 'patient_first': 'Pat',
+                    'patient_last': 'Example', 'patient_birth_date': '1950-01-01'}
+        for payer_id in ('CMS', 'JDNSN', 'TPTWE'):
+            for include_hints in (True, False):
+                body = stedi_request_body({'stedi_payer_id': payer_id}, provider, coverage,
+                                          '2026-11-16', ['30', '98'], include_identity_hints=include_hints)
+                self.assertEqual(body['payerId'], 'CMS')
+                self.assertEqual(body['provider'], {'npi': '1811853260'})
+                self.assertEqual(body['subscriber']['memberId'], 'SYNTHETIC-MBI')
+                self.assertNotIn('additionalInformation', body['subscriber'])
+        commercial = stedi_request_body({'stedi_payer_id': 'EXAMPLE'}, provider, coverage,
+                                        '2026-11-16', '98')
+        self.assertEqual(commercial['provider']['npi'], '1234567890')
+
     def test_matching_card_group_reuses_only_fresh_patient_bound_payer_evidence(self):
         from app.api.routers import commercial_estimator as api
         from copy import deepcopy
