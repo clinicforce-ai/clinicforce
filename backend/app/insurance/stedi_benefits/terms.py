@@ -119,7 +119,7 @@ def select_cost_share_rows(entries: list[dict[str, Any]], payload: dict[str, Any
                 return None
         best = max(score for score, _ in matches)
         selected = [row for score, row in matches if score == best]
-        if code in {'A', 'B'}:
+        if code in {'A', 'B'} or code == 'G' and remaining:
             # A tier-specific cost share takes precedence over a row covering
             # both network tiers for the same service.
             tier = ({'Y', 'YES', 'IN_NETWORK'} if 'IN_NETWORK' in accepted_networks

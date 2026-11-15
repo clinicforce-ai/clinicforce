@@ -7,6 +7,7 @@ import type { bluecardOfficeDeductibleScenario } from './bluecardOfficeDeductibl
 
 export { pendingBluecardOfficeCopay, pendingCignaOfficeCopay } from './pendingOfficeCopays'
 import { pendingCignaOfficeCopay } from './pendingOfficeCopays'
+import { pendingHumanaSpecialistCopay } from './commercialCostState'
 
 function pricedOfficeCopayDetail(result: PrevisitEstimate): string | null {
   const price = result.price_range
@@ -80,6 +81,7 @@ export function collectionAtVisitRow(
     proxyFormula,
     bluecardDeductible,
   } = values
+  const pendingHumanaCopay = pendingHumanaSpecialistCopay(result, model)
   const choicePlusEmg = feeProxy?.basis === 'bcbstx_uhc_choice_plus_fee_proxy'
   const dsnpOffice = feeProxy?.basis === 'bcbstx_uhc_dsnp_office_proxy'
   const feeProxyCheckin =
@@ -413,6 +415,12 @@ export function collectionAtVisitRow(
               ].includes(result.collection_guidance.collection_rule?.mode || '')
             ? result.collection_guidance.reason
             : 'The payer returned no financial terms. This refundable advance uses the selected CPTs’ BCBS Texas fee references; it is separate from estimated patient liability. Apply it to the processed claim and refund any excess.'
+  }
+  if (pendingHumanaCopay != null) {
+    row.label = 'Amount to collect at visit · verify Medicare protection'
+    row.value = `Pending · ${money(pendingHumanaCopay)} payer-reported specialist copay`
+    row.detail =
+      'Stedi returned this visit-date in-network specialist copay for the matched member, and the clinic has a current CPT fee. Verify QMB protection, any required referral, deductible applicability and prior payments before charging. Final responsibility follows the claim.'
   }
   if (result.collection_guidance?.basis === 'cigna_refundable_office_copay') {
     row.label = 'Refundable Cigna copay advance at visit'

@@ -51,6 +51,9 @@ def fee_schedule_products(payer_name: str, plan: dict | None) -> list[str]:
     """Use a member's exact UHC Choice Plus network when UMR omits a plan name."""
     plan = plan or {}
     names = plan.get('names') or []
+    if (payer_key(payer_name) == 'humana' and len(names) == 1
+            and plan.get('medicare_ppo_evidence')):
+        return ['Humana Medicare Advantage PPO']
     if names:
         return names
     networks = plan.get('network_names') or []

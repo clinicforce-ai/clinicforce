@@ -21,6 +21,23 @@ def scenario(amount=3800):
                     'requirements': {kind: {'required': 'unknown', 'cleared': False} for kind in ('referral', 'authorization')}}}]}}
 
 
+def test_humana_medical_status_message_keeps_medicare_qmb_collection_guard():
+    result = scenario(4000)
+    result.update(payer='Humana Health Plan', plan_details={'stedi': {
+        'names': ['Humana Honor'], 'medicare_ppo_evidence': 'synthetic-status'}})
+    result['identity'] = {'status': 'matched', 'binding': 'synthetic-binding', 'match_version': 2}
+    result['benefits'].update(identity=result['identity'], copay_cents=4000,
+                              coinsurance_percent='0', oop_remaining_cents=423799)
+    line = result['price_range']['lines'][0]
+    line.update(allowed_cents=11362, allowed_basis='payer_fee_schedule',
+                rate_resolution={'status': 'RESOLVED'})
+    line['benefits'].update(copay_cents=4000, coinsurance_percent='0',
+                            oop_remaining_cents=423799, copay_period='VISIT')
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] is None
+    assert 'Verify QMB status' in guidance['reason']
+
+
 def test_patient_share_and_collection_policy_are_independent():
     result = scenario()
     result.pop('collection_policy')

@@ -36,6 +36,61 @@ export function supportedOfficeCopayShare(
     : null
 }
 
+export function pendingHumanaSpecialistCopay(
+  result: PrevisitEstimate,
+  model: CommercialEstimateModel,
+): number | null {
+  const price = result.price_range
+  const line = price?.mode === 'services' && price.lines?.length === 1 ? price.lines[0] : null
+  const terms = line?.benefits
+  const plan = result.plan_details?.stedi || result.benefits?.plan_details
+  const identity = result.identity || result.benefits?.identity
+  return !model.cash &&
+    !model.previousEstimate &&
+    result.collection_guidance?.amount_cents == null &&
+    result.billing_protection?.status !== 'qmb' &&
+    /\bhumana\b/i.test(result.payer || '') &&
+    Boolean(plan?.medicare_ppo_evidence) &&
+    ['matched', 'reconciled'].includes(identity?.status || '') &&
+    result.benefits?.active === true &&
+    !result.benefits.coverage_status_conflict &&
+    result.benefits.service_date_matches !== false &&
+    result.benefits.network_status === 'in_network' &&
+    result.benefits.network_source === 'clinic_library_contract' &&
+    line != null &&
+    /^992(?:0[2-5]|1[2-5])$/.test(line.code) &&
+    line.units === 1 &&
+    line.allowed_basis === 'payer_fee_schedule' &&
+    line.rate_resolution?.status === 'RESOLVED' &&
+    (line.allowed_cents || 0) > 0 &&
+    terms?.active === true &&
+    terms.copay_period === 'VISIT' &&
+    terms.coinsurance_percent != null &&
+    Number(terms.coinsurance_percent) === 0 &&
+    !terms.source_errors?.length &&
+    typeof terms.copay_cents === 'number' &&
+    terms.copay_cents > 0
+    ? Math.min(
+        terms.copay_cents,
+        line.allowed_cents!,
+        terms.oop_remaining_cents ?? terms.copay_cents,
+      )
+    : null
+}
+
+export function pendingHumanaPatientShare(
+  result: PrevisitEstimate,
+  model: CommercialEstimateModel,
+): string | null {
+  const copay = pendingHumanaSpecialistCopay(result, model)
+  return (
+    model.estimatedShare ||
+    (copay == null
+      ? null
+      : `${money(copay)} payer-reported office copay scenario · collection pending`)
+  )
+}
+
 export function calculatedCoinsurance(
   amountCents: number,
   percent: string | number | null | undefined,

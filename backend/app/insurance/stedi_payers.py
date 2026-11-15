@@ -64,6 +64,12 @@ def matching_payers(items: list[dict[str, Any]], name: str, identifiers: list[st
     by_id = [payer for payer in eligible if observed_ids.intersection(
         str(value).casefold() for value in [payer.get("primaryPayerId"), payer.get("stediId"), *payer.get("aliases", [])] if value)]
     by_name = [payer for payer in eligible if _same_name(name, payer.get("displayName", ""), payer.get("operatingStates") or [])]
+    # eCW uses this generic Humana label without a payer ID. The directory's
+    # primary medical Humana route is unambiguous even when its search also
+    # suggests state Medicaid and other Humana subsidiaries.
+    if not by_id and not by_name and _words(name) == ['humana', 'health', 'plan']:
+        by_name = [payer for payer in eligible if _words(payer.get('displayName', '')) == ['humana']
+                   and str(payer.get('primaryPayerId') or '') == '61101']
     matches = by_id or by_name or [payer for payer in eligible if any(_same_name(name, candidate, payer.get("operatingStates") or [])
         for candidate in [payer.get("displayName", ""), *payer.get("names", [])] if isinstance(candidate, str))]
     unique = {payer.get("stediId"): payer for payer in matches if isinstance(payer.get("stediId"), str)}

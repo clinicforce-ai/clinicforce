@@ -17,7 +17,7 @@ from app.insurance.collection import secondary_order
 from app.insurance.identity import patient_benefits_bound
 from app.insurance.benefit_review import annual_oop_conflict_with_known_remaining, selected_service_blocker, selected_service_detail
 from app.insurance.network_participation import participation_conflict, verified_in_network, verified_out_of_network
-from app.insurance import encounter_summary
+from app.insurance import encounter_summary, payer_fees
 from app.insurance.insurance_product import is_medicare_advantage
 from app.insurance.published_plan_benefits import FEP_STANDARD_2026, GEHA_HIGH_PSHB_MA_16615_2026
 def emg_option(result: dict, rates: list[dict], rules: dict, payload: dict | None, service_date: str, review: dict) -> dict:
@@ -84,8 +84,8 @@ def build(result: dict, review: dict | None = None) -> dict:
     identity = result.get('identity') or benefits.get('identity') or {}
     line_blocker = selected_service_blocker(benefits.get('network_status') or 'unknown', identity, lines)
     unresolved_order, same_policy_conflict, primary_secondary_copay, medicare_secondary = secondary_order.state(result)
-    medical_names = (((result.get('plan_details') or {}).get('stedi') or {}).get('names')
-                     or (benefits.get('plan_details') or {}).get('names') or [])
+    payer_plan = ((result.get('plan_details') or {}).get('stedi') or benefits.get('plan_details') or {})
+    medical_names = payer_fees.fee_schedule_products(str(result.get('payer') or ''), payer_plan)
     ma_ppo = is_medicare_advantage(medical_names)
     qmb_clearance = result.get('billing_protection') or {}
     member_bound = patient_benefits_bound(identity)

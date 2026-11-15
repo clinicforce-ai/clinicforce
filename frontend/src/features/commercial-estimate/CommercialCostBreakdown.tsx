@@ -406,7 +406,7 @@ export default function CommercialCostBreakdown({
                               ? aetnaTable.share
                               : pendingBluecardCopay != null
                                 ? `${money(lines[0].benefits.copay_cents!)} office-only estimate`
-                                : model.estimatedShare ||
+                                : costState.pendingHumanaPatientShare(result, model) ||
                                   (partialOfficeCopay != null
                                     ? `${money(model.officeCopayLine!.benefits.copay_cents!)} office-only planning estimate`
                                     : cardPlanningCopay != null

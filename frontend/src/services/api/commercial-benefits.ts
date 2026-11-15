@@ -10,7 +10,7 @@ export type PrevisitBenefits = null | {
   service_date_matches?: boolean | null
   returned_service_dates?: { start?: string; end?: string }
   active?: boolean | null
-  plan_details?: { names?: string[] }
+  plan_details?: { names?: string[]; medicare_ppo_evidence?: string | null }
   has_secondary?: boolean
   medicare_part_b_secondary?: {
     status: 'reported'

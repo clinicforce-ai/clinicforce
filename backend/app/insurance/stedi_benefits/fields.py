@@ -97,7 +97,9 @@ def coverage_kind(row: dict, payload: dict) -> str:
     index = row.get('plan_index')
     plan = plans[index] if type(index) is int and 0 <= index < len(plans) and isinstance(plans[index], dict) else {}
     name = str(row.get('planCoverage') or row.get('planCoverageDescription') or plan.get('name') or '').casefold()
-    if re.search(r'\b(?:vision|spectera|dental|pharmacy|prescription|drug|hearing)\b', name):
+    if (re.search(r'\b(?:vision|spectera|dental|pharmacy|prescription|drug|hearing)\b', name)
+            or re.search(r'\b(?:pdp|part\s+d)\b', name)
+            and not re.search(r'\bmedicare\s+advantage\b', name)):
         return 'supplementary'
     # An explicitly nonmedical service category is not an office benefit even
     # when the payer leaves its plan name blank or reuses the medical name.
@@ -184,6 +186,16 @@ def plan_details(payload: dict) -> dict:
                                if isinstance(plan, dict) and plan.get('name')] + [name for name in names if name]))
     supplementary = [name for name in names if coverage_kind({'planCoverage': name}, payload) == 'supplementary']
     names = [name for name in names if name not in supplementary]
+    # Humana can label the plan "Humana Honor" and state its Medicare PPO
+    # program only in the active STC 30 status message. Keep the actual plan
+    # name separate from this payer-provided product-family evidence.
+    medicare_ppo_evidence = next((row['evidence_path'] for row in rows
+        if len(names) == 1 and row.get('code') == 'status'
+        and str(row.get('status') or '').upper() in {'ACTIVE', 'ACTIVE_COVERAGE'}
+        and '30' in (row.get('serviceTypeCodes') or [])
+        and str(row.get('planCoverage') or row.get('planCoverageDescription') or '').strip() == names[0]
+        and any(re.fullmatch(r'Medicare(?: Advantage)? PPO', note.strip(), re.I)
+                for note in _benefit_notes([row.get('messages'), row.get('additionalInformation')]))), None)
     subscriber = payload.get("subscriber") or {}
     info = payload.get("planInformation") or {}
     additional = (payload.get('dependent') or subscriber).get("additionalInformation") or subscriber.get('additionalInformation') or {}
@@ -228,6 +240,7 @@ def plan_details(payload: dict) -> dict:
                     and re.fullmatch(r'R\d{8}', str(subscriber.get('memberId') or '').upper()) is not None)
     fep_product = 'FEP Blue Basic PSHB' if fep_basic else 'FEP Blue Standard FEHB' if fep_standard else None
     return {"names": names, "supplementary_names": supplementary,
+            "medicare_ppo_evidence": medicare_ppo_evidence,
             "response_payer_name": str(response_payer_name).strip() if response_payer_name else None,
             "plan_number": subscriber.get("planNumber") or info.get("planNumber") or (additional.get('plan') or {}).get('number'),
             "group_number": group,

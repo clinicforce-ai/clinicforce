@@ -12,7 +12,9 @@ def classify(names: list[str] | None, *, payer_id: str = '',
     if not labels:
         return 'original_medicare' if payer_id in {'CMS', 'CMSMED'} else 'unknown'
     medical = [label for label in labels if not re.search(
-        r'\b(?:spectera|vision|dental|pharmacy|prescription|drug|hearing)\b', label)]
+        r'\b(?:spectera|vision|dental|pharmacy|prescription|drug|hearing)\b', label)
+        and not (re.search(r'\b(?:pdp|part\s+d)\b', label)
+                 and not re.search(r'\bmedicare\s+advantage\b', label))]
     if not medical:
         return 'supplementary'
     if payer_id in {'CMS', 'CMSMED'} and not any('advantage' in label or 'dsnp' in label

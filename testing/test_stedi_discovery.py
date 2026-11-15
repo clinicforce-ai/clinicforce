@@ -10,6 +10,7 @@ import pytest
 from fastapi import BackgroundTasks, HTTPException
 from app.api.routers import commercial_estimator as api
 from app.insurance import stedi_discovery as discovery
+from app.insurance import commercial, insurance_product
 from test_visit_estimate import payload
 
 
@@ -361,6 +362,35 @@ def test_partial_address_and_medical_coverage_are_not_discarded_or_invented():
     for row in item['benefitsInformation']:
         row['serviceTypeCodes'] = ['35']
     assert not discovery.active_medical(item, inputs)
+
+
+@pytest.mark.parametrize('layout', ['plans', 'benefitsInformation'])
+def test_active_part_d_plan_does_not_become_office_medical_coverage(layout):
+    item = {'payer': {'name': 'Wellcare'}, 'subscriber': {
+        'dates': {'plan': {'start': '2026-01-01', 'end': '2026-12-31'}}}}
+    if layout == 'plans':
+        item['plans'] = [{'name': 'Value Script (PDP)', 'benefits': {'statuses': [
+            {'service': {'system': 'STC', 'value': '30'}, 'status': 'ACTIVE',
+             'planCoverageDescription': 'Health Benefit Plan Coverage'}]}}]
+    else:
+        item['benefitsInformation'] = [{'code': '1', 'serviceTypeCodes': ['30'],
+            'planCoverageDescription': 'Value Script (PDP)'}]
+    inputs = {'service_date': '2026-11-16'}
+    details = commercial.plan_details(item)
+    assert details['names'] == []
+    assert details['supplementary_names'] == ['Value Script (PDP)']
+    assert insurance_product.classify(['Value Script (PDP)']) == 'supplementary'
+    assert commercial.normalize_stedi_271(item, '98', False,
+                                           service_date=inputs['service_date'])['active'] is not True
+    assert not discovery.active_medical(item, inputs)
+
+
+def test_medicare_advantage_with_drug_benefit_remains_medical():
+    name = 'Medicare Advantage PPO with Part D'
+    item = {'plans': [{'name': name, 'benefits': {'statuses': [
+        {'service': {'system': 'STC', 'value': '30'}, 'status': 'ACTIVE'}]}}]}
+    assert commercial.plan_details(item)['names'] == [name]
+    assert insurance_product.classify([name]) == 'medicare_advantage_other'
 
 
 def test_card_identity_hints_require_named_patient_or_known_subscriber():

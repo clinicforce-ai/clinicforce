@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from app.insurance import payer_fees
+from app.insurance import commercial, payer_fees
 from app.insurance import collection_guidance
 from app.api.routers import commercial_estimator  # noqa: F401
 from app.api.routers.commercial_flow.commercial_previsit_pricing import _attach_previsit_pricing, _previsit_range
@@ -78,6 +78,24 @@ def test_member_bound_uhc_choice_plus_network_can_select_commercial_fee_category
     assert payer_fees.fee_schedule_products('United Healthcare',
         {**plan, 'network_names': ['UNITEDHEALTHCARE CHOICE PLUS', 'Other network']}) == []
     assert payer_fees.fee_schedule_products('Humana', plan) == []
+
+
+def test_humana_office_plan_uses_explicit_stedi_medicare_ppo_message():
+    status = {'status': 'ACTIVE', 'service': {'system': 'STC', 'value': '30'},
+              'planCoverageDescription': 'Humana Honor', 'messages': ['Medicare PPO']}
+    payload = {'payer': {'name': {'organization': 'Humana'}},
+               'plans': [{'benefits': {'statuses': [status]}}]}
+    plan = commercial.plan_details(payload)
+    assert plan['names'] == ['Humana Honor']
+    assert payer_fees.fee_schedule_products('Humana', plan) == ['Humana Medicare Advantage PPO']
+    assert payer_fees.schedule_for('Humana', payer_fees.fee_schedule_products('Humana', plan)) == ('humana', 'medicare')
+    for altered in ({**status, 'messages': []}, {**status, 'status': 'INACTIVE'},
+                    {**status, 'messages': ['Commercial PPO']}):
+        other = commercial.plan_details({'plans': [{'benefits': {'statuses': [altered]}}]})
+        assert payer_fees.fee_schedule_products('Humana', other) == ['Humana Honor']
+    mixed = commercial.plan_details({'plans': [{'benefits': {'statuses': [status]}},
+                                                {'name': 'Other medical product'}]})
+    assert payer_fees.fee_schedule_products('Humana', mixed) != ['Humana Medicare Advantage PPO']
 
 
 def test_uhc_network_only_product_prices_selected_televisit_from_database():

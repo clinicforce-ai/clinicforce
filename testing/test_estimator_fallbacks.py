@@ -176,6 +176,20 @@ def test_ecw_payer_id_is_searched_before_an_ambiguous_name():
     assert len(suggestions) == 2 and all(row['match_basis'] == 'directory_suggestion' for row in suggestions)
 
 
+def test_generic_ecw_humana_name_selects_primary_medical_route_only():
+    primary = {'stediId': 'HUMANA', 'primaryPayerId': '61101', 'displayName': 'Humana',
+               'coverageTypes': ['medical'], 'transactionSupport': {'eligibilityCheck': 'SUPPORTED'}}
+    medicaid = {'stediId': 'HORIZONS', 'primaryPayerId': '61103',
+                'displayName': 'Humana Healthy Horizons in Ohio', 'coverageTypes': ['medical'],
+                'transactionSupport': {'eligibilityCheck': 'SUPPORTED'}}
+    transport = httpx.MockTransport(lambda _: httpx.Response(200, json={
+        'items': [{'payer': medicaid}, {'payer': primary}]}))
+    selected = asyncio.run(stedi_payers.search_payer('Humana Health Plan', [], 'test', transport=transport))
+    assert selected == primary
+    assert asyncio.run(stedi_payers.search_payer('Humana Healthy Horizons in Ohio', [], 'test',
+                                                transport=transport)) == medicaid
+
+
 def test_discovery_issuer_name_resolves_shared_identifier_to_uhc_route():
     support = {'coverageTypes': ['medical'], 'transactionSupport': {'eligibilityCheck': 'SUPPORTED'}}
     uhc = {**support, 'stediId': 'KMQTZ', 'primaryPayerId': '87726', 'displayName': 'UnitedHealthcare'}

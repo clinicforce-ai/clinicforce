@@ -290,6 +290,20 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         if str(row.get('code') or '').upper() not in {'F', 'Y'}:
             return False
         labels = notes([row.get('messages'), row.get('additionalInformation')])
+        # A plan-wide combined-tier remaining balance does not constrain a
+        # selected in-network office copay when the plan gives a separate
+        # in-network out-of-pocket balance. Keep it in reported_options.
+        if (row.get('code') == 'F' and not labels and not row.get('quantity')
+                and '30' in (row.get('serviceTypeCodes') or [])
+                and _network_indicator(row) in {'W', 'IN_AND_OUT_OF_NETWORK'}
+                and oop and _network_indicator(oop) in {'Y', 'IN_NETWORK'}):
+            return False
+        # A 100% percentage on the selected office category is not a visit
+        # count or dollar cap. Other percentages and restrictions stay in review.
+        if (row.get('code') == 'F' and not row.get('quantity') and row.get('benefitAmount') is None
+                and str(row.get('benefitPercent') if row.get('benefitPercent') is not None else row.get('percent')) in {'1', '1.0', '1.00'}
+                and [label.strip().upper() for label in labels] == ['PHYSICIAN OFFICE VISIT SPECIALIST']):
+            return False
         if labels and all(re.fullmatch(
                 r'LIMITS DO NOT APPLY FOR MH/SA DIAGNOSIS FOR SERVICES BILLED WITH A PRIMARY DIAGNOSIS OF MH/SA',
                 label.strip(), re.I) for label in labels):
@@ -312,6 +326,8 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
                    for label in note.split(';') if label.strip()))
     source_errors = []
     for _, row in wanted:
+        if row.get('code') in {'F', 'Y'} and not unresolved_limit(row):
+            continue
         for field in ('benefitAmount', 'benefitPercent', 'percent'):
             value = row.get(field)
             if value is None or value == '':

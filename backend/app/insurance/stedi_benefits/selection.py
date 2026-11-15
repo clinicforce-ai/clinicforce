@@ -111,6 +111,7 @@ def select_benefit_rows(payload: dict[str, Any], service_type_code: str,
                 return 'BQ' not in priorities or classes != ['SPECIALIST']
             unrelated = [bool(re.fullmatch(
                 r'(?:telemedicine|telehealth|e-?visit|doctor on demand|hinge health|retail clinic|preventive (?:adult )?care)\b.*'
+                r'|physician office doctor on demand not covered'
                 r'|(?:prediabetes|diabetes management)\b.*\bomada health only'
                 r'|applied behavior analysis\b.*|agents, drugs and/or supplies administered or obtained in connection with care',
                 re.sub(r'^(?:specialist|primary care|PCP)\s+', '', clause, flags=re.I), re.I)) for clause in clauses]
@@ -206,6 +207,20 @@ def select_benefit_rows(payload: dict[str, Any], service_type_code: str,
                     entries = [row for row in entries if row.get('code') != kind or _procedure(row)
                                or row in specialist or row.get('serviceTypeCodes')
                                and set(row['serviceTypeCodes']).isdisjoint(specialist_stcs)]
+        # Humana's office response can put PCP, specialist, radiology and
+        # rehabilitation terms under the same STC 98 without POS on the rows.
+        # The named specialist visit is the applicable in-person term for a
+        # specialist; the other named services must not conflict with it.
+        if (place_of_service == '11' and office_role(provider_specialties or []) == 'specialist'
+                and any(row.get('code') == 'B' and '98' in (row.get('serviceTypeCodes') or [])
+                        and [note.strip().upper() for note in _benefit_notes(row.get('messages'))]
+                            == ['PHYSICIAN OFFICE VISIT SPECIALIST'] for row in entries)):
+            other_office_labels = {'PHYSICIAN OFFICE VISIT PCP',
+                                   'PHYSICIAN OFFICE VISIT FREESTANDING RAD CTR',
+                                   'PHYSICIAN OFFICE VISIT COMP OUTPT REHAB FACILITY'}
+            entries = [row for row in entries if row.get('code') not in {'A', 'B', 'F'}
+                       or [note.strip().upper() for note in _benefit_notes(row.get('messages'))]
+                           not in [[label] for label in other_office_labels]]
     def relevant_service(row: dict) -> bool:
         procedure = _procedure(row)
         if procedure:
