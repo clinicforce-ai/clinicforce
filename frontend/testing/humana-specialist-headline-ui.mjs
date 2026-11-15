@@ -38,6 +38,23 @@ try {
   assert.match(table, /Amount approved to collect at visit<\/th><td><span>\$0\.00/)
   assert.match(table, /\$40\.00 payer-reported specialist office copay/)
   assert.doesNotMatch(table, /Pending|Verify QMB|Confirm QMB|please/i)
+  const approved = { ...result, collection_guidance: { amount_cents: 4000,
+    status: 'estimated', basis: 'humana_specialist_copay_advance',
+    payer_reported_office_copay_cents: 4000 } }
+  const approvedModel = { ...model, supportedAmount: true, amount: '$40.00' }
+  const approvedHeadline = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
+    { model: approvedModel, result: approved, partialCopay: null, visibleAmount: true }))
+  const approvedTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+    { model: approvedModel, result: approved }))
+  assert.match(approvedHeadline, /Amount approved to collect at visit/)
+  assert.match(approvedHeadline, /<strong role="status">\$40\.00<\/strong>/)
+  assert.match(approvedTable, /Amount approved to collect at visit<\/th><td><span>\$40\.00/)
+  assert.match(approvedTable, /\$40\.00 payer-reported specialist office copay/)
+  assert.doesNotMatch(approvedHeadline + approvedTable, /Pending|Verify QMB|Confirm QMB|please/i)
+  const protectedHeadline = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
+    { model: approvedModel, result: { ...approved, billing_protection: { status: 'qmb' } },
+      partialCopay: null, visibleAmount: true }))
+  assert.doesNotMatch(protectedHeadline, /Amount approved to collect at visit<\/span><strong role="status">\$40\.00/)
   for (const unsafe of [
     { ...result, identity: { status: 'review' } },
     { ...result, billing_protection: { status: 'qmb' } },

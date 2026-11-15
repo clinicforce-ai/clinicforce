@@ -21,21 +21,42 @@ def scenario(amount=3800):
                     'requirements': {kind: {'required': 'unknown', 'cleared': False} for kind in ('referral', 'authorization')}}}]}}
 
 
-def test_humana_medical_status_message_keeps_medicare_qmb_collection_guard():
+def test_humana_medical_status_message_collects_refundable_specialist_copay():
     result = scenario(4000)
     result.update(payer='Humana Health Plan', plan_details={'stedi': {
         'names': ['Humana Honor'], 'medicare_ppo_evidence': 'synthetic-status'}})
     result['identity'] = {'status': 'matched', 'binding': 'synthetic-binding', 'match_version': 2}
     result['benefits'].update(identity=result['identity'], copay_cents=4000,
-                              coinsurance_percent='0', oop_remaining_cents=423799)
+                              coinsurance_percent='0', oop_remaining_cents=423799,
+                              service_date_matches=True)
     line = result['price_range']['lines'][0]
     line.update(allowed_cents=11362, allowed_basis='payer_fee_schedule',
                 rate_resolution={'status': 'RESOLVED'})
     line['benefits'].update(copay_cents=4000, coinsurance_percent='0',
-                            oop_remaining_cents=423799, copay_period='VISIT')
+                            oop_remaining_cents=423799, copay_period='VISIT',
+                            copay_id='synthetic-stedi-office-copay',
+                            reported_options=[{'id': 'synthetic-stedi-office-copay',
+                                'kind': 'copay', 'service_type_code': '98',
+                                'amount_cents': 4000, 'network': 'IN_NETWORK'}])
     guidance = collection_guidance.build(result)
-    assert guidance['amount_cents'] is None
-    assert 'Verify QMB status' in guidance['reason']
+    assert guidance['amount_cents'] == 4000
+    assert guidance['basis'] == 'humana_specialist_copay_advance'
+    assert guidance['collection_rule']['mode'] == 'humana_specialist_copay_advance'
+    assert encounter_summary.build({**result, 'collection_guidance': guidance})['collect_today_cents'] == 4000
+    paid = collection_guidance.build(result, {'payments': {'reference': 'synthetic-receipt', 'amount_cents': 1500}})
+    assert paid['amount_cents'] == 2500
+    for changed in (
+        {'billing_protection': {'status': 'qmb'}},
+        {'identity': {'status': 'review'}},
+        {'benefits': {**result['benefits'], 'has_secondary': True}},
+        {'benefits': {**result['benefits'], 'service_date_matches': False}},
+        {'price_range': {**result['price_range'], 'lines': [{**line, 'allowed_cents': None}]}},
+        {'price_range': {**result['price_range'], 'lines': [{**line, 'benefits': {
+            **line['benefits'], 'deductible_applies': True}}]}},
+        {'price_range': {**result['price_range'], 'lines': [{**line, 'benefits': {
+            **line['benefits'], 'copay_id': 'other-benefit'}}]}},
+    ):
+        assert collection_guidance.build({**result, **changed})['amount_cents'] is None
 
 
 def test_patient_share_and_collection_policy_are_independent():
