@@ -133,6 +133,10 @@ export function applyCostRowCopy(
     const coinsuranceRow = rows.find((row) => row.label === 'Coinsurance')
     if (coinsuranceRow) coinsuranceRow.value = '0% specialist office coinsurance'
   }
+  applyBluePpoFamilyQuote(rows, result)
+}
+
+export function applyBluePpoFamilyQuote(rows: CostBreakdownRow[], result: PrevisitEstimate) {
   const guidance = result.collection_guidance
   const mode = guidance?.collection_rule?.mode
   if (
