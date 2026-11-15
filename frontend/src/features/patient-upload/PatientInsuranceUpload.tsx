@@ -55,6 +55,7 @@ export default function PatientInsuranceUpload({
   const [clinic, setClinic] = useState<UploadClinic | null>(null)
   const [token, setToken] = useState(uploadCode)
   const [expiresAt, setExpiresAt] = useState('')
+  const [patientSpecific, setPatientSpecific] = useState(false)
   const [lookup, setLookup] = useState('')
   const [files, setFiles] = useState<File[]>([])
   const [cardFields, setCardFields] = useState<InsuranceCardFields>({})
@@ -98,6 +99,7 @@ export default function PatientInsuranceUpload({
           if (active) {
             setClinic({ npi: clinicCode, name: metadata.clinic_name })
             setExpiresAt(metadata.expires_at)
+            setPatientSpecific(metadata.patient_specific)
             setReceived(metadata.status === 'received')
           }
         } else {
@@ -170,6 +172,7 @@ export default function PatientInsuranceUpload({
     setCardMessage('')
     setError(validation)
     if (validation) return
+    if (patientSpecific) return
     setBusy(true)
     setBusyMessage('Reading your insurance card…')
     try {
@@ -290,7 +293,11 @@ export default function PatientInsuranceUpload({
           </header>
           {alerts}
           {received ? (
-            <PatientUploadReceipt clinic={clinic} receipt={receipt} />
+            <PatientUploadReceipt
+              clinic={clinic}
+              receipt={receipt}
+              patientSpecific={patientSpecific}
+            />
           ) : unavailable ? (
             <UnavailableUpload />
           ) : !clinic ? (
@@ -309,6 +316,7 @@ export default function PatientInsuranceUpload({
               files={files}
               busy={busy}
               cardMessage={cardMessage}
+              patientSpecific={patientSpecific}
               expiresAt={expiresAt}
               field={field}
               edit={edit}
@@ -318,7 +326,9 @@ export default function PatientInsuranceUpload({
             />
           )}
           <p className="staff-small staff-muted">
-            A clinic patient record is created automatically. No password or sign-in is needed.
+            {patientSpecific
+              ? 'Your clinic record receives the uploaded file. No password or sign-in is needed.'
+              : 'A clinic patient record is created automatically. No password or sign-in is needed.'}
           </p>
         </div>
       </section>

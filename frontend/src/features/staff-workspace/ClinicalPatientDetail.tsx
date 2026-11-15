@@ -3,6 +3,7 @@ import { ArrowLeft, ChevronRight, Mail, Trash2 } from 'lucide-react'
 import { type ClinicalPatient } from '../../services/api/staff-patients'
 import PatientAppointmentHistory from './PatientAppointmentHistory'
 import LatestSavedEstimate from './LatestSavedEstimate'
+import InsuranceCards from '../insurance-card/InsuranceCards'
 import { name, accountLabel, stateLabel } from './clinical-patient-labels'
 
 interface Props {
@@ -88,6 +89,14 @@ export default function ClinicalPatientDetail({
         <p className="staff-alert staff-error" role="alert">
           {error}
         </p>
+      )}
+      {selected.card_status === 'received' && selected.latest_intake_id && (
+        <InsuranceCards
+          key={selected.latest_intake_id}
+          intakeId={selected.latest_intake_id}
+          background
+          inline
+        />
       )}
       {selected.clinic_patient_id && selected.identity_status === 'confirmed' && (
         <LatestSavedEstimate

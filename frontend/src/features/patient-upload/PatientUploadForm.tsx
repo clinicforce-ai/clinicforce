@@ -10,6 +10,7 @@ interface Props {
   files: File[]
   busy: boolean
   cardMessage: string
+  patientSpecific: boolean
   expiresAt: string
   field: (name: PatientField) => string
   edit: (name: PatientField, value: string) => void
@@ -24,6 +25,7 @@ export default function PatientUploadForm({
   files,
   busy,
   cardMessage,
+  patientSpecific,
   expiresAt,
   field,
   edit,
@@ -64,96 +66,102 @@ export default function PatientUploadForm({
         )}
       </section>
       <section className="staff-panel">
-        <h2>Patient receiving care</h2>
-        <p className="staff-small staff-muted">
-          We fill available details from your signed-in account and card. Review them carefully if
-          the card shows a different policyholder.
-        </p>
-        {cardMessage && (
-          <p className="staff-small staff-muted" role="status">
-            {cardMessage}
-          </p>
-        )}
-        <div className="staff-two-columns">
-          <label className="staff-field">
-            <span>First name *</span>
-            <input
-              name="given_name"
-              value={field('given_name')}
-              onChange={(event) => edit('given_name', event.target.value)}
-              autoComplete="given-name"
-              maxLength={100}
-              required
-              disabled={busy}
-            />
-          </label>
-          <label className="staff-field">
-            <span>Last name *</span>
-            <input
-              name="family_name"
-              value={field('family_name')}
-              onChange={(event) => edit('family_name', event.target.value)}
-              autoComplete="family-name"
-              maxLength={100}
-              required
-              disabled={busy}
-            />
-          </label>
-          <label className="staff-field">
-            <span>Date of birth *</span>
-            <input
-              name="birth_date"
-              value={field('birth_date')}
-              onChange={(event) => edit('birth_date', event.target.value)}
-              type="date"
-              autoComplete="bday"
-              min="1900-01-01"
-              max={new Date().toLocaleDateString('en-CA')}
-              required
-              disabled={busy}
-            />
-          </label>
-          <label className="staff-field">
-            <span>Member ID, if available</span>
-            <input
-              name="member_id"
-              value={field('member_id')}
-              onChange={(event) => edit('member_id', event.target.value)}
-              autoComplete="off"
-              maxLength={80}
-              disabled={busy}
-            />
-          </label>
-          <label className="staff-field">
-            <span>Contact email for your clinic (optional)</span>
-            <input
-              name="email"
-              value={field('email')}
-              onChange={(event) => edit('email', event.target.value)}
-              type="email"
-              autoComplete="email"
-              maxLength={254}
-              disabled={busy}
-            />
-            <small>Your clinic can use this address to contact you about this submission.</small>
-          </label>
-        </div>
-        {account.available && (
-          <label className="staff-confirmation">
-            <input type="checkbox" name="link_account" value="true" disabled={busy} />
-            <span>
-              Also connect this submission to my signed-in ClinicForce account: {account.given_name}{' '}
-              {account.family_name}
-              {account.birth_date ? ` · ${account.birth_date}` : ''}. The patient name and date of
-              birth must match this account.
-            </span>
-          </label>
+        <h2>{patientSpecific ? 'Send to clinic' : 'Patient receiving care'}</h2>
+        {!patientSpecific && (
+          <>
+            <p className="staff-small staff-muted">
+              We fill available details from your signed-in account and card. Review them carefully
+              if the card shows a different policyholder.
+            </p>
+            {cardMessage && (
+              <p className="staff-small staff-muted" role="status">
+                {cardMessage}
+              </p>
+            )}
+            <div className="staff-two-columns">
+              <label className="staff-field">
+                <span>First name *</span>
+                <input
+                  name="given_name"
+                  value={field('given_name')}
+                  onChange={(event) => edit('given_name', event.target.value)}
+                  autoComplete="given-name"
+                  maxLength={100}
+                  required
+                  disabled={busy}
+                />
+              </label>
+              <label className="staff-field">
+                <span>Last name *</span>
+                <input
+                  name="family_name"
+                  value={field('family_name')}
+                  onChange={(event) => edit('family_name', event.target.value)}
+                  autoComplete="family-name"
+                  maxLength={100}
+                  required
+                  disabled={busy}
+                />
+              </label>
+              <label className="staff-field">
+                <span>Date of birth *</span>
+                <input
+                  name="birth_date"
+                  value={field('birth_date')}
+                  onChange={(event) => edit('birth_date', event.target.value)}
+                  type="date"
+                  autoComplete="bday"
+                  min="1900-01-01"
+                  max={new Date().toLocaleDateString('en-CA')}
+                  required
+                  disabled={busy}
+                />
+              </label>
+              <label className="staff-field">
+                <span>Member ID, if available</span>
+                <input
+                  name="member_id"
+                  value={field('member_id')}
+                  onChange={(event) => edit('member_id', event.target.value)}
+                  autoComplete="off"
+                  maxLength={80}
+                  disabled={busy}
+                />
+              </label>
+              <label className="staff-field">
+                <span>Contact email for your clinic (optional)</span>
+                <input
+                  name="email"
+                  value={field('email')}
+                  onChange={(event) => edit('email', event.target.value)}
+                  type="email"
+                  autoComplete="email"
+                  maxLength={254}
+                  disabled={busy}
+                />
+                <small>
+                  Your clinic can use this address to contact you about this submission.
+                </small>
+              </label>
+            </div>
+            {account.available && (
+              <label className="staff-confirmation">
+                <input type="checkbox" name="link_account" value="true" disabled={busy} />
+                <span>
+                  Also connect this submission to my signed-in ClinicForce account:{' '}
+                  {account.given_name} {account.family_name}
+                  {account.birth_date ? ` · ${account.birth_date}` : ''}. The patient name and date
+                  of birth must match this account.
+                </span>
+              </label>
+            )}
+          </>
         )}
         <label className="staff-confirmation">
           <input type="checkbox" required disabled={busy} />
           <span>
-            I am the patient or am authorized to submit on their behalf. I agree to send these
-            details and card files to {clinic.name} for insurance review.
+            I am the patient or am authorized to submit on their behalf. I agree to send this
+            insurance file to {clinic.name}.
           </span>
         </label>
         <button className="staff-primary staff-full" disabled={busy || !files.length}>

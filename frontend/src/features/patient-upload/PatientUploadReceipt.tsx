@@ -3,17 +3,21 @@ import type { UploadClinic, UploadReceipt } from '../../services/api/insurance-u
 export function PatientUploadReceipt({
   clinic,
   receipt,
+  patientSpecific,
 }: {
   clinic: UploadClinic | null
   receipt: UploadReceipt | null
+  patientSpecific: boolean
 }) {
   return (
     <section className="staff-panel">
       <CheckCircle2 className="staff-feature-icon" size={34} />
-      <h2>Ready for clinic review</h2>
+      <h2>Card received</h2>
       <p>
-        {clinic?.name} will confirm the patient details and review the card. This does not confirm
-        coverage or an appointment.
+        {patientSpecific
+          ? `Your file is saved on the clinic record at ${clinic?.name}.`
+          : `${clinic?.name} will review the card and patient details.`}{' '}
+        This does not confirm coverage or an appointment.
       </p>
       {receipt && (
         <p className="staff-small staff-muted">

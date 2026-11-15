@@ -288,7 +288,8 @@ async def patient_cards(intake_id: str, request: Request):
     """
     staff = await require_staff(request)
     intake = await owned_intake(intake_id, staff)
-    sources = await run_in_threadpool(staff_store.patient_card_intakes, staff['practice_id'], intake['patient']['id']) if intake.get('patient') else [intake]
+    patient = intake.get('patient') or (intake.get('expected_patient') if intake.get('source') == 'patient_upload' else None)
+    sources = await run_in_threadpool(staff_store.patient_card_intakes, staff['practice_id'], patient['id']) if patient else [intake]
     cards = [{"id": item['id'], "title": item['filename'], "content_type": item['content_type'], "source": "clinicforce_upload",
               "url": f"/api/staff/intakes/{quote(source['id'], safe='')}/documents/{quote(item['id'], safe='')}"}
              for source in sources for item in source['documents']]

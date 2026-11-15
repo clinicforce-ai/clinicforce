@@ -37,9 +37,12 @@ export const getUploadClinic = (npi: string) =>
 export const startPatientUpload = (npi: string) =>
   request<PatientUploadLink>('/api/insurance-upload/start', json({ npi }))
 export const getPatientUpload = (code: string, token: string) =>
-  request<{ clinic_name: string; expires_at: string; status: 'pending' | 'received' }>(
-    `/api/insurance-upload/${encodeURIComponent(code)}/${encodeURIComponent(token)}`,
-  )
+  request<{
+    clinic_name: string
+    expires_at: string
+    status: 'pending' | 'received'
+    patient_specific: boolean
+  }>(`/api/insurance-upload/${encodeURIComponent(code)}/${encodeURIComponent(token)}`)
 export const readPatientInsuranceCard = (code: string, token: string, body: FormData) =>
   request<{ fields: InsuranceCardFields }>(
     `/api/insurance-upload/${encodeURIComponent(code)}/${encodeURIComponent(token)}/read-card`,

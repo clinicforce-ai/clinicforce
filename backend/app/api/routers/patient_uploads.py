@@ -122,10 +122,11 @@ async def create_link(body: Create, request: Request):
 
 @router.get("/api/staff/patients/dashboard")
 async def patient_dashboard(request: Request):
-    """List practice-owned patients with minimal, last-verified eCW visit-date snapshots.
+    """List practice-owned patients, card receipt, and last-verified eCW visit-date snapshots.
 
     Cached dates are scoped to the current confirmed eCW link. Refreshing the
     appointment history updates them; an incomplete read retains the old snapshot.
+    A patient-specific upload counts as received before any card OCR or coverage check.
     """
     actor = await staff.require_staff(request)
     return JSONResponse(await run_in_threadpool(staff_store.patient_dashboard, actor["practice_id"]), headers=HEADERS)
@@ -145,10 +146,12 @@ async def revoke(link_id: str, request: Request):
 
 @router.get("/api/insurance-upload/{clinic_code}/{upload_code}")
 async def get_metadata(clinic_code: LegacyClinicCode, upload_code: UploadCode):
+    """Return link state and whether it targets a clinic patient, without patient details."""
     # Retain active pre-NPI private links until they expire. Public discovery
     # accepts NPIs only, and every new link stores the clinic NPI.
     row = await call(links.metadata, clinic_code, upload_code)
-    return JSONResponse({"clinic_name": row["clinic_name"], "expires_at": row["expires_at"], "status": row["status"]}, headers=HEADERS)
+    return JSONResponse({"clinic_name": row["clinic_name"], "expires_at": row["expires_at"], "status": row["status"],
+                         "patient_specific": bool(row["expected_patient_id"])}, headers=HEADERS)
 
 
 @router.post("/api/insurance-upload/{clinic_code}/{upload_code}/read-card")
@@ -168,20 +171,28 @@ async def read_patient_card(clinic_code: LegacyClinicCode, upload_code: UploadCo
 
 @router.post("/api/insurance-upload/{clinic_code}/{upload_code}")
 async def submit(clinic_code: LegacyClinicCode, upload_code: UploadCode, request: Request,
-                 files: list[UploadFile] = File(...), given_name: str = Form(..., min_length=1, max_length=100),
-                 family_name: str = Form(..., min_length=1, max_length=100), birth_date: date = Form(...),
+                 files: list[UploadFile] = File(...), given_name: str = Form(default="", max_length=100),
+                 family_name: str = Form(default="", max_length=100), birth_date: date | None = Form(default=None),
                  consent: bool = Form(...), member_id: str = Form(default="", max_length=80),
                  submission_id: str | None = Form(default=None, max_length=100),
                  email: str = Form(default="", max_length=254), link_account: bool = Form(default=False)):
+    """Save PDF/images and receipt; a patient-specific link uses its requested clinic record.
+
+    No card OCR or staff confirmation is required for that link. Generic links
+    require a patient name and birth date for a new unverified intake. Receipt
+    does not establish coverage or card authenticity.
+    """
     staff.check_origin(request)
     row = await call(links.metadata, clinic_code, upload_code)
     await call(links.check_rate, request_address(request), row["practice_id"], "submit")
     if not consent:
         raise HTTPException(422, "Confirm that you agree to send this information to the clinic.", headers=HEADERS)
-    if not given_name.strip() or not family_name.strip() or not date(1850, 1, 1) <= birth_date <= date.today():
+    if not row["expected_patient_id"] and (not given_name.strip() or not family_name.strip() or not birth_date):
+        raise HTTPException(422, "Enter the patient's name and a valid date of birth.", headers=HEADERS)
+    if birth_date and not date(1850, 1, 1) <= birth_date <= date.today():
         raise HTTPException(422, "Enter the patient's name and a valid date of birth.", headers=HEADERS)
     prepared = await prepared_cards(files)
-    fields = {"given_name": given_name.strip(), "family_name": family_name.strip(), "birth_date": birth_date.isoformat()}
+    fields = {} if row["expected_patient_id"] else {"given_name": given_name.strip(), "family_name": family_name.strip(), "birth_date": birth_date.isoformat()}
     if member_id.strip():
         fields["member_id"] = member_id.strip()
     if email.strip():
@@ -190,7 +201,7 @@ async def submit(clinic_code: LegacyClinicCode, upload_code: UploadCode, request
         except ValueError as exc:
             raise HTTPException(422, str(exc), headers=HEADERS) from None
     from app.api.routers.patient_clinic_account import portal_patient_for_upload
-    portal_patient_id = await portal_patient_for_upload(request, fields, link_account)
+    portal_patient_id = await portal_patient_for_upload(request, fields, link_account) if not row["expected_patient_id"] else None
     try:
         result, is_new = await call(links.submit, clinic_code, upload_code, fields, prepared, submission_id, portal_patient_id)
     except HTTPException:

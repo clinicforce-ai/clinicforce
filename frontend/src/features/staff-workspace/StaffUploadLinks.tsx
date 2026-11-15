@@ -171,8 +171,10 @@ export default function StaffUploadLinks({
       <section className="staff-panel">
         <h2>Private patient link</h2>
         <p className="staff-muted">
-          The link accepts one submission and expires automatically. Staff confirm the submitted
-          name and date of birth before linking a patient record.
+          The link accepts one submission and expires automatically.{' '}
+          {patientId || intakeId
+            ? 'The uploaded file appears directly on this clinic record.'
+            : 'A new clinic record is created from the submitted details.'}
         </p>
         <form
           onSubmit={(event) => {
@@ -293,7 +295,9 @@ export default function StaffUploadLinks({
                   <strong>
                     {link.patient_id ? 'Existing patient request' : 'New patient request'} ·{' '}
                     {link.status === 'received' || link.status === 'submitted'
-                      ? 'Received — awaiting staff review'
+                      ? link.patient_id
+                        ? 'Card received'
+                        : 'Received — identify patient'
                       : link.status.replaceAll('_', ' ')}
                   </strong>
                   <small>Created {new Date(link.created_at).toLocaleString()}</small>

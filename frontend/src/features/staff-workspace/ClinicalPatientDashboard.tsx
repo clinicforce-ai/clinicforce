@@ -113,6 +113,37 @@ export default function ClinicalPatientDashboard({
   useEffect(() => {
     if (!dashboard) return
     let active = true
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return
+      void getClinicalPatients()
+        .then((updated) => {
+          if (!active) return
+          const previous = new Map(dashboard.patients.map((patient) => [patient.id, patient]))
+          if (
+            !updated.patients.some(
+              (patient) =>
+                previous.get(patient.id)?.card_status !== patient.card_status ||
+                previous.get(patient.id)?.latest_intake_id !== patient.latest_intake_id,
+            )
+          )
+            return
+          setDashboard(updated)
+          setSelected((current) =>
+            current
+              ? updated.patients.find((patient) => patient.id === current.id) || current
+              : null,
+          )
+        })
+        .catch(() => {})
+    }, 15_000)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [dashboard])
+  useEffect(() => {
+    if (!dashboard) return
+    let active = true
     getTodayAppointments()
       .then((result) => {
         if (active) setTodaySnapshot(result)

@@ -244,11 +244,12 @@ def get_intake(intake_id: str, practice_id: str) -> dict | None:
 
 
 def patient_card_intakes(practice_id: str, patient_id: str) -> list[dict]:
-    """Only confirmed intakes for the same clinic patient can supply card previews."""
+    """Include cards sent through a staff-created link for this clinic patient."""
     with _connection() as connection:
         rows = connection.execute("""SELECT id,documents,fields FROM staff_intakes
-            WHERE practice_id=%s AND patient_id=%s AND jsonb_array_length(documents)>0
-            ORDER BY updated_at DESC""", (practice_id, patient_id)).fetchall()
+            WHERE practice_id=%s AND (patient_id=%s OR (source='patient_upload' AND expected_patient_id=%s))
+              AND jsonb_array_length(documents)>0
+            ORDER BY updated_at DESC""", (practice_id, patient_id, patient_id)).fetchall()
     return [dict(row) for row in rows]
 
 

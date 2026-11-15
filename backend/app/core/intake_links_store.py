@@ -182,17 +182,20 @@ def submit(clinic_code: str, code: str, fields: dict, prepared: list[tuple[str, 
             event["upload_link_id"] = row["id"]
             event["consent"] = "Patient agreed to send insurance information to this clinic"
             expected = connection.execute("SELECT * FROM staff_patients WHERE id=%s AND practice_id=%s", (row["expected_patient_id"], row["practice_id"])).fetchone() if row["expected_patient_id"] else None
-            matches_expected = expected and all(str(expected[key]).strip().casefold() == str(fields[key]).strip().casefold() for key in ("given_name", "family_name", "birth_date"))
-            auto_patient_id = expected["id"] if matches_expected else str(uuid4())
-            if not matches_expected:
+            auto_patient_id = expected["id"] if expected else str(uuid4())
+            if expected:
+                fields = {**fields, **{key: str(expected[key]) for key in ("given_name", "family_name", "birth_date")}}
+            else:
                 connection.execute("""INSERT INTO staff_patients (id,practice_id,given_name,family_name,birth_date,email,identity_status,created_at)
                     VALUES (%s,%s,%s,%s,%s,%s,'unverified',%s)""",
                     (auto_patient_id, row["practice_id"], fields["given_name"], fields["family_name"], fields["birth_date"], fields.get("email"), stamp))
             connection.execute("""INSERT INTO staff_intakes
-                (id,practice_id,created_by,status,fields,field_sources,documents,events,warning,created_at,updated_at,source,upload_link_id,expected_patient_id,auto_patient_id,source_portal_patient_id)
-                VALUES (%s,%s,NULL,'needs_confirmation',%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s,%s,%s,'patient_upload',%s,%s,%s,%s)""",
-                (intake_id, row["practice_id"], json.dumps(fields), json.dumps({key: "patient_provided" for key in fields}), json.dumps(documents), json.dumps([event]),
-                 "Patient-submitted details have not been confirmed. Read the saved card and confirm the patient before starting insurance review.", stamp, stamp, row["id"], row["expected_patient_id"], auto_patient_id, source_portal_patient_id))
+                (id,practice_id,created_by,patient_id,status,fields,field_sources,documents,events,warning,created_at,updated_at,source,upload_link_id,expected_patient_id,auto_patient_id,source_portal_patient_id)
+                VALUES (%s,%s,NULL,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s,%s,%s,'patient_upload',%s,%s,%s,%s)""",
+                (intake_id, row["practice_id"], expected["id"] if expected else None, "ready" if expected else "needs_confirmation",
+                 json.dumps(fields), json.dumps({key: "clinic_record" if expected and key in ("given_name", "family_name", "birth_date") else "patient_provided" for key in fields}), json.dumps(documents), json.dumps([event]),
+                 None if expected else "Patient-submitted details have not been confirmed. Read the saved card and confirm the patient before starting insurance review.",
+                 stamp, stamp, row["id"], row["expected_patient_id"], auto_patient_id, source_portal_patient_id if not expected else None))
             saved = connection.execute("""UPDATE insurance_upload_links SET status='received',submitted_at=%s,intake_id=%s,
                 receipt_id=%s,submission_hash=%s,submission_id=%s,events=events || %s::jsonb WHERE id=%s RETURNING *""",
                 (stamp, intake_id, str(uuid4()), digest, submission_id, json.dumps([event]), row["id"])).fetchone()
