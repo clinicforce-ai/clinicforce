@@ -100,6 +100,19 @@ export default function ArrivalAmountSummary({
   referenceOnly?: boolean
   visibleAmount: boolean
 }) {
+  const humanaCopay = pendingHumanaSpecialistCopay(result, model)
+  if (humanaCopay != null) {
+    return (
+      <>
+        <span>Amount approved to collect at visit</span>
+        <strong role="status">{money(0)}</strong>
+        <p>
+          Stedi reports a {money(humanaCopay)} specialist office copay. No positive advance is
+          approved from this record. Final responsibility follows the processed claim.
+        </p>
+      </>
+    )
+  }
   if (
     !model.cash &&
     !model.previousEstimate &&
@@ -224,7 +237,6 @@ export default function ArrivalAmountSummary({
       '',
   )
   const pendingCignaCopay = pendingCignaOfficeCopay(result, model)
-  const pendingHumanaCopay = pendingHumanaSpecialistCopay(result, model)
   const pendingUhcHmoPosCopay =
     partialCopay != null &&
     /\bhmopos\b/i.test(result.plan_details?.stedi?.names?.[0] || '') &&
@@ -267,27 +279,25 @@ export default function ArrivalAmountSummary({
                           ? officePolicyPending
                             ? 'Amount to collect at visit · pending policy approval'
                             : 'Planned amount to collect at visit'
-                          : pendingHumanaCopay != null
-                            ? 'Amount to collect at visit · verify Medicare protection'
-                            : pendingAetnaCopay != null ||
-                                pendingCignaCopay != null ||
-                                pendingBluecardCopay != null
-                              ? 'Amount to collect at visit · pending verification'
-                              : partialCopay != null
-                                ? pendingUhcHmoPosCopay
-                                  ? 'Amount to collect at visit · verify Medicare protection'
-                                  : referenceOnly
-                                    ? 'Office-only reference · collection pending'
-                                    : 'Suggested amount to collect at visit'
-                                : cardPlanningCopay != null
-                                  ? 'Card-based office suggestion · collection pending'
-                                  : priorDateAetnaCopay != null
-                                    ? aetnaMedicareScenario
-                                      ? 'Aetna office copay · Medicare review'
-                                      : 'Payer-reported office copay'
-                                    : needsAction
-                                      ? 'Next step'
-                                      : model.amountLabel}
+                          : pendingAetnaCopay != null ||
+                              pendingCignaCopay != null ||
+                              pendingBluecardCopay != null
+                            ? 'Amount to collect at visit · pending verification'
+                            : partialCopay != null
+                              ? pendingUhcHmoPosCopay
+                                ? 'Amount to collect at visit · verify Medicare protection'
+                                : referenceOnly
+                                  ? 'Office-only reference · collection pending'
+                                  : 'Suggested amount to collect at visit'
+                              : cardPlanningCopay != null
+                                ? 'Card-based office suggestion · collection pending'
+                                : priorDateAetnaCopay != null
+                                  ? aetnaMedicareScenario
+                                    ? 'Aetna office copay · Medicare review'
+                                    : 'Payer-reported office copay'
+                                  : needsAction
+                                    ? 'Next step'
+                                    : model.amountLabel}
       </span>
       <strong
         className={
@@ -299,7 +309,6 @@ export default function ArrivalAmountSummary({
           !bluecardDeductible &&
           !aetnaPlanning &&
           officeBalance == null &&
-          pendingHumanaCopay == null &&
           pendingAetnaCopay == null &&
           pendingBluecardCopay == null &&
           pendingCignaCopay == null &&
@@ -333,23 +342,21 @@ export default function ArrivalAmountSummary({
                           ? officePolicyPending
                             ? `Pending · ${money(officeBalance)}`
                             : money(officeBalance)
-                          : pendingHumanaCopay != null
-                            ? `Pending · ${money(pendingHumanaCopay)}`
-                            : pendingAetnaCopay != null
-                              ? `Pending · ${money(pendingAetnaCopay)}`
-                              : pendingBluecardCopay != null
-                                ? `Pending · ${money(pendingBluecardCopay)}`
-                                : pendingCignaCopay != null
-                                  ? `Pending · ${money(pendingCignaCopay)}`
-                                  : partialCopay != null
-                                    ? money(partialCopay)
-                                    : cardPlanningCopay != null
-                                      ? money(cardPlanningCopay)
-                                      : priorDateAetnaCopay != null
-                                        ? money(priorDateAetnaBalance!)
-                                        : needsAction
-                                          ? action.title
-                                          : model.amountText}
+                          : pendingAetnaCopay != null
+                            ? `Pending · ${money(pendingAetnaCopay)}`
+                            : pendingBluecardCopay != null
+                              ? `Pending · ${money(pendingBluecardCopay)}`
+                              : pendingCignaCopay != null
+                                ? `Pending · ${money(pendingCignaCopay)}`
+                                : partialCopay != null
+                                  ? money(partialCopay)
+                                  : cardPlanningCopay != null
+                                    ? money(cardPlanningCopay)
+                                    : priorDateAetnaCopay != null
+                                      ? money(priorDateAetnaBalance!)
+                                      : needsAction
+                                        ? action.title
+                                        : model.amountText}
       </strong>
       {dsnpOffice ? (
         <p>
@@ -416,12 +423,6 @@ export default function ArrivalAmountSummary({
           {officePolicyPending
             ? 'Clinic policy approval is required before collection.'
             : 'Planning estimate; confirm the final allowed charge before collection.'}
-        </p>
-      ) : pendingHumanaCopay != null ? (
-        <p>
-          Stedi reported this in-network specialist copay for the matched member and visit date.
-          Verify QMB protection, deductible applicability, any required referral and prior payments
-          before charging. Final responsibility follows the processed claim.
         </p>
       ) : pendingAetnaCopay != null ? (
         <p>

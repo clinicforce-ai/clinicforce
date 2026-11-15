@@ -69,6 +69,7 @@ export default function CommercialOverview({
     aetnaReferenceCopay ?? humanaReferenceCopay ?? copay.payerReportedPartialCopay(result, model)
   const pendingAetnaCopay = copay.aetnaPendingOfficeCopay(result, model)
   const pendingBluecardCopay = pendingBluecardOfficeCopay(result, model)
+  const humanaCopay = pendingHumanaSpecialistCopay(result, model)
   const cardPlanningCents =
     payerReportedPartialCents == null ? copay.cardOfficePlanningCopay(result, model) : null
   const combinedPlan = !cash && !previousEstimate ? result.combined_emg_plan : null
@@ -93,7 +94,7 @@ export default function CommercialOverview({
     payerReportedPartialCents != null ||
     pendingAetnaCopay != null ||
     pendingBluecardCopay != null ||
-    pendingHumanaSpecialistCopay(result, model) != null ||
+    humanaCopay != null ||
     copay.aetnaPriorDateReferenceCopay(result, model) != null ||
     cardPlanningCents != null
   const patientBenefitsBound = hasPatientBinding(result.identity)
@@ -131,7 +132,9 @@ export default function CommercialOverview({
       <div className="overview-heading">
         <h2 id={featured ? 'latest-payment-heading' : 'payment-heading'}>
           {readOnly
-            ? 'Saved visit estimate'
+            ? humanaCopay != null
+              ? 'Saved visit collection decision'
+              : 'Saved visit estimate'
             : automaticCashFallback
               ? 'Insurance review · cash option'
               : cash

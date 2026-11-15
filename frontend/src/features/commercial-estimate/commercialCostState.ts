@@ -92,7 +92,7 @@ export function pendingHumanaPatientShare(
     model.estimatedShare ||
     (copay == null
       ? null
-      : `${money(copay)} payer-reported office copay scenario · collection pending`)
+      : `${money(copay)} payer-reported specialist office copay; full patient share unresolved`)
   )
 }
 
@@ -121,7 +121,18 @@ export function visibleRateReference(result: PrevisitEstimate) {
   }
 }
 
-export function applyBluePpoFamilyQuote(rows: CostBreakdownRow[], result: PrevisitEstimate) {
+export function applyCostRowCopy(
+  rows: CostBreakdownRow[],
+  result: PrevisitEstimate,
+  model: CommercialEstimateModel,
+) {
+  if (pendingHumanaSpecialistCopay(result, model) != null) {
+    const copayRow = rows.find((row) => row.label === 'Copay')
+    if (copayRow)
+      copayRow.detail = 'Stedi reports this specialist office copay for the selected visit date.'
+    const coinsuranceRow = rows.find((row) => row.label === 'Coinsurance')
+    if (coinsuranceRow) coinsuranceRow.value = '0% specialist office coinsurance'
+  }
   const guidance = result.collection_guidance
   const mode = guidance?.collection_rule?.mode
   if (
