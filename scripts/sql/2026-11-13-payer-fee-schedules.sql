@@ -67,7 +67,7 @@ INSERT INTO payer_fee_schedule (payer_key, category, code, description, allowed_
     ('multiplan', 'phcs', '11104', 'Punch bx skin single lesion', 11660, 'BCBSTX Blue Choice PPO Clinical Library fee row, verified 2026-11-13', '2026-11-13'),
     ('multiplan', 'phcs', '11105', 'Punch bx skin ea sep/addl', 5625, 'BCBSTX Blue Choice PPO Clinical Library fee row, verified 2026-11-13', '2026-11-13'),
     ('multiplan', 'phcs', '96372', 'Ther/proph/diag inj sc/im', 1343, 'Clinic-approved Network Payer Info NMCT workbook, Fee NMCT, 2026-11-13', '2026-11-13'),
-    ('humana', 'medicare', '99203', 'Office o/p new low 30 min', 11362, 'Clinic-approved Humana Medicare schedule supplied 2026-11-13', '2026-11-13'),
+    ('humana', 'medicare', '99203', 'Office o/p new low 30 min', 11362, 'Humana Availity Essentials 005/770, CPT 99203, user-supplied 2026-11-14: global component $119.60; differential component $73.83 (source value, not added to allowance). Clinic contract 95% of global = $113.62, subject to billed-charge and site-of-service terms.', '2026-11-13'),
     ('humana', 'medicare', '99204', 'Office o/p new mod 45 min', 17147, 'Clinic-approved Humana Medicare schedule supplied 2026-11-13', '2026-11-13'),
     ('humana', 'medicare', '99205', 'Office o/p new hi 60 min', 22943, 'Clinic-approved Humana Medicare schedule supplied 2026-11-13', '2026-11-13'),
     ('humana', 'medicare', '99213', 'Office o/p est low 20 min', 9151, 'Clinic-approved Humana Medicare schedule supplied 2026-11-13', '2026-11-13'),
