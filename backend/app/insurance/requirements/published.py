@@ -4,11 +4,11 @@ source version and date, never member approval.
 """
 from __future__ import annotations
 import re
-from datetime import date
 from app.insurance import cpt_rules, stedi_cpt_authorization
 from app.insurance.identity import generic_plan_label, payer_identity_verified
 from app.insurance.library_network_exclusions import product_kind
 from app.insurance.requirements.evidence import _key
+from app.insurance.requirements.aetna_choice_pos_ii import prior_date_office
 from app.insurance.requirements.uhc_choice_plus import UHC_TEXAS_CHOICE_PLUS_SOURCE, _uhc_choice_plus_referral
 from app.insurance.requirements.fep_sources import FEP_PSHB_2026_SOURCE, FEP_STANDARD_2026_SOURCE
 BCBSTX_PAYER_NAMES = {'bcbstx', 'bcbstexas', 'bluecrossblueshieldoftexas',
@@ -204,22 +204,7 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
     identity = result.get('identity') or benefits.get('identity') or {}
     day = str(context.get('service_date') or '')
     payer_names = context.get('payer_names') or set()
-    prior_date_aetna_choice = False
-    prior_date_benefits = result.get('reference_benefits') or benefits
-    try:
-        prior_date_aetna_choice = (
-            'aetna' in payer_names
-            and benefits.get('active') is True and benefits.get('service_date_matches') is False
-            and prior_date_benefits.get('active') is True
-            and 1 <= (date.fromisoformat(day) - date.fromisoformat(str(
-                (prior_date_benefits.get('returned_service_dates') or {}).get('start') or ''))).days <= 7
-            and {_key(plan) for plan in plans if not generic_plan_label(plan)} == {'aetnachoiceposii'}
-            and codes == {'99203'} and str(context.get('pos') or '') == '11'
-            and benefits.get('network_status') != 'out_of_network'
-            and not benefits.get('network_conflict')
-            and not benefits.get('coverage_status_conflict') and not benefits.get('source_errors'))
-    except ValueError:
-        pass
+    prior_date_aetna_choice = prior_date_office(result, context, plans, codes)
     same_day_bcbstx_visit = (
         (kind == 'referral' or kind == 'authorization' and codes == {'99213'}
          and str(context.get('pos') or '') == '11')

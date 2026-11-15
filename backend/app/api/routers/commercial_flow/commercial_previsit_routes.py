@@ -25,13 +25,8 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     271 secondary payer; it does not verify Medicare entitlement or claim order.
     Fresh saved Cigna responses are reparsed without treating an exact
     "Attribution Status - Not applicable" STC 30 exclusion as inactive coverage.
-    Card-printed tiered office copays remain reference-only until the visit's
-    coverage, network, service and collection checks pass.
-    aetna_office_planning is a read-only conditional specialist office share
-    from the current approved Aetna fee and a patient-bound prior-date 271
-    within seven days of the visit. It
-    exposes deductible-applies and deductible-waived scenarios with collectable
-    false; it does not replace collection_guidance or verify visit-date coverage.
+    Card-printed tiered office copays remain reference-only until visit coverage, network, service and collection checks pass.
+    aetna_office_planning shows conditional deductible-applies/waived specialist shares from the current Aetna fee and a patient-bound 271 within seven days; collectable is false, and collection_guidance and visit-date coverage are unchanged.
     A saved Cigna OAP specialist video visit can reapply the current member-bound
     payer office copay with zero office deductible and coinsurance without a new
     Stedi call; a readable matched card must agree with the payer copay.

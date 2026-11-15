@@ -22,6 +22,8 @@ def estimate(result: dict, inputs: dict) -> dict | None:
     except ValueError:
         return None
     if (result.get('payment_mode') == 'cash'
+            or ((result.get('collection_guidance') or {}).get('collection_rule') or {}).get('mode')
+                in {'cms_msp_part_b_deferral', 'aetna_choice_family_oop_deferral'}
             or aetna_fees.category(str(result.get('payer') or ''), names) != 'commercial'
             or benefits.get('active') is not True or benefits.get('service_date_matches') is not False
             or not 1 <= (day - response_day).days <= 7 or not patient_benefits_bound(identity)
@@ -74,3 +76,14 @@ def estimate(result: dict, inputs: dict) -> dict | None:
             'deductible_waived_cents': waived, 'payer_response_date': response_day.isoformat(),
             'service_date': visit_day, 'rate_source': rates[0].get('source_reference'),
             'collectable': False}
+
+
+def attach(result: dict, inputs: dict) -> None:
+    """Refresh a saved display without failing the read when fee storage is down."""
+    result.pop('aetna_office_planning', None)
+    try:
+        planning = estimate(result, inputs)
+    except Exception:
+        return
+    if planning:
+        result['aetna_office_planning'] = planning

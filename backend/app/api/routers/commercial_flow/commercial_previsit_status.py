@@ -386,15 +386,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         _recheck_saved_payer_allowance(result, case, practice_id)
         refresh_saved_requirements(_api, result, case, practice_id)
         refresh_saved_cross_payer_planning(result, case, practice_id, route_payer)
-        # Rebuild the reference from current approved fees on every read. It is
-        # separate from collection guidance and never makes a prior-date 271 current.
-        result.pop('aetna_office_planning', None)
-        try:
-            planning = aetna_office_planning.estimate(result, case['previsit_context'].get('inputs') or {})
-        except Exception:
-            planning = None  # Missing fee storage must not break a saved visit.
-        if planning:
-            result['aetna_office_planning'] = planning
+        aetna_office_planning.attach(result, case['previsit_context'].get('inputs') or {})
     result['revision'] = case.get('revision', 0)
     check_from = max(_api._insurance_check_from(case) or '',
         ((case['previsit_context'].get('source', {}).get('coverage_period') or {}).get('start') or '')[:10])

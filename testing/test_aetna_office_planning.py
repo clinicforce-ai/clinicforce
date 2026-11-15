@@ -84,6 +84,15 @@ def test_old_or_explicitly_out_of_network_response_cannot_set_office_planning():
     assert aetna_office_planning.estimate(result, inputs) is None
 
 
+def test_explicit_claim_deferral_is_not_replaced_by_office_planning():
+    result, inputs = _case()
+    result['collection_guidance'] = {
+        'amount_cents': 0,
+        'collection_rule': {'mode': 'aetna_choice_family_oop_deferral'},
+    }
+    assert aetna_office_planning.estimate(result, inputs) is None
+
+
 def test_choice_pos_ii_published_office_requirements_keep_member_check():
     result, inputs = _case()
     result['benefits'] = result['reference_benefits']
