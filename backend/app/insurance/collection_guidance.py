@@ -35,8 +35,7 @@ def build(result: dict, review: dict | None = None) -> dict:
     assumptions.extend(note for line in lines for note in line.get('benefits', {}).get('benefit_assumptions', []))
     actions = []
     candidate_network = (result.get('mapping_candidate') or {}).get('network') if collection_benefits.get('network_status') == 'unknown' else None
-    guidance = {'amount_cents': None, 'status': 'action_required', 'basis': 'missing_collection_inputs',
-                'office_visit_copay_advance': None,
+    guidance = {'amount_cents': None, 'status': 'action_required', 'basis': 'missing_collection_inputs', 'office_visit_copay_advance': None,
                 'reason': 'The available benefits do not establish an advance collection amount.',
                 'patient_message': 'Your payment amount is not yet calculated. Missing information does not mean your patient responsibility is zero.',
                 'assumptions': assumptions, 'patient_actions': actions, 'services': [],
