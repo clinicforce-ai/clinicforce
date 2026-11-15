@@ -451,24 +451,19 @@ def build(result: dict, review: dict | None = None) -> dict:
     secondary_order.apply_part_b_deferral(result, guidance, source_errors, member_bound, ma_ppo)
     apply_family_oop_deferrals(result, guidance, member_bound=member_bound, source_errors=source_errors, adverse=bool(adverse), same_policy_conflict=same_policy_conflict)
     apply_trs_hd_office_refundable_deposit(result, guidance, member_bound=member_bound, source_errors=source_errors, adverse=bool(adverse), same_policy_conflict=same_policy_conflict, review=review)
-    apply_bluecard_family_deposit(result, guidance, review, safe=bool(safe),
-        qmb_protected=bool(qmb_protected), qmb_unresolved=bool(qmb_unresolved))
+    apply_bluecard_family_deposit(result, guidance, review, safe=bool(safe), qmb_protected=bool(qmb_protected), qmb_unresolved=bool(qmb_unresolved))
     apply_blue_ppo_family_quote(result, guidance, review, assumptions, safe=bool(safe))
     apply_cigna_quotes(result, guidance, review, assumptions, safe=bool(safe))
-    apply_humana_office_copay(result, guidance, review, allowed=(
-        not qmb_protected and not adverse and not source_errors and not line_blocker
-        and not same_policy_conflict and not unresolved_order and not unconfirmed_zero_oop))
+    apply_humana_office_copay(result, guidance, review, allowed=not any((qmb_protected, adverse, source_errors, line_blocker, same_policy_conflict, unresolved_order, unconfirmed_zero_oop)))
     for line in lines:
         mapped = 'needs mapping' not in line.get('benefit_basis', '')
         terms = (line.get('benefits') or {}) if mapped else {}
         guidance['services'].append({'id': line.get('id'), 'code': line.get('code'),
-            'benefit_source': line.get('benefit_source') or result.get('benefit_source'),
-            'benefit': (line.get('benefit_basis') or 'Applicable service benefits') if mapped else 'Benefit determined when claim is processed',
+            'benefit_source': line.get('benefit_source') or result.get('benefit_source'), 'benefit': (line.get('benefit_basis') or 'Applicable service benefits') if mapped else 'Benefit determined when claim is processed',
             'patient_cents': (line.get('calculation') or {}).get('patient_cents') if safe and amount is not None and guidance['basis'] != 'claim_after_service' else None,
             'oop_remaining_cents': terms.get('oop_remaining_cents'),
             'copay_cents': terms.get('copay_cents'), 'coinsurance_percent': terms.get('coinsurance_percent'),
-            'deductible_remaining_cents': terms.get('deductible_remaining_cents'),
-            'deductible_annual_cents': terms.get('deductible_annual_cents'),
+            'deductible_remaining_cents': terms.get('deductible_remaining_cents'), 'deductible_annual_cents': terms.get('deductible_annual_cents'),
             'deductible_applicability': terms.get('deductible_applicability', 'UNKNOWN'),
             'selected_benefit_ids': list(dict.fromkeys([*(terms.get('selected_benefit_ids') or []),
                 *[terms[key] for key in ('deductible_id', 'oop_id') if terms.get(key)]]))})
