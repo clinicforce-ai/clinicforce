@@ -166,6 +166,7 @@ export function useStaffWorkspaceModel(props: StaffWorkspaceProps) {
   }
   function requestPatientCard(patient?: ClinicalPatient) {
     setLinkBack('patients')
+    setHistoryPatientId(patient?.clinic_patient_id || patient?.id)
     setLinkPatient(
       patient
         ? {

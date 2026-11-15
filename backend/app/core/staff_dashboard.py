@@ -10,7 +10,7 @@ def patient_dashboard(practice_id: str, *, connection: Callable, hash_value: Cal
     with connection() as db:
         patients = db.execute("SELECT * FROM staff_patients WHERE practice_id=%s", (practice_id,)).fetchall()
         pending_cleanup = db.execute("SELECT count(*) AS count FROM staff_deletions WHERE practice_id=%s AND object_keys <> '[]'::jsonb", (practice_id,)).fetchone()["count"]
-        intakes = db.execute("""SELECT id,patient_id,auto_patient_id,source_portal_patient_id,fields,status,source,created_at,updated_at,
+        intakes = db.execute("""SELECT id,patient_id,auto_patient_id,expected_patient_id,source_portal_patient_id,fields,status,source,created_at,updated_at,
             jsonb_array_length(documents)>0 AS has_card FROM staff_intakes WHERE practice_id=%s ORDER BY updated_at DESC,id DESC""", (practice_id,)).fetchall()
     patient_map = {row["id"]: row for row in patients}
     def matches_snapshot(row, patient_id):
@@ -30,6 +30,8 @@ def patient_dashboard(practice_id: str, *, connection: Callable, hash_value: Cal
         group("portal:" + portal if portal else patient["id"])["records"][patient["id"]] = patient
     for intake in intakes:
         patient_id = intake["patient_id"] if intake["patient_id"] in patient_map else None
+        if not patient_id and intake["source"] == "patient_upload" and intake["expected_patient_id"] in patient_map:
+            patient_id = intake["expected_patient_id"]
         if not patient_id and intake["auto_patient_id"] in patient_map and matches_snapshot(intake, intake["auto_patient_id"]):
             patient_id = intake["auto_patient_id"]
         portal = portal_for_patient.get(patient_id) or (intake["source_portal_patient_id"] if not patient_id or matches_snapshot(intake, patient_id) else None)

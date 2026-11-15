@@ -61,9 +61,11 @@ export default function StaffPatientRecordScreen({
       {intake.source === 'patient_upload' && (
         <p className="staff-alert staff-warning">
           Patient-submitted card and details
-          {intake.patient
-            ? ' · Confirmed by clinic staff.'
-            : ' · Awaiting staff identity confirmation.'}
+          {intake.expected_patient_id && intake.patient
+            ? ' · Saved to the requested clinic record.'
+            : intake.patient
+              ? ' · Confirmed by clinic staff.'
+              : ' · Awaiting staff identity confirmation.'}
         </p>
       )}
       {!intake.patient && intake.expected_patient && (

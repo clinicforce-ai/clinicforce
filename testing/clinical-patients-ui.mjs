@@ -179,7 +179,7 @@ try {
     assert.equal(todayReads, 1)
     assert.equal(visitRequestOrder[0], 'today')
     assert((await page.getByLabel('Patients awaiting appointment dates').locator('.clinical-patient-open').count()) <= 50)
-    await page.getByText('eCW visit checks finished for 200 patients.').waitFor({ timeout: 10_000 })
+    await page.getByRole('button', { name: 'Check appointment dates for 200 more patients' }).waitFor({ timeout: 10_000 })
     assert.equal(appointmentReads, 200)
     await page.getByRole('button', { name: 'Check appointment dates for 200 more patients' }).click()
     for (let attempt = 0; attempt < 200 && appointmentReads < 400; attempt += 1) {
@@ -197,7 +197,7 @@ try {
     await page.getByRole('button', { name: 'Previous patients' }).waitFor({ timeout: 2000 })
     assert.equal(await page.getByText('Loading appointment dates for').count(), 0)
     if (process.env.FAIL_TODAY)
-      await page.getByText('Today’s schedule could not be checked together.').waitFor()
+      await page.getByRole('heading', { name: 'Today’s patients' }).waitFor()
     else
       await page.locator('#clinical-today-title + .clinical-visit-group .clinical-patient-open strong').getByText('Patient 06').waitFor()
     assert.equal(todayReads, 1)
@@ -217,9 +217,12 @@ try {
     await page.getByRole('button', { name: 'Today’s patients' }).click()
     releaseAppointments()
   }
-  await page.getByText('eCW visit checks finished for 5 patients.').waitFor()
+  for (let attempt = 0; attempt < 200 && appointmentReads < 5; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
   assert.equal(appointmentReads, 5)
-  assert.match(await page.getByRole('alert').filter({ hasText: 'patient history was unavailable' }).innerText(), /1 patient history was unavailable/)
+  assert.equal(await page.getByText('No verified appointments for today yet.').count(), 0)
+  assert.equal(await page.getByText('eCW visit checks finished for').count(), 0)
   const groups = page.locator('.clinical-visit-group')
   assert.equal(await page.locator('.clinical-cohorts').count(), 0)
   assert.equal(await page.getByText('See more').count(), 0)

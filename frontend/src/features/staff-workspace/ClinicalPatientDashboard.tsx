@@ -21,6 +21,7 @@ import ClinicalPatientDetail from './ClinicalPatientDetail'
 import ClinicalPatientSections from './ClinicalPatientSections'
 import { ecwVisitDays, localVisitDay } from './ecwVisitDates'
 import { name } from './clinical-patient-labels'
+import { useClinicalCardRefresh } from './useClinicalCardRefresh'
 import {
   filterClinicalPatients,
   formatVisitDay,
@@ -28,7 +29,6 @@ import {
   partitionPatientDates,
   type VisitResult,
 } from './clinical-patient-groups'
-
 interface Props {
   initialPatientId?: string
   onOpenIntake: (id: string) => void
@@ -61,7 +61,6 @@ export default function ClinicalPatientDashboard({
   const [visitProgress, setVisitProgress] = useState({ done: 0, total: 0, failed: 0 })
   const [todaySnapshot, setTodaySnapshot] = useState<DateAppointments | null>(null)
   const [todayReadFinished, setTodayReadFinished] = useState(false)
-  const [todayReadFailed, setTodayReadFailed] = useState(false)
   const [exactDates, setExactDates] = useState<Record<string, DateAppointments>>({})
   const [lookupDay, setLookupDay] = useState('')
   const [selectedLookupDay, setSelectedLookupDay] = useState<string | null>(null)
@@ -93,8 +92,9 @@ export default function ClinicalPatientDashboard({
           if (initialPatientId) {
             setSelectedDay(null)
             setSelected(
-              result.patients.find((patient) => patient.clinic_patient_id === initialPatientId) ||
-                null,
+              result.patients.find(
+                (patient) => (patient.clinic_patient_id || patient.id) === initialPatientId,
+              ) || null,
             )
           }
         }
@@ -110,6 +110,7 @@ export default function ClinicalPatientDashboard({
       active = false
     }
   }, [initialPatientId])
+  useClinicalCardRefresh(dashboard, setDashboard, setSelected)
   useEffect(() => {
     if (!dashboard) return
     let active = true
@@ -117,9 +118,7 @@ export default function ClinicalPatientDashboard({
       .then((result) => {
         if (active) setTodaySnapshot(result)
       })
-      .catch(() => {
-        if (active) setTodayReadFailed(true)
-      })
+      .catch(() => {})
       .finally(() => {
         if (active) setTodayReadFinished(true)
       })
@@ -236,7 +235,6 @@ export default function ClinicalPatientDashboard({
       }
       setTodaySnapshot(null)
       setTodayReadFinished(false)
-      setTodayReadFailed(false)
       dateLookupRun.current += 1
       setExactDates({})
       setSelectedLookupDay(null)
@@ -444,8 +442,6 @@ export default function ClinicalPatientDashboard({
         ) : (
           <div className="clinical-patient-list">
             <ClinicalPatientListStatus
-              todayReadFinished={todayReadFinished}
-              todayReadFailed={todayReadFailed}
               progress={visitProgress}
               remainingDateChecks={remainingDateChecks}
               onNextBatch={() => setDateCheckBatch((current) => current + 1)}

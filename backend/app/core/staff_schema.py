@@ -47,6 +47,14 @@ def initialize(connection) -> None:
     connection.execute("ALTER TABLE staff_intakes ADD COLUMN IF NOT EXISTS upload_link_id TEXT")
     connection.execute("ALTER TABLE staff_intakes ADD COLUMN IF NOT EXISTS expected_patient_id TEXT REFERENCES staff_patients(id)")
     connection.execute("ALTER TABLE staff_intakes ADD COLUMN IF NOT EXISTS auto_patient_id TEXT REFERENCES staff_patients(id)")
+    connection.execute("""UPDATE staff_intakes AS i SET
+        patient_id=p.id, auto_patient_id=p.id, status='ready', warning=NULL,
+        source_portal_patient_id=NULL,
+        fields=i.fields || jsonb_build_object('given_name',p.given_name,'family_name',p.family_name,'birth_date',p.birth_date),
+        field_sources=i.field_sources || '{"given_name":"clinic_record","family_name":"clinic_record","birth_date":"clinic_record"}'::jsonb
+        FROM staff_patients AS p
+        WHERE i.source='patient_upload' AND i.patient_id IS NULL AND i.expected_patient_id=p.id
+          AND i.practice_id=p.practice_id AND jsonb_array_length(i.documents)>0""")
     connection.execute("""CREATE TABLE IF NOT EXISTS staff_library (
         id TEXT PRIMARY KEY, practice_id TEXT NOT NULL, kind TEXT NOT NULL,
         label TEXT NOT NULL, payer TEXT NOT NULL, filename TEXT NOT NULL,

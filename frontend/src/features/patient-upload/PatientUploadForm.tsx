@@ -10,6 +10,7 @@ interface Props {
   files: File[]
   busy: boolean
   cardMessage: string
+  patientSpecific: boolean
   expiresAt: string
   field: (name: PatientField) => string
   edit: (name: PatientField, value: string) => void
@@ -24,6 +25,7 @@ export default function PatientUploadForm({
   files,
   busy,
   cardMessage,
+  patientSpecific,
   expiresAt,
   field,
   edit,
@@ -66,8 +68,9 @@ export default function PatientUploadForm({
       <section className="staff-panel">
         <h2>Patient receiving care</h2>
         <p className="staff-small staff-muted">
-          We fill available details from your signed-in account and card. Review them carefully if
-          the card shows a different policyholder.
+          {patientSpecific
+            ? 'Your clinic record fills your name and birth date. The card fills a missing member ID.'
+            : 'We fill available details from your signed-in account and card. Correct them if the card shows a different policyholder.'}
         </p>
         {cardMessage && (
           <p className="staff-small staff-muted" role="status">
@@ -84,6 +87,7 @@ export default function PatientUploadForm({
               autoComplete="given-name"
               maxLength={100}
               required
+              readOnly={patientSpecific}
               disabled={busy}
             />
           </label>
@@ -96,6 +100,7 @@ export default function PatientUploadForm({
               autoComplete="family-name"
               maxLength={100}
               required
+              readOnly={patientSpecific}
               disabled={busy}
             />
           </label>
@@ -110,6 +115,7 @@ export default function PatientUploadForm({
               min="1900-01-01"
               max={new Date().toLocaleDateString('en-CA')}
               required
+              readOnly={patientSpecific}
               disabled={busy}
             />
           </label>
@@ -138,7 +144,7 @@ export default function PatientUploadForm({
             <small>Your clinic can use this address to contact you about this submission.</small>
           </label>
         </div>
-        {account.available && (
+        {!patientSpecific && account.available && (
           <label className="staff-confirmation">
             <input type="checkbox" name="link_account" value="true" disabled={busy} />
             <span>
@@ -152,8 +158,8 @@ export default function PatientUploadForm({
         <label className="staff-confirmation">
           <input type="checkbox" required disabled={busy} />
           <span>
-            I am the patient or am authorized to submit on their behalf. I agree to send these
-            details and card files to {clinic.name} for insurance review.
+            I am the patient or am authorized to submit on their behalf. I agree to send this
+            insurance file to {clinic.name}.
           </span>
         </label>
         <button className="staff-primary staff-full" disabled={busy || !files.length}>

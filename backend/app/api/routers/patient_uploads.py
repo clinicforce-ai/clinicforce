@@ -1,11 +1,12 @@
 """Account-free, write-only insurance submissions and authenticated clinic link management."""
 
 import asyncio
+import logging
 from datetime import date
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, File, Form, HTTPException, Path as ApiPath, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Path as ApiPath, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -14,7 +15,7 @@ from app.api.routers import staff
 from app.api.settings import MAX_INSURANCE_CARD_BYTES, PUBLIC_BASE_URL
 from app.core import clinic_email, clinic_store, intake_links_store as links, object_store, staff_store
 from app.core.request_address import request_address
-from app.insurance import v1_sources
+from app.insurance import patient_card_extraction, v1_sources
 
 
 router = APIRouter(tags=["patient insurance upload"])
@@ -39,6 +40,26 @@ class Create(BaseModel):
         if self.patient_id and self.intake_id:
             raise ValueError("Choose one patient or intake for this request")
         return self
+
+
+class CardFieldSuggestions(BaseModel):
+    given_name: str | None = None
+    family_name: str | None = None
+    birth_date: str | None = None
+    member_id: str | None = None
+    member_name: str | None = None
+
+
+class LinkMetadata(BaseModel):
+    clinic_name: str
+    expires_at: str
+    status: str
+    patient_specific: bool
+    fields: CardFieldSuggestions = Field(description="Existing clinic fields for a private patient link; empty for a generic or received link.")
+
+
+class CardReadResult(BaseModel):
+    fields: CardFieldSuggestions = Field(description="Available patient identity and member ID from the clinic record and card PDF/image.")
 
 
 async def call(function, *args, **kwargs):
@@ -71,9 +92,19 @@ async def prepared_cards(files: list[UploadFile]) -> list[tuple[str, bytes, str]
     return prepared
 
 
-def card_fields(prepared: list[tuple[str, bytes, str]]) -> dict:
-    fields, _, _ = v1_sources.read_card_fields([content for _, content, _ in prepared])
-    return {key: fields[key] for key in ("member_name", "birth_date", "member_id") if fields.get(key)}
+def card_fields(prepared: list[tuple[str, bytes, str]], needed: set[str] | None = None) -> dict:
+    fields = patient_card_extraction.read_identity([content for _, content, _ in prepared], needed)
+    if fields.get("given_name") and fields.get("family_name"):
+        fields["member_name"] = f"{fields['given_name']} {fields['family_name']}"
+    return fields
+
+
+def read_submitted_card(link_id: str, practice_id: str, prepared: list[tuple[str, bytes, str]]) -> None:
+    try:
+        extracted, evidence, counts = v1_sources.read_card_fields([content for _, content, _ in prepared])
+        links.save_submitted_card_ocr(link_id, practice_id, extracted, evidence, counts)
+    except Exception:
+        logging.getLogger(__name__).warning("Automatic OCR unavailable for a saved patient card upload")
 
 
 def public_link(row: dict) -> dict:
@@ -122,10 +153,11 @@ async def create_link(body: Create, request: Request):
 
 @router.get("/api/staff/patients/dashboard")
 async def patient_dashboard(request: Request):
-    """List practice-owned patients with minimal, last-verified eCW visit-date snapshots.
+    """List practice-owned patients, card receipt, and last-verified eCW visit-date snapshots.
 
     Cached dates are scoped to the current confirmed eCW link. Refreshing the
     appointment history updates them; an incomplete read retains the old snapshot.
+    A patient-specific upload counts as received before any card OCR or coverage check.
     """
     actor = await staff.require_staff(request)
     return JSONResponse(await run_in_threadpool(staff_store.patient_dashboard, actor["practice_id"]), headers=HEADERS)
@@ -143,45 +175,63 @@ async def revoke(link_id: str, request: Request):
     return JSONResponse(await call(links.revoke, link_id, await staff.require_staff(request)), headers=HEADERS)
 
 
-@router.get("/api/insurance-upload/{clinic_code}/{upload_code}")
+@router.get("/api/insurance-upload/{clinic_code}/{upload_code}", response_model=LinkMetadata)
 async def get_metadata(clinic_code: LegacyClinicCode, upload_code: UploadCode):
+    """Return link state and known fields for its intended clinic patient."""
     # Retain active pre-NPI private links until they expire. Public discovery
     # accepts NPIs only, and every new link stores the clinic NPI.
     row = await call(links.metadata, clinic_code, upload_code)
-    return JSONResponse({"clinic_name": row["clinic_name"], "expires_at": row["expires_at"], "status": row["status"]}, headers=HEADERS)
+    return JSONResponse({"clinic_name": row["clinic_name"], "expires_at": row["expires_at"], "status": row["status"],
+                         "patient_specific": bool(row["expected_patient_id"]),
+                         "fields": await call(links.prefill_for_link, row)}, headers=HEADERS)
 
 
-@router.post("/api/insurance-upload/{clinic_code}/{upload_code}/read-card")
+@router.post("/api/insurance-upload/{clinic_code}/{upload_code}/read-card", response_model=CardReadResult)
 async def read_patient_card(clinic_code: LegacyClinicCode, upload_code: UploadCode, request: Request,
                             files: list[UploadFile] = File(...)):
-    """Suggest member name, birth date and member ID from a card; missing printed fields require manual entry."""
+    """Read card fields absent from the private link's clinic record."""
     staff.check_origin(request)
     row = await call(links.metadata, clinic_code, upload_code)
     await call(links.check_rate, request_address(request), row["practice_id"], "read-card")
+    known = await call(links.prefill_for_link, row)
+    needed = {key for key in ("given_name", "family_name", "birth_date", "member_id") if not known.get(key)}
+    if not needed:
+        return JSONResponse({"fields": known}, headers=HEADERS)
     prepared = await prepared_cards(files)
     try:
-        fields = await asyncio.wait_for(asyncio.to_thread(card_fields, prepared), timeout=20)
+        fields = await asyncio.to_thread(card_fields, prepared, needed)
     except Exception:
         raise HTTPException(422, "We could not read details from this card. Enter them manually or try a clearer image.", headers=HEADERS) from None
-    return JSONResponse({"fields": fields}, headers=HEADERS)
+    return JSONResponse({"fields": {**fields, **{key: value for key, value in known.items() if value}}}, headers=HEADERS)
 
 
 @router.post("/api/insurance-upload/{clinic_code}/{upload_code}")
-async def submit(clinic_code: LegacyClinicCode, upload_code: UploadCode, request: Request,
-                 files: list[UploadFile] = File(...), given_name: str = Form(..., min_length=1, max_length=100),
-                 family_name: str = Form(..., min_length=1, max_length=100), birth_date: date = Form(...),
+async def submit(clinic_code: LegacyClinicCode, upload_code: UploadCode, request: Request, background_tasks: BackgroundTasks,
+                 files: list[UploadFile] = File(...), given_name: str = Form(default="", max_length=100),
+                 family_name: str = Form(default="", max_length=100), birth_date: date | None = Form(default=None),
                  consent: bool = Form(...), member_id: str = Form(default="", max_length=80),
                  submission_id: str | None = Form(default=None, max_length=100),
                  email: str = Form(default="", max_length=254), link_account: bool = Form(default=False)):
+    """Save PDF/images and receipt; a patient-specific link uses its requested clinic record.
+
+    Automatic OCR runs after receipt without staff confirmation. Generic links
+    require a patient name and birth date for a new unverified intake. Receipt
+    does not establish coverage or card authenticity.
+    """
     staff.check_origin(request)
     row = await call(links.metadata, clinic_code, upload_code)
     await call(links.check_rate, request_address(request), row["practice_id"], "submit")
+    known = await call(links.prefill_for_link, row) if row["expected_patient_id"] else {}
     if not consent:
         raise HTTPException(422, "Confirm that you agree to send this information to the clinic.", headers=HEADERS)
-    if not given_name.strip() or not family_name.strip() or not date(1850, 1, 1) <= birth_date <= date.today():
+    if not row["expected_patient_id"] and (not given_name.strip() or not family_name.strip() or not birth_date):
+        raise HTTPException(422, "Enter the patient's name and a valid date of birth.", headers=HEADERS)
+    if row["expected_patient_id"] and not member_id.strip():
+        member_id = known.get("member_id", "")
+    if birth_date and not date(1850, 1, 1) <= birth_date <= date.today():
         raise HTTPException(422, "Enter the patient's name and a valid date of birth.", headers=HEADERS)
     prepared = await prepared_cards(files)
-    fields = {"given_name": given_name.strip(), "family_name": family_name.strip(), "birth_date": birth_date.isoformat()}
+    fields = {} if row["expected_patient_id"] else {"given_name": given_name.strip(), "family_name": family_name.strip(), "birth_date": birth_date.isoformat()}
     if member_id.strip():
         fields["member_id"] = member_id.strip()
     if email.strip():
@@ -190,13 +240,16 @@ async def submit(clinic_code: LegacyClinicCode, upload_code: UploadCode, request
         except ValueError as exc:
             raise HTTPException(422, str(exc), headers=HEADERS) from None
     from app.api.routers.patient_clinic_account import portal_patient_for_upload
-    portal_patient_id = await portal_patient_for_upload(request, fields, link_account)
+    portal_patient_id = await portal_patient_for_upload(request, fields, link_account) if not row["expected_patient_id"] else None
     try:
-        result, is_new = await call(links.submit, clinic_code, upload_code, fields, prepared, submission_id, portal_patient_id)
+        result, is_new = await call(links.submit, clinic_code, upload_code, fields, prepared, submission_id,
+                                    portal_patient_id, bool(known.get("member_id") and member_id.strip() == known["member_id"]))
     except HTTPException:
         raise
     except Exception:
         raise HTTPException(503, "The card could not be saved. Please try again with the same files.", headers=HEADERS) from None
+    if is_new and row["expected_patient_id"] and not (all(known.get(key) for key in ("given_name", "family_name", "birth_date")) and member_id.strip()):
+        background_tasks.add_task(read_submitted_card, row["id"], row["practice_id"], prepared)
     return JSONResponse(result, status_code=201 if is_new else 200, headers=HEADERS)
 
 

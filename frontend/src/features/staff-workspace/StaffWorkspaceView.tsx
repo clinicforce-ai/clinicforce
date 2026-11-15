@@ -34,6 +34,7 @@ export default function StaffWorkspaceView({ model }: { model: StaffWorkspaceMod
     onOpenPatientQr,
     onOpenInsurance,
     historyPatientId,
+    setHistoryPatientId,
     linkPatient,
     setLinkPatient,
     linkBack,
@@ -188,7 +189,10 @@ export default function StaffWorkspaceView({ model }: { model: StaffWorkspaceMod
         <nav aria-label="Staff navigation">
           <button
             className={screen === 'patients' ? 'staff-current' : ''}
-            onClick={() => navigate('patients')}
+            onClick={() => {
+              setHistoryPatientId(undefined)
+              navigate('patients')
+            }}
             disabled={Boolean(busy)}
           >
             <Users size={18} /> Clinical patients
@@ -305,7 +309,9 @@ export default function StaffWorkspaceView({ model }: { model: StaffWorkspaceMod
                 ? 'Back to patient'
                 : linkBack === 'inbox'
                   ? 'Back to inbox'
-                  : 'Back to clinical patients'
+                  : linkPatient
+                    ? 'Back to patient profile'
+                    : 'Back to clinical patients'
             }
             onBack={() => navigate(linkBack)}
             onOpenIntake={openIntake}

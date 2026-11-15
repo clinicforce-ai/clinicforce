@@ -55,6 +55,8 @@ export default function PatientInsuranceUpload({
   const [clinic, setClinic] = useState<UploadClinic | null>(null)
   const [token, setToken] = useState(uploadCode)
   const [expiresAt, setExpiresAt] = useState('')
+  const [patientSpecific, setPatientSpecific] = useState(false)
+  const [linkFields, setLinkFields] = useState<InsuranceCardFields>({})
   const [lookup, setLookup] = useState('')
   const [files, setFiles] = useState<File[]>([])
   const [cardFields, setCardFields] = useState<InsuranceCardFields>({})
@@ -98,6 +100,8 @@ export default function PatientInsuranceUpload({
           if (active) {
             setClinic({ npi: clinicCode, name: metadata.clinic_name })
             setExpiresAt(metadata.expires_at)
+            setPatientSpecific(metadata.patient_specific)
+            setLinkFields(metadata.fields || {})
             setReceived(metadata.status === 'received')
           }
         } else {
@@ -170,6 +174,16 @@ export default function PatientInsuranceUpload({
     setCardMessage('')
     setError(validation)
     if (validation) return
+    if (
+      patientSpecific &&
+      linkFields.given_name &&
+      linkFields.family_name &&
+      linkFields.birth_date &&
+      linkFields.member_id
+    ) {
+      setCardMessage('Patient details were filled from your clinic record.')
+      return
+    }
     setBusy(true)
     setBusyMessage('Reading your insurance card…')
     try {
@@ -180,8 +194,10 @@ export default function PatientInsuranceUpload({
       setCardFields(result.fields)
       setCardMessage(
         Object.keys(result.fields).length
-          ? 'Available details were filled from your card. Review them before sending.'
-          : 'No patient details were found on the card. Enter them below.',
+          ? patientSpecific
+            ? 'Available details were filled automatically. You can correct the member ID before sending.'
+            : 'Available details were filled automatically. You can correct them before sending.'
+          : 'Some details could not be read. Enter the missing fields below.',
       )
     } catch (caught) {
       setCardMessage(
@@ -229,10 +245,22 @@ export default function PatientInsuranceUpload({
   }
   const cardName = splitMemberName(cardFields.member_name)
   const suggestedFields: Record<PatientField, string> = {
-    given_name: (account.available ? account.given_name : cardName.given_name) || '',
-    family_name: (account.available ? account.family_name : cardName.family_name) || '',
-    birth_date: (account.available ? account.birth_date : cardFields.birth_date) || '',
-    member_id: cardFields.member_id || '',
+    given_name:
+      linkFields.given_name ||
+      (account.available && !patientSpecific ? account.given_name : '') ||
+      cardFields.given_name ||
+      cardName.given_name,
+    family_name:
+      linkFields.family_name ||
+      (account.available && !patientSpecific ? account.family_name : '') ||
+      cardFields.family_name ||
+      cardName.family_name,
+    birth_date:
+      linkFields.birth_date ||
+      (account.available && !patientSpecific ? account.birth_date : '') ||
+      cardFields.birth_date ||
+      '',
+    member_id: linkFields.member_id || cardFields.member_id || '',
     email: '',
   }
   const field = (name: PatientField) => editedFields[name] ?? suggestedFields[name]
@@ -290,7 +318,11 @@ export default function PatientInsuranceUpload({
           </header>
           {alerts}
           {received ? (
-            <PatientUploadReceipt clinic={clinic} receipt={receipt} />
+            <PatientUploadReceipt
+              clinic={clinic}
+              receipt={receipt}
+              patientSpecific={patientSpecific}
+            />
           ) : unavailable ? (
             <UnavailableUpload />
           ) : !clinic ? (
@@ -309,6 +341,7 @@ export default function PatientInsuranceUpload({
               files={files}
               busy={busy}
               cardMessage={cardMessage}
+              patientSpecific={patientSpecific}
               expiresAt={expiresAt}
               field={field}
               edit={edit}
@@ -318,7 +351,9 @@ export default function PatientInsuranceUpload({
             />
           )}
           <p className="staff-small staff-muted">
-            A clinic patient record is created automatically. No password or sign-in is needed.
+            {patientSpecific
+              ? 'Your clinic record receives the uploaded file. No password or sign-in is needed.'
+              : 'A clinic patient record is created automatically. No password or sign-in is needed.'}
           </p>
         </div>
       </section>
