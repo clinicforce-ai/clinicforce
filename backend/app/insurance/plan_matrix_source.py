@@ -43,6 +43,8 @@ def _names(value: str) -> set[str]:
         item = item.strip()
         if item:
             names.add(_key(item))
+        if re.search(r'\bPOS\s*/\s*POS\s+II\b', item, re.I):
+            names.add(_key(re.sub(r'\bPOS\s*/\s*POS\s+II\b', 'POS II', item, flags=re.I)))
         if ' / ' in item:
             for part in item.split(' / '):
                 if len(part.strip()) >= 5 and (len(part.split()) > 1 or part.strip() == 'Choice'

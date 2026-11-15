@@ -4,6 +4,7 @@ source version and date, never member approval.
 """
 from __future__ import annotations
 import re
+from datetime import date
 from app.insurance import cpt_rules, stedi_cpt_authorization
 from app.insurance.identity import generic_plan_label, payer_identity_verified
 from app.insurance.library_network_exclusions import product_kind
@@ -14,7 +15,7 @@ BCBSTX_PAYER_NAMES = {'bcbstx', 'bcbstexas', 'bluecrossblueshieldoftexas',
                       'bluecrossandblueshieldoftexas', 'bluecrossblueshieldtx',
                       'bluecrossblueshieldtexas'}
 # Saved estimates re-evaluate requirement decisions when a published rule changes.
-PUBLISHED_RULESET_VERSION = '2026-11-13-uhc-choice-plus-office-v16'
+PUBLISHED_RULESET_VERSION = '2026-11-15-aetna-choice-pos-ii-office-v17'
 BLUECARD_PPO_REFERRAL_SOURCE = {
     'label': 'BCBSTX BlueCard provider manual, PPO definition',
     'url': 'https://www.bcbstx.com/content/dam/hcsc/docs/provider/tx/claims/bluecard/bluecard-program-prov-manual.pdf',
@@ -143,6 +144,12 @@ AETNA_OPEN_ACCESS_SOURCE = {
     'source_version': 'Product guide dated September 2025, checked 2026-10-23',
     'verified_at': '2026-10-23', 'effective_from': '2026-10-01', 'effective_to': '2026-12-31',
 }
+AETNA_CHOICE_POS_II_SOURCE = {
+    'label': 'Aetna benefits product guide, Choice POS II specialist referrals',
+    'url': 'https://www.aetna.com/document-library/healthcare-professionals/documents-forms/benefits-product-guide.pdf',
+    'source_version': 'Product guide checked 2026-11-15', 'verified_at': '2026-11-15',
+    'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
+}
 AETNA_MEDICARE_PPO_REFERRAL_SOURCE = {
     'label': 'Aetna Medicare PPO specialist referral guidance',
     'url': 'https://www.aetna.com/medicare/compare-plans-enroll/medicare-advantage-ppo-plans.html',
@@ -162,10 +169,10 @@ AETNA_2026_PRECERT_SOURCE = {
     'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
 }
 AETNA_2026_OFFICE_PRECERT_SOURCE = {
-    'label': 'Aetna 2026 participating-provider precertification list, April edition',
+    'label': 'Aetna 2026 participating-provider precertification list, November edition',
     'url': 'https://www.aetna.com/content/dam/aetna/pdfs/aetnacom/healthcare-professionals/2026_Precert_List.pdf',
-    'source_version': 'April 1, 2026 list checked 2026-10-30', 'verified_at': '2026-10-30',
-    'effective_from': '2026-04-01', 'effective_to': '2026-12-31',
+    'source_version': 'November 1, 2026 list checked 2026-11-15', 'verified_at': '2026-11-15',
+    'effective_from': '2026-11-01', 'effective_to': '2026-12-31',
 }
 MEDICARE_REFERRAL_SOURCE = {
     'label': 'Medicare.gov Original Medicare specialist access',
@@ -197,6 +204,22 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
     identity = result.get('identity') or benefits.get('identity') or {}
     day = str(context.get('service_date') or '')
     payer_names = context.get('payer_names') or set()
+    prior_date_aetna_choice = False
+    prior_date_benefits = result.get('reference_benefits') or benefits
+    try:
+        prior_date_aetna_choice = (
+            'aetna' in payer_names
+            and benefits.get('active') is True and benefits.get('service_date_matches') is False
+            and prior_date_benefits.get('active') is True
+            and 1 <= (date.fromisoformat(day) - date.fromisoformat(str(
+                (prior_date_benefits.get('returned_service_dates') or {}).get('start') or ''))).days <= 7
+            and {_key(plan) for plan in plans if not generic_plan_label(plan)} == {'aetnachoiceposii'}
+            and codes == {'99203'} and str(context.get('pos') or '') == '11'
+            and benefits.get('network_status') != 'out_of_network'
+            and not benefits.get('network_conflict')
+            and not benefits.get('coverage_status_conflict') and not benefits.get('source_errors'))
+    except ValueError:
+        pass
     same_day_bcbstx_visit = (
         (kind == 'referral' or kind == 'authorization' and codes == {'99213'}
          and str(context.get('pos') or '') == '11')
@@ -218,7 +241,7 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
     if (not codes or not '2026-01-01' <= day <= '2026-12-31'
             or benefits.get('active') is not True
             or not (stedi_cpt_authorization.visit_coverage_bound(benefits, day)
-                    or same_day_bcbstx_visit or same_day_uhc_lppo_office)
+                    or same_day_bcbstx_visit or same_day_uhc_lppo_office or prior_date_aetna_choice)
             or not payer_identity_verified(identity) or not result.get('benefit_source')
             or not context.get('member_id')):
         return None
@@ -245,6 +268,10 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
                                      'location_id': context.get('location_id'),
                                      'place_of_service': context.get('pos'),
                                      'service_date': day}}
+    if prior_date_aetna_choice:
+        if kind == 'referral':
+            return rule('Not required', 'Choice POS II permits direct specialist office visits under the published product rule. Confirm the member terms and visit-date coverage.', AETNA_CHOICE_POS_II_SOURCE, check=True)
+        return rule('Not required', 'Routine office CPT 99203 is absent from Aetna’s November 2026 participating-provider precertification list. Confirm member or delegated exceptions.', AETNA_2026_OFFICE_PRECERT_SOURCE, check=True)
     bluecard_ppo_office = (kind in {'referral', 'authorization'} and in_network and office
         and str(context.get('pos') or '') == '11' and names & BCBSTX_PAYER_NAMES
         and len(exact) == 1 and len(plans) == 1

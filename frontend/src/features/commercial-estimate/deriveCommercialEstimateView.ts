@@ -355,25 +355,27 @@ export function deriveCommercialEstimateView({
                 : 'Insured amount unavailable'))
   const amountLabel = previousEstimate
     ? 'Previous estimate · needs recheck'
-    : readOnly
-      ? estimatedShare
-        ? 'Recorded estimated patient share · do not collect'
-        : 'Recorded recommendation at this visit'
-      : error
-        ? 'Visit needs review'
-        : result?.cash_fallback
-          ? 'Self-pay option for this visit'
-          : provisionalAmount != null
-            ? 'Provisional patient estimate · do not collect'
-            : estimatedShare
-              ? 'Estimated patient share · do not collect'
-              : !amount && !cash
-                ? 'Collection decision needed'
-                : ['bcbstx_refundable_advance', 'cigna_refundable_office_copay'].includes(
-                      guidance?.basis || '',
-                    )
-                  ? 'Refundable advance to collect now'
-                  : 'Amount to collect now'
+    : result?.aetna_office_planning && provisionalAmount != null && !supportedAmount
+      ? 'Conditional Aetna patient share · do not collect yet'
+      : readOnly
+        ? estimatedShare
+          ? 'Recorded estimated patient share · do not collect'
+          : 'Recorded recommendation at this visit'
+        : error
+          ? 'Visit needs review'
+          : result?.cash_fallback
+            ? 'Self-pay option for this visit'
+            : provisionalAmount != null
+              ? 'Provisional patient estimate · do not collect'
+              : estimatedShare
+                ? 'Estimated patient share · do not collect'
+                : !amount && !cash
+                  ? 'Collection decision needed'
+                  : ['bcbstx_refundable_advance', 'cigna_refundable_office_copay'].includes(
+                        guidance?.basis || '',
+                      )
+                    ? 'Refundable advance to collect now'
+                    : 'Amount to collect now'
   const amountParts = result?.encounter_summary?.components
   const officeDeductible = guidance?.services.find(
     (service) => service.code === officeCopayLine?.code,
@@ -424,9 +426,11 @@ export function deriveCommercialEstimateView({
       : baseExplanation
   const summaryExplanation =
     provisionalAmount != null
-      ? result?.provisional_scenario?.kind === 'ncs_study_count'
-        ? 'Estimated patient share across alternative NCS study counts. Muscle testing is excluded unless documented. Do not collect this planning range.'
-        : 'Estimated patient share for the provisional CPT scenario. Review the services and requirements before collecting.'
+      ? result?.aetna_office_planning
+        ? 'Deductible-applies planning amount from the approved Aetna office fee and prior-date payer terms. Confirm visit-date coverage, provider network, deductible applicability, other coverage and prior payments before setting a collection amount.'
+        : result?.provisional_scenario?.kind === 'ncs_study_count'
+          ? 'Estimated patient share across alternative NCS study counts. Muscle testing is excluded unless documented. Do not collect this planning range.'
+          : 'Estimated patient share for the provisional CPT scenario. Review the services and requirements before collecting.'
       : explanation
   const provider = result?.appointment_context?.rendering_provider?.name
   const anticipatedService = visitServiceLabel(result)

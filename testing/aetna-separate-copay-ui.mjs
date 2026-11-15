@@ -248,4 +248,34 @@ const savedSummary = renderToStaticMarkup(React.createElement(ArrivalAmountSumma
 assert.match(savedSummary, /Aetna office copay · Medicare review/)
 assert.match(savedSummary, /\$60\.00/)
 assert.doesNotMatch(savedSummary, /Confirm payer order/)
+const officeScenario = {
+  ...unknownNetworkPriorDay,
+  reference_only: true,
+  reference_benefits: { ...unknownNetworkPriorDay.benefits,
+    deductible_remaining_cents: 454704, oop_remaining_cents: 754704 },
+  codes: [{ id: 'office', code: '99203', units: 1 }],
+  aetna_office_planning: { status: 'planning_only', code: '99203', allowed_cents: 9325,
+    deductible_remaining_cents: 454704, oop_remaining_cents: 754704,
+    coinsurance_percent: '30.0', deductible_applies_cents: 9325,
+    deductible_waived_cents: 2798, payer_response_date: '2026-11-09',
+    service_date: '2026-11-10', collectable: false },
+  collection_guidance: { amount_cents: null, basis: 'missing_collection_inputs', services: [] },
+}
+const officeView = deriveCommercialEstimateView({ result: officeScenario,
+  appointments: [], selectedVisit: null, busy: null, error: null, readOnly: true,
+  recovering: false })
+assert.equal(officeView.provisionalAmount, 9325)
+assert.match(officeView.amountLabel, /do not collect yet/i)
+const officeModel = { ...savedModel, ...officeView, cash: false, supportedAmount: false,
+  previousEstimate: false, calculating: false }
+const officeSummary = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
+  { model: officeModel, result: officeScenario, partialCopay: null, visibleAmount: true }))
+assert.match(officeSummary, /\$93\.25/)
+assert.match(officeSummary, /do not collect yet/i)
+assert.match(officeSummary, /\$27\.98/)
+const officeTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+  { model: officeModel, result: officeScenario }))
+assert.match(officeTable, /Clinic Aetna fee reference.*\$93\.25/)
+assert.match(officeTable, /Conditional patient share.*\$93\.25.*\$27\.98/)
+assert.match(officeTable, /Amount to collect at visit.*do not collect yet/)
 console.log('Aetna separate copay: $40 office reference; $0 general OOP does not erase the separate cap')

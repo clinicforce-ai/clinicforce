@@ -65,9 +65,9 @@ export function commercialRequirementRows(
     /^aetna$/i.test(result.payer || '') &&
     result.plan_details?.stedi?.names?.length === 1 &&
     /^aetna choice pos ii$/i.test(result.plan_details.stedi.names[0].trim()) &&
-    result.benefits?.active === true &&
-    !result.benefits.coverage_dates_invalid &&
-    result.benefits.network_status === 'in_network' &&
+    (result.benefits?.active === true || result.reference_benefits?.active === true) &&
+    !(result.reference_benefits ?? result.benefits)?.coverage_dates_invalid &&
+    (result.benefits?.network_status === 'in_network' || !!result.aetna_office_planning) &&
     patientBenefitsBound(result.identity) &&
     result.service_date >= '2026-11-01' &&
     result.service_date <= '2026-12-31' &&

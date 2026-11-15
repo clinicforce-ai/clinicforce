@@ -54,6 +54,18 @@ export function provisionalEstimateAmounts({
         )
       : null
   const provisionalAmount =
+    (!cash &&
+    !previousEstimate &&
+    !calculating &&
+    !supportedAmount &&
+    result?.aetna_office_planning?.status === 'planning_only' &&
+    result.aetna_office_planning.collectable === false
+      ? Math.max(
+          0,
+          result.aetna_office_planning.deductible_applies_cents -
+            (result.encounter_summary?.payments_verified_cents || 0),
+        )
+      : null) ??
     feeProxyAmount ??
     (!readOnly &&
     !cash &&

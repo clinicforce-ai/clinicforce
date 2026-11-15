@@ -115,6 +115,35 @@ export default function ArrivalAmountSummary({
         <p>{result.collection_guidance?.reason}</p>
       </>
     )
+  const aetnaOffice = result.aetna_office_planning
+  if (
+    !model.cash &&
+    !model.supportedAmount &&
+    !model.previousEstimate &&
+    !model.calculating &&
+    aetnaOffice?.status === 'planning_only' &&
+    aetnaOffice.collectable === false
+  ) {
+    const balance = Math.max(
+      0,
+      aetnaOffice.deductible_applies_cents -
+        (result.encounter_summary?.payments_verified_cents || 0),
+    )
+    return (
+      <>
+        <span>Conditional Aetna office share · do not collect yet</span>
+        <strong role="status">{money(balance)}</strong>
+        <p>
+          Approved clinic fee {money(aetnaOffice.allowed_cents)}; payer reported{' '}
+          {aetnaOffice.coinsurance_percent}% specialist office coinsurance and{' '}
+          {money(aetnaOffice.deductible_remaining_cents)} remaining deductible for another date. If
+          the deductible is waived, the share is {money(aetnaOffice.deductible_waived_cents)} before
+          prior payments. Confirm visit-date coverage, network, deductible applicability, other
+          coverage and prior payments before setting a collection amount.
+        </p>
+      </>
+    )
+  }
   const action = nextStep(model, result)
   const plan = !model.cash && !model.previousEstimate ? result.combined_emg_plan : null
   const biopsyTarget =

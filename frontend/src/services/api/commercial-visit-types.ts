@@ -1,6 +1,21 @@
 import type { CommercialAppointment } from './commercial-common'
 import type { PrevisitEstimate } from './commercial-previsit'
 
+export type AetnaOfficePlanning = {
+  status: 'planning_only'
+  code: string
+  allowed_cents: number
+  deductible_remaining_cents: number
+  oop_remaining_cents: number
+  coinsurance_percent: string
+  deductible_applies_cents: number
+  deductible_waived_cents: number
+  payer_response_date: string
+  service_date: string
+  rate_source?: string | null
+  collectable: false
+}
+
 export type FeeProxyBasis =
   | 'bcbstx_fee_proxy'
   | 'bcbstx_uhc_in_network_fee_proxy'

@@ -63,6 +63,20 @@ export function collectionAtVisitRow(
     bluecardDeductible: ReturnType<typeof bluecardOfficeDeductibleScenario>
   },
 ): CostBreakdownRow {
+  const officePlanning = result.aetna_office_planning
+  if (officePlanning?.status === 'planning_only' && officePlanning.collectable === false) {
+    const balance = Math.max(
+      0,
+      officePlanning.deductible_applies_cents -
+        (result.encounter_summary?.payments_verified_cents || 0),
+    )
+    return {
+      label: 'Amount to collect at visit · verification pending',
+      value: `${money(balance)} conditional planning amount · do not collect yet`,
+      detail: `If the office deductible applies: min(${money(officePlanning.allowed_cents)} clinic Aetna fee, ${money(officePlanning.deductible_remaining_cents)} remaining deductible, ${money(officePlanning.oop_remaining_cents)} remaining out-of-pocket) = ${money(officePlanning.deductible_applies_cents)} before recorded payments. If waived, ${officePlanning.coinsurance_percent}% coinsurance gives ${money(officePlanning.deductible_waived_cents)}. Confirm visit-date eligibility, provider network, deductible applicability, other coverage and prior payments before charging.`,
+      emphasis: true,
+    }
+  }
   const {
     combinedPlan,
     feeProxy,

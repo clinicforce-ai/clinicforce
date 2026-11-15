@@ -46,6 +46,12 @@ def test_three_sheets_supply_exact_plan_rules_and_portals():
     assert 'PCP' in hmo['referral']['reason']
 
 
+def test_choice_pos_ii_matches_the_aetna_workbook_row():
+    matched = plan_matrix.matched_row(
+        {'payer_names': ['Aetna'], 'plans': ['Aetna Choice POS II']}, plan_matrix.bundled())
+    assert matched is not None and matched[0] == 9
+
+
 def test_scoped_clinic_network_name_can_select_the_referral_rule():
     result = {'codes': [{'code': '99213'}], 'benefit_source': 'Stedi',
               'benefits': {'active': True, 'service_date_matches': True, 'network_status': 'in_network',

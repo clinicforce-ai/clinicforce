@@ -3,7 +3,7 @@ from __future__ import annotations
 from app.api.routers import commercial_estimator as _api
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies, payer_identity_verified
 from app.insurance.network_participation import verified_in_network, verified_out_of_network
-from app.insurance import evidence_resolution, group_contract_support, payer_fees, published_plan_benefits
+from app.insurance import aetna_office_planning, evidence_resolution, group_contract_support, payer_fees, published_plan_benefits
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence, recheck_saved_payer_message
 from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import guard_unresolved_telehealth, guard_telehealth_guidance, restore_active_blue_cross_insurance, restore_saved_fep_standard_product, retain_conflicted_insurance, refresh_saved_cigna_office_benefits, refresh_saved_uhc_registration_benefits, refresh_saved_network_pricing, upgrade_saved_biopsy_preview, refresh_saved_cross_payer_planning, suppress_saved_ambiguous_combined_zero_oop
@@ -386,6 +386,15 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         _recheck_saved_payer_allowance(result, case, practice_id)
         refresh_saved_requirements(_api, result, case, practice_id)
         refresh_saved_cross_payer_planning(result, case, practice_id, route_payer)
+        # Rebuild the reference from current approved fees on every read. It is
+        # separate from collection guidance and never makes a prior-date 271 current.
+        result.pop('aetna_office_planning', None)
+        try:
+            planning = aetna_office_planning.estimate(result, case['previsit_context'].get('inputs') or {})
+        except Exception:
+            planning = None  # Missing fee storage must not break a saved visit.
+        if planning:
+            result['aetna_office_planning'] = planning
     result['revision'] = case.get('revision', 0)
     check_from = max(_api._insurance_check_from(case) or '',
         ((case['previsit_context'].get('source', {}).get('coverage_period') or {}).get('start') or '')[:10])

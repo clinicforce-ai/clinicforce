@@ -59,7 +59,39 @@ export default function CommercialCostTables({
               : row,
       )
     : rows
-  const visibleRows = displayedRows.filter((row) => cash || row.label !== 'Cash alternative')
+  const planning = result.aetna_office_planning
+  const visibleRows = displayedRows
+    .filter((row) => cash || row.label !== 'Cash alternative')
+    .map((row) => {
+      if (!planning || model.supportedAmount) return row
+      if (row.label === 'Total payer allowed')
+        return {
+          ...row,
+          label: 'Clinic Aetna fee reference',
+          value: money(planning.allowed_cents),
+          detail:
+            'Approved clinic schedule for the proposed office CPT; final payer allowance follows the claim.',
+        }
+      if (row.label === 'Coinsurance')
+        return {
+          ...row,
+          value: `${planning.coinsurance_percent}% in-network specialist office visit · prior-date payer response`,
+          detail:
+            'The payer also returned a separate telemedicine rate; the planned visit is in person.',
+        }
+      if (
+        row.label === 'Calculated Aetna share for this office visit' ||
+        row.label === 'Estimated patient share'
+      )
+        return {
+          ...row,
+          label: 'Conditional patient share',
+          value: `${money(planning.deductible_applies_cents)} if deductible applies; ${money(planning.deductible_waived_cents)} if waived`,
+          detail:
+            'The office-visit row does not establish whether the plan-wide deductible applies to this CPT.',
+        }
+      return row
+    })
   return (
     <>
       {!cash &&
@@ -72,7 +104,10 @@ export default function CommercialCostTables({
             payments={result.encounter_summary?.payments_verified_cents || 0}
           />
         )}
-      <CostBreakdownTable rows={visibleRows} open={model.supportedAmount && !cash} />
+      <CostBreakdownTable
+        rows={visibleRows}
+        open={(model.supportedAmount || !!planning) && !cash}
+      />
     </>
   )
 }

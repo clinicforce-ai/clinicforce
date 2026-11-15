@@ -14,6 +14,7 @@ import type {
   PayerAllowanceSummary,
   TemporaryRateReference,
   AetnaDiagnosticReference,
+  AetnaOfficePlanning,
   VisitCode,
   VisitPricedLine,
   UhcBiopsyCollectionTarget,
@@ -44,6 +45,7 @@ export type PrevisitEstimate = {
   temporary_rate_reference?: TemporaryRateReference
   cigna_office_fee_scenarios?: CignaOfficeFeeScenarios
   aetna_diagnostic_reference?: AetnaDiagnosticReference
+  aetna_office_planning?: AetnaOfficePlanning
   fee_proxy_estimate?: {
     basis: FeeProxyBasis
     status: 'provisional'
