@@ -11,8 +11,7 @@ const labels: Record<Period, string> = {
   upcoming: 'Upcoming patients',
   past: 'Previous patients',
 }
-const emptyLabels: Record<Period, string> = {
-  today: 'No patients today.',
+const emptyLabels: Record<Exclude<Period, 'today'>, string> = {
   upcoming: 'No upcoming patients.',
   past: 'No previous patients.',
 }
@@ -52,13 +51,6 @@ export default function ClinicalPatientSections({
             {labels.today}
           </h3>
           {groups.today.map(([day, patients]) => renderGroup(day, patients))}
-          {!groups.today.length && (
-            <p className="staff-small staff-muted">
-              {pending
-                ? 'No verified appointments for today yet. Appointment dates are still being checked.'
-                : emptyLabels.today}
-            </p>
-          )}
         </section>
         {pending && (
           <section aria-label="Patients awaiting appointment dates">

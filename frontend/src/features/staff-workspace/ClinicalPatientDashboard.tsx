@@ -61,7 +61,6 @@ export default function ClinicalPatientDashboard({
   const [visitProgress, setVisitProgress] = useState({ done: 0, total: 0, failed: 0 })
   const [todaySnapshot, setTodaySnapshot] = useState<DateAppointments | null>(null)
   const [todayReadFinished, setTodayReadFinished] = useState(false)
-  const [todayReadFailed, setTodayReadFailed] = useState(false)
   const [exactDates, setExactDates] = useState<Record<string, DateAppointments>>({})
   const [lookupDay, setLookupDay] = useState('')
   const [selectedLookupDay, setSelectedLookupDay] = useState<string | null>(null)
@@ -119,9 +118,7 @@ export default function ClinicalPatientDashboard({
       .then((result) => {
         if (active) setTodaySnapshot(result)
       })
-      .catch(() => {
-        if (active) setTodayReadFailed(true)
-      })
+      .catch(() => {})
       .finally(() => {
         if (active) setTodayReadFinished(true)
       })
@@ -238,7 +235,6 @@ export default function ClinicalPatientDashboard({
       }
       setTodaySnapshot(null)
       setTodayReadFinished(false)
-      setTodayReadFailed(false)
       dateLookupRun.current += 1
       setExactDates({})
       setSelectedLookupDay(null)
@@ -446,8 +442,6 @@ export default function ClinicalPatientDashboard({
         ) : (
           <div className="clinical-patient-list">
             <ClinicalPatientListStatus
-              todayReadFinished={todayReadFinished}
-              todayReadFailed={todayReadFailed}
               progress={visitProgress}
               remainingDateChecks={remainingDateChecks}
               onNextBatch={() => setDateCheckBatch((current) => current + 1)}
