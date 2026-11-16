@@ -520,6 +520,9 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_four_area_cash_price_with_documented_ncs_emg_codes(self):
         await self._flow(date.today().isoformat(), empty_coverage=True, scheduled_code='95908,95886')
 
+    async def test_four_area_cash_replaces_stale_two_hand_package(self):
+        await self._flow(date.today().isoformat(), empty_coverage=True, scheduled_code='95908,95886', stale_cash_selection=True)
+
     async def test_saved_insurance_hold_prevents_paid_refresh(self):
         await self._flow((date.today() + timedelta(days=2)).isoformat(), refresh=True, too_early=True, saved_hold=True)
 
@@ -590,7 +593,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_newer_conflicting_ecw_check_refreshes_cached_stedi_evidence(self):
         await self._flow(date.today().isoformat(), newer_ecw=True)
 
-    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None, pos=None, scheduled_code=None, emg_review=False, expect_preliminary=False, visit_type='new', combined_emg=False, secondary_mismatch=False, cash_office=False, telehealth=False, confirmed_card=False, aetna_payer_id=None, cash_package=False, two_coverages=False, empty_coverage=False):
+    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None, pos=None, scheduled_code=None, emg_review=False, expect_preliminary=False, visit_type='new', combined_emg=False, secondary_mismatch=False, cash_office=False, telehealth=False, confirmed_card=False, aetna_payer_id=None, cash_package=False, two_coverages=False, empty_coverage=False, stale_cash_selection=False):
         if cash_office:
             self.cash_current.return_value = {'id': 'synthetic-cash', 'filename': 'synthetic.csv',
                 'effective_from': '2026-01-01', 'rows': [{'code': '99204', 'cash_cents': 25000,
@@ -606,7 +609,10 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                 'effective_from': '2026-09-04', 'rows': [
                     {'code': 'named:full-study', 'cash_cents': 130000, 'price_kind': 'named_package',
                      'label': 'Comprehensive Full Study - Arms & Legs',
-                     'description': 'Comprehensive Full Study - Arms & Legs'}]}
+                     'description': 'Comprehensive Full Study - Arms & Legs'},
+                    {'code': 'named:both-hands', 'cash_cents': 70000, 'price_kind': 'named_package',
+                     'label': 'Carpal Tunnel Evaluation - Both Hands',
+                     'description': 'Carpal Tunnel Evaluation - Both Hands'}]}
         session = {"practice_id": "clinic", "intake_id": "intake", "patient_id": "patient",
                    "share_manifest_id": "", "staff": {"id": "staff", "display_name": "Staff", "practice_name": "Clinic"},
                    "intake": {"updated_at": "version", "patient": {"given_name": "Pat", "family_name": "Example",
@@ -681,6 +687,10 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         if emg_review:
             from app.api.routers.commercial_flow.commercial_previsit_finish import _visit_context_token
             case['visit_review'] = {'emg_required': True,
+                                    'context_token': _visit_context_token(inputs, source)}
+        if stale_cash_selection:
+            from app.api.routers.commercial_flow.commercial_previsit_finish import _visit_context_token
+            case['visit_review'] = {'cash_selection': 'named:both-hands',
                                     'context_token': _visit_context_token(inputs, source)}
         if saved_hold:
             session['intake']['workflows'] = {'saved': 'held-case'}
@@ -1005,6 +1015,8 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result['payment_mode'], 'cash')
                 self.assertEqual(result['cash_quote']['min_cents'], 130000)
                 self.assertEqual(result['collection_guidance']['amount_cents'], 130000)
+                self.assertEqual(result['cash_quote']['selection'], 'named:full-study')
+                self.assertEqual(result['cash_quote']['selection_source'], 'appointment_scope')
                 self.assertEqual(result['selected_ids'], ['documented-service-0', 'documented-service-1'] if scheduled_code else [])
                 client.post.assert_not_awaited()
                 return

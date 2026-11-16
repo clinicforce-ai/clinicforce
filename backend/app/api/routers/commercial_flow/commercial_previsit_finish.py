@@ -285,7 +285,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
             result.pop('mapping_candidate', None)
     if uploaded_cash and not _api.visit_estimate.is_telehealth(planning_inputs):
         cash_review = review
-        if (result['payment_mode'] == 'cash' and 'cash_selection' not in review
+        if (result['payment_mode'] == 'cash'
                 and (result.get('price_range') or {}).get('mode') in {'alternatives', 'services'}
                 and _api.re.fullmatch(r'\s*EMG\s*4\s*Areas\s*', str(inputs.get('appointment_reason')
                     or inputs.get('appointment_type') or inputs.get('reason') or ''), _api.re.I)):

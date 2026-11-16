@@ -374,7 +374,14 @@ export default function CommercialOverview({
           {result.reason && result.reason !== anticipatedService && (
             <p>eCW visit reason: {result.reason}</p>
           )}
-          {!readOnly && (
+          {cash && result.cash_quote?.selection_source === 'appointment_scope' && (
+            <p>
+              {plannedCodeLabel
+                ? `${result.service_plan?.method === 'llm' ? 'AI planning CPTs' : 'Planned CPTs'}: ${plannedCodeLabel}. Final coding follows performed care.`
+                : 'Planning CPTs are pending; the full-study package price follows the booked scope.'}
+            </p>
+          )}
+          {!readOnly && result.cash_quote?.selection_source !== 'appointment_scope' && (
             <button type="button" className="cash-package-shortcut" onClick={openServiceDetails}>
               Review planned CPTs
             </button>
