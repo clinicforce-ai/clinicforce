@@ -403,7 +403,6 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     saved_result = None if setting else await reuse_saved_eligibility(_api, result, session, inputs, source, coverage)
     if saved_result is not None:
         return saved_result
-
     rendering = source.get("rendering_provider") or {}
     billing = source.get("billing_provider") or {}
     rendering_npi = str(rendering.get("npi") or (inputs.get("rendering_provider") or {}).get("npi") or "")
