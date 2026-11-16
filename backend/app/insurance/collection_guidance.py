@@ -274,7 +274,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         and result.get('nmct_cigna_delegated_office') is True
         and verified_in_network(benefits)
         and result.get('benefit_source') == 'Stedi · plan administrator')
-    policy_allows_advance = uhc_registration_copay or bluecard_epo_neurology_copay or clinic_delegated_copay or (cigna_oap_televisit and not policy_approved) or (guidance['basis'] == 'cigna_refundable_office_copay' and (not policy_approved or policy_mode in {'collect_verified_copay', 'collect_supported_advance'})) or (policy_mode == 'collect_verified_copay' or published_fep_standard and fixed_copay and policy_mode == 'collect_supported_advance' if published_copay else
+    policy_allows_advance = (guidance.get('collection_rule') or {}).get('mode') == 'nmct_fixed_office_copay_advance' or uhc_registration_copay or bluecard_epo_neurology_copay or clinic_delegated_copay or (cigna_oap_televisit and not policy_approved) or (guidance['basis'] == 'cigna_refundable_office_copay' and (not policy_approved or policy_mode in {'collect_verified_copay', 'collect_supported_advance'})) or (policy_mode == 'collect_verified_copay' or published_fep_standard and fixed_copay and policy_mode == 'collect_supported_advance' if published_copay else
         policy_mode == 'collect_supported_advance' or
         fixed_copay and policy_mode == 'collect_verified_copay' or
         verified_out_of_network(benefits) and policy_mode == 'defer_to_claim'

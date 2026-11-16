@@ -59,6 +59,56 @@ def test_humana_medical_status_message_collects_refundable_specialist_copay():
         assert collection_guidance.build({**result, **changed})['amount_cents'] is None
 
 
+def test_nmct_collects_matched_stedi_office_copay_without_cpt_rate():
+    result = scenario(1500)
+    result.pop('collection_policy')
+    result.update(payer='Humana Health Plan', plan_details={'stedi': {
+        'names': ['Humana TotalComplete']}},
+        nmct_fixed_office_copay_advance_enabled=True)
+    result['identity'] = {'status': 'matched', 'binding': 'synthetic-binding', 'match_version': 2}
+    result['benefits'].update(identity=result['identity'], service_date_matches=True,
+        oop_remaining_cents=331000, coinsurance_percent='0')
+    price = result['price_range']
+    price.update(complete=False, patient_min_cents=None, patient_max_cents=None)
+    line = price['lines'][0]
+    line.update(allowed_cents=None, allowed_basis='clinic_contract', calculation=None,
+        rate_resolution={'status': 'RATE_UNAVAILABLE'},
+        issues=['Verify the active clinic contract rate and exact plan mapping for this code, modifier and visit.',
+                'Confirm the remaining individual deductible that applies to this visit.'])
+    line['benefits'].update(copay_cents=1500, coinsurance_percent='0',
+        oop_remaining_cents=331000, copay_period='VISIT', copay_id='synthetic-hmo-office-copay',
+        reported_options=[{'id': 'synthetic-hmo-office-copay', 'kind': 'copay',
+            'service_type_code': '98', 'amount_cents': 1500, 'network': 'IN_NETWORK',
+            'time_period': 'VISIT', 'coverage_level': 'INDIVIDUAL',
+            'payer_note': 'PHYSICIAN OFFICE VISIT SPECIALIST'}])
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 1500
+    assert guidance['basis'] == 'office_copay'
+    assert guidance['collection_rule']['mode'] == 'nmct_fixed_office_copay_advance'
+    assert encounter_summary.build({**result, 'collection_guidance': guidance})['collect_today_cents'] == 1500
+    paid = collection_guidance.build(result, {'payments': {'reference': 'synthetic-receipt', 'amount_cents': 500}})
+    assert paid['amount_cents'] == 1000
+    other_payer = deepcopy(result)
+    other_payer.update(payer='Example Health', plan_details={'stedi': {'names': ['Example Choice']}})
+    assert collection_guidance.build(other_payer)['amount_cents'] == 1500
+    deferred = {**result, 'collection_policy': {'mode': 'defer_to_claim',
+        'approved_by': 'clinic', 'approved_at': '2026-11-01T00:00:00Z',
+        'reference': 'synthetic deferral'}}
+    assert collection_guidance.build(deferred)['amount_cents'] == 0
+    for changed in (
+        {'billing_protection': {'status': 'qmb'}},
+        {'identity': {'status': 'review'}},
+        {'benefits': {**result['benefits'], 'has_secondary': True}},
+        {'benefits': {**result['benefits'], 'network_status': 'unknown'}},
+        {'nmct_fixed_office_copay_advance_enabled': False},
+        {'price_range': {**price, 'lines': [{**line, 'benefits': {
+            **line['benefits'], 'reported_options': []}}]}},
+        {'price_range': {**price, 'lines': [{**line, 'benefits': {
+            **line['benefits'], 'deductible_applies': True}}]}},
+    ):
+        assert collection_guidance.build({**result, **changed})['amount_cents'] is None
+
+
 def test_patient_share_and_collection_policy_are_independent():
     result = scenario()
     result.pop('collection_policy')

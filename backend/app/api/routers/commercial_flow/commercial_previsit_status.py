@@ -365,6 +365,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     route_payer = None
     if practice_id:
         result['nmct_bcbstx_refundable_advance_enabled'] = _api.network_participation.is_nmct_practice(practice_id)
+        result['nmct_fixed_office_copay_advance_enabled'] = result['nmct_bcbstx_refundable_advance_enabled']
         # Use current clinic policy so disabled deferral cannot retain an old $0 decision.
         result.pop('collection_policy', None)
         payer_id = case['previsit_context'].get('payer_id')

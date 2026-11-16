@@ -325,6 +325,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         if target := blue_cross_proxy.biopsy_collection_target(result, inputs['service_date']):
             result['provisional_collection_target'] = target
     result['nmct_bcbstx_refundable_advance_enabled'] = _api.network_participation.is_nmct_practice(session['practice_id'])
+    result['nmct_fixed_office_copay_advance_enabled'] = result['nmct_bcbstx_refundable_advance_enabled']
     result['collection_guidance'] = _api.collection_guidance.build(result, review)
     result.pop('botox_preview', None)
     if botox_review.is_botox_visit(inputs) and payload:

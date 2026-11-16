@@ -1,5 +1,5 @@
 """Humana's shared STC 98 response must select the in-person specialist tier."""
-from app.insurance import commercial
+from app.insurance import collection_guidance, commercial
 
 
 def test_humana_specialist_office_terms_exclude_other_services_and_combined_tier():
@@ -52,3 +52,21 @@ def test_humana_specialist_office_terms_exclude_other_services_and_combined_tier
     assert benefits['plan_details']['medicare_ppo_evidence']
     assert all('both active coverage and inactive' not in reason
                for reason in benefits['review_reasons'])
+    identity = {'status': 'matched', 'binding': 'synthetic-binding', 'match_version': 2}
+    benefits.update(identity=identity, network_status='in_network',
+                    network_source='clinic_library_contract')
+    result = {'payer': 'Humana Health Plan', 'plan_details': {'stedi': benefits['plan_details']},
+              'identity': identity, 'benefits': benefits,
+              'billing_protection': {'status': 'not_qmb', 'identity_binding': identity['binding'],
+                                     'reference': 'synthetic-check', 'verified_at': '2026-11-16T12:00:00Z'},
+              'nmct_fixed_office_copay_advance_enabled': True,
+              'price_range': {'mode': 'services', 'complete': False,
+                              'lines': [{'id': 'office', 'code': '99203', 'units': 1,
+                                         'allowed_cents': None,
+                                         'rate_resolution': {'status': 'RATE_UNAVAILABLE'},
+                                         'benefits': benefits,
+                                         'issues': [*benefits['review_reasons'],
+                                                    'Verify the payer plan category and active database fee for this code, modifier and visit.']}]}}
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 4000
+    assert guidance['collection_rule']['mode'] == 'nmct_fixed_office_copay_advance'

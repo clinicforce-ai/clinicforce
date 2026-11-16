@@ -9,6 +9,56 @@ from app.insurance.network_participation import verified_in_network
 from app.insurance.provider_specialty import office_role
 
 
+def _nmct_fixed_office_copay(result: dict, benefits: dict, price: dict,
+                             lines: list[dict], amount: int) -> bool:
+    """Approve one sourced office copay when only the CPT allowance is missing."""
+    if (result.get('nmct_fixed_office_copay_advance_enabled') is not True
+            or price.get('mode') != 'services' or price.get('conditional')
+            or price.get('service_issues') or len(lines) != 1 or amount <= 0
+            or benefits.get('network_source') != 'clinic_library_contract'
+            or not verified_in_network(benefits)
+            or benefits.get('qmb_status') == 'protected'
+            or (result.get('billing_protection') or {}).get('status') == 'qmb'
+            or (result.get('collection_policy') or {}).get('mode') == 'defer_to_claim'
+            or len((((result.get('plan_details') or {}).get('stedi') or {}).get('names') or [])) != 1):
+        return False
+    line = lines[0]
+    terms = line.get('benefits') or {}
+    copay = terms.get('copay_cents')
+    if (line.get('code') not in {str(n) for n in (*range(99202, 99206), *range(99212, 99216))}
+            or line.get('units') != 1 or line.get('modifiers') or line.get('conditions')
+            or line.get('allowed_cents') is not None
+            or (line.get('rate_resolution') or {}).get('status') != 'RATE_UNAVAILABLE'
+            or terms.get('active') is not True or terms.get('copay_period') != 'VISIT'
+            or type(copay) is not int or not 0 < copay <= 100_000 or amount > copay
+            or terms.get('deductible_applies') is True
+            or str(terms.get('coinsurance_percent')) not in {'0', '0.0', '0.00'}
+            or type(terms.get('oop_remaining_cents')) is not int
+            or terms['oop_remaining_cents'] < copay or terms.get('source_errors')
+            or any(issue not in {
+                'Verify the active clinic contract rate and exact plan mapping for this code, modifier and visit.',
+                'Verify the payer plan category and active database fee for this code, modifier and visit.',
+                'Confirm the remaining individual deductible that applies to this visit.',
+                "Confirm the plan's referral requirement and, if required, that a referral is on file.",
+            } for issue in line.get('issues') or [])):
+        return False
+    source = [row for row in terms.get('reported_options') or []
+              if row.get('id') == terms.get('copay_id') and row.get('kind') == 'copay']
+    if len(source) != 1:
+        return False
+    row = source[0]
+    note = str(row.get('payer_note') or '')
+    return (row.get('amount_cents') == copay
+            and row.get('service_type_code') == '98'
+            and row.get('network') in {'IN_NETWORK', 'Y'}
+            and row.get('time_period') in {'VISIT', '27'}
+            and row.get('coverage_level') in {'INDIVIDUAL', 'IND'}
+            and not row.get('diagnosis_scoped')
+            and (not row.get('places_of_service') or '11' in row['places_of_service'])
+            and bool(re.search(r'\boffice\b.*\b(?:specialist|primary care|pcp)\b', note, re.I))
+            and not re.search(r'\b(?:virtual|telehealth|telemedicine|on.demand|remote)\b', note, re.I))
+
+
 def preview_office_copay_applies(benefits: dict, price: dict, lines: list[dict]) -> bool:
     """A common office copay can be independent of the eventual E/M level."""
     return (price.get('mode') == 'alternatives'
@@ -185,6 +235,9 @@ def office_copay_amount(result: dict, benefits: dict, price: dict, lines: list[d
         guidance.update(status='estimated', basis='out_of_pocket_limit' if oop_met else 'office_copay',
                         reason=('The payer reports $0 remaining on the applicable individual in-network out-of-pocket maximum for this covered office visit.'
                                 if oop_met else 'The applicable office-visit copay is collected once. Any additional service responsibility will follow the claim.'))
+        if not oop_met and _nmct_fixed_office_copay(result, benefits, price, lines, amount):
+            guidance['collection_rule'] = {'mode': 'nmct_fixed_office_copay_advance',
+                'reference': 'Current member-bound Stedi office copay and NMCT Clinical Library contract'}
     return amount if amount is not None else cigna_refundable_office_copay(
         result, benefits, price, lines, guidance, assumptions)
 
