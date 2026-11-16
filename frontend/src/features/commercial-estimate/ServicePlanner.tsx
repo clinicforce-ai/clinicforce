@@ -22,7 +22,6 @@ import { SelectedServiceChips } from './SelectedServiceChips'
 
 type Save = (review: VisitReview) => Promise<boolean>
 const groupOf = (row: VisitCode) => row.service_group || groupFor(row.code)
-
 export function ServicePlanner({
   result,
   busy,
@@ -444,6 +443,12 @@ export function ServicePlanner({
         (emgVisit || chosen.some((row) => groupOf(row) === 'nerve')) && (
           <section className="cash-package-options">
             <h3>Cash package</h3>
+            {result.cash_quote?.selection_source === 'appointment_scope' && (
+              <p className="visit-muted">
+                The four-area booking uses the full arms-and-legs package. Confirm both arms and
+                both legs are planned before collecting.
+              </p>
+            )}
             <p className="visit-muted">
               Choose the package that matches the planned care. The focused visit is included. Final
               CPTs follow the services performed.
@@ -457,6 +462,9 @@ export function ServicePlanner({
               >
                 {row.label} · {money(row.amount_cents)}
                 {row.indication && <small>{row.indication}</small>}
+                {row.likely_cpt_examples && (
+                  <small>Likely CPT examples: {row.likely_cpt_examples}</small>
+                )}
               </button>
             ))}
           </section>

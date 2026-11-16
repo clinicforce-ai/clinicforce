@@ -7,7 +7,9 @@ def build(result: dict, review: dict | None, guidance: dict, price: dict, lines:
     complete = (price.get('cash_complete') and not price.get('service_issues')
                 and all(type(value) is int and 0 <= value <= 100_000_000 for value in amounts)
                 and amounts[0] <= amounts[1])
-    message = ((result.get('cash_quote') or {}).get('reason')
+    quote = result.get('cash_quote') or {}
+    message = (quote.get('reason')
+               or (quote.get('message') if quote.get('selection_source') == 'appointment_scope' else None)
                or (result.get('cash_fallback') or {}).get('reason')
                or 'Cash pricing for the selected services.')
     payments = (review or {}).get('payments') or {}
@@ -21,7 +23,7 @@ def build(result: dict, review: dict | None, guidance: dict, price: dict, lines:
         requirements={kind: 'Insurance requirements do not establish the cash price' for kind in ('referral', 'authorization')})
     if payments.get('reference') and complete:
         guidance['reason'] += ' The recorded payment was deducted once.'
-    for line in lines:
+    for line in [] if quote.get('selection_source') == 'appointment_scope' else lines:
         terms = line.get('benefits') or {}
         guidance['services'].append({'id': line.get('id'), 'code': line.get('code'),
             'benefit_source': line.get('benefit_source') or result.get('benefit_source'),

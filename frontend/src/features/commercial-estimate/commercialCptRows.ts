@@ -105,6 +105,16 @@ export function commercialCashRows(
             .join('; ')
         : result.cash_quote?.package_label || 'Not selected',
     },
+    ...(result.cash_quote?.likely_cpt_examples
+      ? [
+          {
+            label: 'Likely CPT examples',
+            value: result.cash_quote.likely_cpt_examples,
+            detail:
+              'Coding examples from the clinic price list; final CPTs depend on the study performed.',
+          },
+        ]
+      : []),
     { label: 'Clinic cash price', value: model.cashPrice || 'Not quoted' },
   ]
 }
