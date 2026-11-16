@@ -1,4 +1,8 @@
-import type { PrebookingEstimate, PrebookingTerms } from '../../services/api/prebooking-eligibility'
+import type {
+  PrebookingEstimate,
+  PrebookingPlan,
+  PrebookingTerms,
+} from '../../services/api/prebooking-eligibility'
 
 const money = (cents: number | null | undefined) =>
   cents == null
@@ -57,8 +61,17 @@ function BenefitTerms({ terms }: { terms: PrebookingTerms }) {
   )
 }
 
-export default function StaffPrebookingResult({ result }: { result: PrebookingEstimate }) {
+export default function StaffPrebookingResult({
+  result,
+  plan,
+}: {
+  result: PrebookingEstimate
+  plan: PrebookingPlan
+}) {
   const address = result.patient_address
+  const labels = new Map(
+    plan.groups.flatMap((group) => group.codes.map((item) => [item.code, item.label] as const)),
+  )
   const locality = [address?.city, address?.state].filter(Boolean).join(', ')
   const localityAndPostal = [locality, address?.postal_code].filter(Boolean).join(' ')
   const patient =
@@ -130,7 +143,7 @@ export default function StaffPrebookingResult({ result }: { result: PrebookingEs
           <p className="staff-eyebrow">Check before booking</p>
           <h2 id="prebooking-result-title">Prospective visit estimate</h2>
           <p className="staff-small staff-muted">
-            {result.payer}
+            {result.patient_given_name} {result.patient_family_name} · {result.payer}
             {result.plan_name ? ` · ${result.plan_name}` : ''} · Checked for {result.checked_on}
           </p>
         </div>
@@ -190,6 +203,13 @@ export default function StaffPrebookingResult({ result }: { result: PrebookingEs
           )}
         </div>
       )}
+      {priced && result.collection.amount_cents != null && (
+        <div className="prebooking-cost-card">
+          <span>Estimated check-in amount after booking</span>
+          <strong>{money(result.collection.amount_cents)}</strong>
+          <small>{result.collection.reason} Recheck the booked visit before collecting.</small>
+        </div>
+      )}
       {priced && result.plan_total_cents != null && (
         <div className="prebooking-share">
           <div className="prebooking-share-labels">
@@ -219,10 +239,11 @@ export default function StaffPrebookingResult({ result }: { result: PrebookingEs
               <article className="prebooking-service-row" key={line.code}>
                 <div className="prebooking-service-name">
                   <strong>
-                    {line.code} × {line.units}
+                    {labels.get(line.code) ||
+                      (line.role === 'visit' ? 'Office visit' : 'Possible procedure or test')}
                   </strong>
-                  <span>
-                    {line.role !== 'visit' ? 'Possible procedure or test' : 'Office visit'}
+                  <span className="prebooking-code-reference">
+                    CPT {line.code} × {line.units}
                   </span>
                 </div>
                 <div>

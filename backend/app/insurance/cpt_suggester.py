@@ -18,6 +18,7 @@ from app.insurance.cpt_prompt_contract import (
     _RETRYABLE_BEDROCK_ERRORS,
     _TOOL_SCHEMA,
     _PRELIMINARY_SYSTEM,
+    _PREBOOKING_SYSTEM,
 )
 from app.insurance import cpt_tic_policy, tic_web_evidence
 from app.insurance.cpt_history import prior_appointments as _prior_appointments, established_visit_for_planning
@@ -416,19 +417,17 @@ def suggest_cpt_codes(context: str, rate_lines: list[dict[str, Any]], prior_comp
         log_warning("CPT suggestions", "Bedrock review failed (%s); using rate-schedule wording matches.", type(exc).__name__)
         return _fallback_suggestions(context, rate_lines)
 
-
-def suggest_preliminary_cpt_codes(context: str, prior_completed_appointments: Any = None) -> dict[str, Any]:
+def suggest_preliminary_cpt_codes(context: str, prior_completed_appointments: Any = None, *, prospective: bool = False) -> dict[str, Any]:
     """Return unpriced candidates only when eCW context supports clinician review."""
     prior = _prior_appointments(prior_completed_appointments)
-    guidance = (tic_web_evidence.fetch_tic_guidance()
-                if re.search(r'\btics?\b', context, re.I) else [])
+    guidance = tic_web_evidence.fetch_tic_guidance() if re.search(r'\btics?\b', context, re.I) else []
     try:
         client = boto3.client("bedrock-runtime")
         for attempt in range(3):
             try:
                 response = client.converse(
                     modelId=BEDROCK_MODEL_ID,
-                    system=[{"text": _PRELIMINARY_SYSTEM}],
+                    system=[{"text": _PREBOOKING_SYSTEM if prospective else _PRELIMINARY_SYSTEM}],
                     messages=[{"role": "user", "content": [{"text": json.dumps({"clinical_context": context,
                         "prior_completed_appointments": prior, "public_guidance": guidance})}]}],
                     toolConfig={"tools": [{"toolSpec": {"name": _PRELIMINARY_TOOL_NAME,
@@ -444,12 +443,14 @@ def suggest_preliminary_cpt_codes(context: str, prior_completed_appointments: An
         payload = _tool_payload(response, _PRELIMINARY_TOOL_NAME)
         if not isinstance(payload.get("groups"), list) or not isinstance(payload.get("notes"), list):
             raise ValueError("Bedrock returned invalid preliminary CPT suggestion groups")
-        baseline = _history_televisit_baseline(context, prior)
+        baseline = {"groups": []} if prospective else _history_televisit_baseline(context, prior)
         return payload if payload["groups"] or not baseline["groups"] else baseline
     except Exception as exc:
         log_warning("Preliminary CPT suggestions", "Bedrock review failed (%s); no unpriced candidates returned.", type(exc).__name__)
-        baseline = _history_televisit_baseline(context, prior)
-        return baseline if baseline["groups"] else {"groups": [], "notes": ["Clinical coding review is temporarily unavailable. Ask the clinician to document the planned service before selecting a code."]}
+        baseline = _history_televisit_baseline(context, prior) if not prospective else {"groups": []}
+        return baseline if baseline["groups"] else {"groups": [], "notes": [
+            "Possible care could not be suggested right now. Add any test or treatment already discussed to the visit reason and try again."
+            if prospective else "Clinical coding review is temporarily unavailable. Ask the clinician to document the planned service before selecting a code."]}
 
 
 def clinical_context_from_pages(pages: list[tuple[int, str]]) -> dict[str, Any]:

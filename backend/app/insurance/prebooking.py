@@ -126,22 +126,29 @@ def plan(reason: str, visit_type: str, suggestions: dict) -> dict:
             code = str(candidate.get("code") or "").upper() if isinstance(candidate, dict) else ""
             if not re.fullmatch(r"(?:\d{5}|[A-Z]\d{4}|\d{4}[A-Z])", code) or code in seen:
                 continue
+            if code in cpt_rules.NCS_CODES and cpt_rules.documented_ncs_code(reason) != code:
+                continue
             if cpt_rules.service_definition(code)["group"] == "visit":
                 continue  # The planning visit has one explicit baseline, not an unchosen E/M family.
             seen.add(code)
-            codes.append({"code": code, "reason": str(candidate.get("reason") or "Possible planned service")[:500],
+            codes.append({"code": code, "label": str(candidate.get("description") or group.get("label") or "Possible service")[:160],
+                          "reason": str(candidate.get("reason") or "Possible planned service")[:500],
                           "role": cpt_rules.service_definition(code)["role"],
                           "service_type": visit_estimate.service_type(code, {}),
                           "selected_by_default": False})
-        if codes:
+        if codes or group.get("description") or group.get("codes"):
             groups.append({"label": str(group.get("label") or "Possible services")[:120],
+                           "description": str(group.get("description") or (
+                               "Confirm the exact planned service details before pricing." if not codes else ""))[:500],
                            "selection_mode": "single" if group.get("selection_mode") == "single" else "multiple",
                            "codes": codes})
     if visit_type in {"new", "established"}:
         code = "99203" if visit_type == "new" else "99213"
         label = "new-patient" if visit_type == "new" else "returning-patient"
-        groups.insert(0, {"label": "Office visit included in estimate", "selection_mode": "single",
-                          "codes": [{"code": code,
+        groups.insert(0, {"label": "Office visit included in estimate",
+                          "description": "This is a starting price scenario; the clinician confirms the billed level.",
+                          "selection_mode": "single", "codes": [{"code": code,
+                                     "label": "Office visit",
                                      "reason": f"Planning baseline for a {label} office visit; the billed level can differ.",
                                      "role": "consultation", "service_type": "98",
                                      "selected_by_default": True}]})

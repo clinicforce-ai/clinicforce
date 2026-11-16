@@ -223,6 +223,12 @@
   margin-top: 4px;
 }
 
+.prebooking-code-reference {
+  display: block;
+  color: var(--staff-muted);
+  font-size: 12px;
+}
+
 .prebooking-benefits {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));

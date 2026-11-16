@@ -444,7 +444,7 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
           save this check or create a patient record.
         </p>
       </form>
-      {result && <StaffPrebookingResult result={result} />}
+      {result && plan && <StaffPrebookingResult result={result} plan={plan} />}
     </div>
   )
 }

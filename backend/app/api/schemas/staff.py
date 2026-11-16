@@ -198,6 +198,7 @@ class PrebookingEstimateRequest(PrebookingEligibility, PrebookingPlanRequest):
 
 class PrebookingPlanCandidate(Model):
     code: str
+    label: str
     reason: str
     role: str
     service_type: str | None
@@ -206,6 +207,7 @@ class PrebookingPlanCandidate(Model):
 
 class PrebookingPlanGroup(Model):
     label: str
+    description: str
     selection_mode: Literal["single", "multiple"]
     codes: list[PrebookingPlanCandidate]
 
@@ -270,6 +272,23 @@ class PrebookingPatientAddress(Model):
     country: str | None = None
 
 
+class PrebookingCollectionComponents(Model):
+    copay_cents: int | None
+    deductible_cents: int | None
+    coinsurance_cents: int | None
+    allowed_cap_adjustment_cents: int | None
+    oop_adjustment_cents: int | None
+
+
+class PrebookingCollection(Model):
+    """Prospective advance from the clinic's approved collection rule, not a payment request."""
+
+    amount_cents: int | None
+    basis: str
+    reason: str
+    components: PrebookingCollectionComponents | None
+
+
 class PrebookingEstimateResponse(Model):
     """Unknown financial values are null, never assumed to be zero."""
 
@@ -278,6 +297,9 @@ class PrebookingEstimateResponse(Model):
     checked_at: datetime
     checked_on: date
     check_ids: list[str]
+    patient_given_name: str = Field(description="Entered first name for this unsaved inquiry")
+    patient_family_name: str = Field(description="Entered last name for this unsaved inquiry")
+    patient_birth_date: date = Field(description="Entered birth date for this unsaved inquiry")
     patient_address: PrebookingPatientAddress | None = Field(
         description="Patient address returned by the matched Stedi response; null if absent or identity is unverified")
     network_status: Literal["in_network", "out_of_network", "unknown"]
@@ -289,6 +311,7 @@ class PrebookingEstimateResponse(Model):
     plan_total_cents: int | None = Field(description="Estimated insurer share of the allowed total; null unless the complete visit is priced")
     patient_min_cents: int | None
     patient_max_cents: int | None
+    collection: PrebookingCollection
     estimate_status: Literal["priced", "conditional", "needs_review"]
     issues: list[str]
 

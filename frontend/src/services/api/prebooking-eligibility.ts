@@ -30,9 +30,11 @@ export const checkPrebookingEligibility = (details: PrebookingDetails) =>
 export type PrebookingPlan = {
   groups: Array<{
     label: string
+    description: string
     selection_mode: 'single' | 'multiple'
     codes: Array<{
       code: string
+      label: string
       reason: string
       role: string
       service_type: string | null
@@ -74,6 +76,9 @@ export type PrebookingEstimate = {
   checked_at: string
   checked_on: string
   check_ids: string[]
+  patient_given_name: string
+  patient_family_name: string
+  patient_birth_date: string
   patient_address: {
     line1: string | null
     line2: string | null
@@ -107,6 +112,18 @@ export type PrebookingEstimate = {
   plan_total_cents: number | null
   patient_min_cents: number | null
   patient_max_cents: number | null
+  collection: {
+    amount_cents: number | null
+    basis: string
+    reason: string
+    components: {
+      copay_cents: number | null
+      deductible_cents: number | null
+      coinsurance_cents: number | null
+      allowed_cap_adjustment_cents: number | null
+      oop_adjustment_cents: number | null
+    } | null
+  }
   estimate_status: 'priced' | 'conditional' | 'needs_review'
   issues: string[]
 }

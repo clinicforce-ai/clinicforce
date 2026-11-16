@@ -196,8 +196,8 @@ def test_prospective_plan_selects_only_office_baseline_and_never_prices_ai_ideas
     plan = prebooking.plan("Hand numbness; testing may be considered", "established", suggestions)
     assert plan["groups"][0]["codes"][0]["code"] == "99213"
     assert plan["groups"][0]["codes"][0]["selected_by_default"] is True
-    assert [row["code"] for row in plan["groups"][1]["codes"]] == ["95909"]
-    assert plan["groups"][1]["codes"][0]["selected_by_default"] is False
+    assert plan["groups"][1]["codes"] == []
+    assert "Confirm the exact planned service" in plan["groups"][1]["description"]
     assert prebooking.validate_services([{"code": "95909", "units": 1}], "established", "Hand numbness")[0]["confirmed"]
     try:
         prebooking.validate_services([{"code": "95909", "units": 1}, {"code": "95908", "units": 1}],
@@ -212,7 +212,8 @@ def test_prebooking_headache_reason_produces_a_usable_office_visit_baseline():
     plan = prebooking.plan("headache", "new", {"groups": [], "notes": ["No separate test is established."]})
     assert len(plan["groups"]) == 1
     assert plan["groups"][0]["codes"] == [{
-        "code": "99203", "reason": "Planning baseline for a new-patient office visit; the billed level can differ.",
+        "code": "99203", "label": "Office visit",
+        "reason": "Planning baseline for a new-patient office visit; the billed level can differ.",
         "role": "consultation", "service_type": "98", "selected_by_default": True,
     }]
     assert "No separate test" in plan["notes"][0]
@@ -327,8 +328,11 @@ def test_estimate_route_checks_identity_and_services_before_pricing():
                 assert result.status_code == 200, result.text
                 assert result.headers["cache-control"] == "no-store"
                 assert result.json()["coverage"]["status"] == "active_today"
+                assert result.json()["patient_given_name"] == "Pat"
+                assert result.json()["patient_birth_date"] == "1980-01-01"
                 assert result.json()["patient_address"]["line1"] == "100 Example Ave"
                 assert result.json()["patient_max_cents"] is None
+                assert result.json()["collection"]["amount_cents"] is None
                 assert result.json()["network_status"] == "unknown"
                 PrebookingEstimateResponse.model_validate(result.json())
                 assert check.await_count == 2
@@ -405,7 +409,8 @@ def test_payer_birth_date_rejection_is_explicit_and_stops_before_pricing():
     asyncio.run(run())
 
 
-def test_prospective_amount_requires_member_binding_and_verified_network():
+@patch.object(staff_prebooking.commercial_store, "list_connections", return_value=[])
+def test_prospective_amount_requires_member_binding_and_verified_network(_connections):
     from app.api.routers import commercial_estimator
 
     payload = response()
@@ -419,17 +424,21 @@ def test_prospective_amount_requires_member_binding_and_verified_network():
         benefits.update(network_status="in_network", network_source="clinic_library_contract")
         result["network_evidence"] = {"decision": "confirmed_participating", "source": "clinic_library_contract",
                                       "reason": "Synthetic contract."}
-        result["price_range"] = {"complete": True, "conditional": False,
+        result["price_range"] = {"complete": True, "conditional": False, "mode": "services",
             "allowed_min_cents": 10000, "allowed_max_cents": 10000,
             "plan_min_cents": 7500, "plan_max_cents": 7500,
             "patient_min_cents": 2500, "patient_max_cents": 2500,
-            "lines": [{"code": "99213", "units": 1, "allowed_cents": 10000,
+            "lines": [{"id": "prospective:99213", "code": "99213", "units": 1, "allowed_cents": 10000,
                        "allowed_basis": "clinic_contract", "rate_source": "Synthetic signed rate",
                        "rate_resolution": {"status": "RESOLVED"},
-                       "calculation": {"patient_cents": 2500, "plan_cents": 7500}, "benefits": benefits,
+                       "calculation": {"patient_cents": 2500, "plan_cents": 7500,
+                                       "copay_cents": 2500, "deductible_cents": 0,
+                                       "coinsurance_cents": 0, "oop_adjustment_cents": 0,
+                                       "allowed_cap_adjustment_cents": 0}, "benefits": benefits,
                        "issues": [], "conditions": []}]}
 
-    with patch.object(commercial_estimator, "_attach_previsit_pricing", side_effect=priced):
+    with patch.object(commercial_estimator, "_attach_previsit_pricing", side_effect=priced), \
+         patch.object(staff_prebooking.commercial_store, "list_connections", return_value=[]):
         result = staff_prebooking._estimate_from_payer(network_participation.NMCT_PRACTICE_ID, details, context, PAYER,
             PROVIDER, payload, "2026-10-27", lines)
         assert result["estimate_status"] == "priced"
@@ -438,9 +447,22 @@ def test_prospective_amount_requires_member_binding_and_verified_network():
         assert result["patient_max_cents"] == 2500
         assert result["lines"][0]["rate_source"] == "Synthetic signed rate"
         assert result["lines"][0]["benefits"]["copay_cents"] is None
+        policy = {"mode": "collect_supported_advance", "approved_by": "synthetic-admin",
+                  "approved_at": "2026-01-01T00:00:00Z", "reference": "synthetic-policy"}
+        with patch.object(staff_prebooking.commercial_store, "list_connections", return_value=[
+                {"stedi_payer_id": "EXAMPLE", "rules": {"collection_policy": policy}}]):
+            approved = staff_prebooking._estimate_from_payer(network_participation.NMCT_PRACTICE_ID,
+                details, context, PAYER, PROVIDER, payload, "2026-10-27", lines)
+            assert approved["collection"]["amount_cents"] == 2500
+        with patch.object(staff_prebooking.commercial_store, "list_connections", return_value=[]):
+            no_policy = staff_prebooking._estimate_from_payer("clinic-1", details, context, PAYER,
+                PROVIDER, payload, "2026-10-27", lines)
+            assert no_policy["patient_max_cents"] is None
+            assert no_policy["collection"]["amount_cents"] is None
         PrebookingEstimateResponse.model_validate({"coverage": prebooking.evaluate(payload, details, "2026-10-27"),
             "payer": PAYER["displayName"], "checked_at": "2026-10-27T12:00:00Z", "checked_on": "2026-10-27",
-            "check_ids": [], "patient_address": None, **result})
+            "check_ids": [], "patient_given_name": "Pat", "patient_family_name": "Example",
+            "patient_birth_date": "1980-01-01", "patient_address": None, **result})
 
     def office_terms(result, practice_id, inputs, source, payer_id, benefits, **kwargs):
         priced(result, practice_id, inputs, source, payer_id, benefits, **kwargs)
@@ -558,6 +580,8 @@ def test_uncertain_service_response_stops_further_inquiries_and_withholds_amount
                          "service_type": "98", "allowed_cents": 10000, "patient_cents": 2500,
                          "benefits": staff_prebooking._terms({}), "issues": [], "conditions": []}],
                      "patient_min_cents": 2500, "patient_max_cents": 2500,
+                     "collection": {"amount_cents": 2500, "basis": "anticipated_services",
+                                    "reason": "Synthetic advance.", "components": None},
                      "estimate_status": "priced", "issues": []}), \
                  patch.dict(os.environ, {"STEDI_EXECUTION_MODE": "commercial_pilot", "STEDI_LIVE_ELIGIBILITY_ENABLED": "true"}):
                 result = await client.post("/api/staff/prebooking-estimate/check", json=body)
@@ -565,6 +589,7 @@ def test_uncertain_service_response_stops_further_inquiries_and_withholds_amount
                 assert check.await_count == 2
                 assert result.json()["check_ids"] == ["ec_synthetic-123", "ec_synthetic-uncertain"]
                 assert result.json()["patient_max_cents"] is None
+                assert result.json()["collection"]["amount_cents"] is None
                 assert result.json()["lines"][0]["patient_cents"] is None
                 assert result.json()["lines"][0]["allowed_cents"] is None
                 assert result.json()["estimate_status"] == "needs_review"

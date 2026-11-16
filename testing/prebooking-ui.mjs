@@ -27,8 +27,8 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
     const isEmg = route.request().postDataJSON().reason.includes('EMG')
     const code = isEmg ? '99213' : '99203'
     body = { groups: [
-      { label: 'Office visit included in estimate', selection_mode: 'single', codes: [{ code, reason: 'Office visit planning baseline; the billed level can differ.', role: 'consultation', service_type: '98', selected_by_default: true }] },
-      ...(isEmg ? [{ label: 'Possible testing', selection_mode: 'multiple', codes: [{ code: '95909', reason: 'Nerve study explicitly mentioned in the visit reason.', role: 'diagnostic', service_type: '73', selected_by_default: false }] }] : []),
+      { label: 'Office visit included in estimate', description: 'Starting visit scenario.', selection_mode: 'single', codes: [{ code, label: 'Office visit', reason: 'Office visit planning baseline; the billed level can differ.', role: 'consultation', service_type: '98', selected_by_default: true }] },
+      ...(isEmg ? [{ label: 'Possible testing', description: 'Confirm the planned nerve study count.', selection_mode: 'multiple', codes: [{ code: '95909', label: 'Nerve study', reason: 'Nerve study explicitly mentioned in the visit reason.', role: 'diagnostic', service_type: '73', selected_by_default: false }] }] : []),
     ], notes: isEmg ? [] : ['No separate test is established.'], message: 'Starting estimate.' }
   } else if (url.pathname === '/api/staff/prebooking-estimate/check') {
     checks++
@@ -42,6 +42,7 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
     if (addedEmg) assert.equal(inquiry.selected_services.find((service) => service.code === '95909').units, 1)
     body = priced ? { coverage: { status: 'active_today', message: 'Synthetic coverage response.', coverage_start: null, coverage_end: null },
       payer: 'Example Health', checked_at: '2026-10-29T12:00:00Z', checked_on: '2026-10-29', check_ids: ['ec_synthetic'],
+      patient_given_name: 'Pat', patient_family_name: 'Example', patient_birth_date: '1980-01-01',
       patient_address: { line1: '100 Example Ave', line2: null, city: 'Albany', state: 'NY', postal_code: '12207', country: null },
       network_status: 'in_network', network_evidence: { source: 'clinic_library_contract', reason: 'Synthetic NMCT contract.' }, plan_name: 'Example PPO',
       benefits: { copay_cents: 2500, coinsurance_percent: '0', deductible_annual_cents: partial ? null : 100000, deductible_remaining_cents: partial ? null : 40000,
@@ -52,14 +53,18 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
           rate_source: 'Synthetic EMG rate', benefits: { coinsurance_percent: '25' }, issues: [], conditions: [] }] : [])],
       allowed_total_cents: addedEmg ? 30000 : 10000, plan_total_cents: partial ? null : addedEmg ? 22500 : 7500,
       patient_min_cents: partial ? null : addedEmg ? 7500 : 2500, patient_max_cents: partial ? null : addedEmg ? 7500 : 2500,
+      collection: { amount_cents: partial ? null : addedEmg ? 7500 : 2500, basis: 'anticipated_services', reason: 'Synthetic approved advance.', components: null },
       estimate_status: partial ? 'needs_review' : 'priced', issues: partial ? ['The insurer did not return enough applicable benefit terms to calculate the patient share.', 'Confirm the remaining individual deductible that applies to this visit.'] : [] }
       : { coverage: { status: 'payer_rejected', message: 'The insurer rejected the birth date. Check the subscriber birth date on the policy.', coverage_start: null, coverage_end: null },
       payer: 'Example Health', checked_at: '2026-10-29T12:00:00Z', checked_on: '2026-10-29', check_ids: ['ec_synthetic'],
+      patient_given_name: 'Pat', patient_family_name: 'Example', patient_birth_date: '1980-01-01',
       patient_address: { line1: '100 Example Ave', line2: null, city: 'Albany', state: 'NY', postal_code: '12207', country: null },
       network_status: 'unknown', network_evidence: { reason: 'Contract scope unresolved.' }, plan_name: null, benefits: null,
       lines: [],
       allowed_total_cents: null, plan_total_cents: null,
-      patient_min_cents: null, patient_max_cents: null, estimate_status: 'needs_review', issues: ['The insurer rejected the birth date.'] }
+      patient_min_cents: null, patient_max_cents: null,
+      collection: { amount_cents: null, basis: 'needs_review', reason: 'No payer confirmation.', components: null },
+      estimate_status: 'needs_review', issues: ['The insurer rejected the birth date.'] }
   } else if (url.pathname === '/api/staff/intakes/search') {
     body = { intakes: [], has_more: false }
   } else {
@@ -107,6 +112,7 @@ try {
   assert.match(totals, /\$100\.00/)
   assert.match(totals, /\$25\.00/)
   assert.match(await page.locator('.prebooking-share-labels').innerText(), /\$75\.00/)
+  assert.match(await page.getByText('Estimated check-in amount after booking').locator('..').innerText(), /\$25\.00/)
   assert.match(await page.locator('.prebooking-service-row').innerText(), /Synthetic signed rate/)
   assert.equal(await page.locator('.prebooking-benefit-section').getByText('Deductible remaining').count(), 1)
   partial = true
@@ -128,7 +134,7 @@ try {
   assert.equal(plans, 2)
   assert.equal(checks, 4)
   assert.match(await page.locator('.prebooking-baseline').innerText(), /99213/)
-  await page.getByLabel(/95909.*Nerve study/).check()
+  await page.getByLabel(/Nerve study.*CPT 95909/).check()
   await page.getByRole('button', { name: 'Check insurance and estimate visit' }).click()
   await page.getByText('Synthetic EMG rate').waitFor()
   assert.equal(checks, 5)

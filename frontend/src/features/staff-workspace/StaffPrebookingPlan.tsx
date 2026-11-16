@@ -14,7 +14,7 @@ export default function StaffPrebookingPlan({ plan, selected, busy, onToggle, on
     .find((code) => code.selected_by_default)
   const extras = plan.groups
     .map((group) => ({ ...group, codes: group.codes.filter((code) => !code.selected_by_default) }))
-    .filter((group) => group.codes.length)
+    .filter((group) => group.codes.length || group.description)
 
   return (
     <section className="prebooking-plan" aria-labelledby="prebooking-plan-title">
@@ -34,6 +34,7 @@ export default function StaffPrebookingPlan({ plan, selected, busy, onToggle, on
           {extras.map((group, index) => (
             <div key={`${group.label}:${index}`} className="prebooking-service-group">
               <h4>{group.label}</h4>
+              {group.description && <p className="staff-small staff-muted">{group.description}</p>}
               {group.codes.map((candidate) => (
                 <div key={candidate.code} className="prebooking-extra-row">
                   <label className="prebooking-service-choice">
@@ -44,7 +45,8 @@ export default function StaffPrebookingPlan({ plan, selected, busy, onToggle, on
                       onChange={() => onToggle(candidate.code, group)}
                     />
                     <span>
-                      <strong>{candidate.code}</strong> · {candidate.reason}
+                      <strong>{candidate.label || 'Possible service'}</strong> · CPT{' '}
+                      {candidate.code} · {candidate.reason}
                     </span>
                   </label>
                   {candidate.code in selected && (
