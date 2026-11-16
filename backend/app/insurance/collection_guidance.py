@@ -454,7 +454,7 @@ def build(result: dict, review: dict | None = None) -> dict:
     apply_blue_ppo_family_quote(result, guidance, review, assumptions, safe=bool(safe))
     apply_cigna_quotes(result, guidance, review, assumptions, safe=bool(safe))
     apply_humana_office_copay(result, guidance, review, allowed=not any((qmb_protected, qmb_unresolved, adverse, source_errors, line_blocker, same_policy_conflict, unresolved_order, unconfirmed_zero_oop)))
-    apply_qmb_pending(result, guidance, unresolved=qmb_unresolved, protected=qmb_protected,
+    apply_qmb_pending(result, guidance, unresolved=qmb_unresolved and bool(payer_plan.get('medicare_hmo_evidence')), protected=qmb_protected,
         member_bound=member_bound, source_errors=source_errors, same_policy_conflict=same_policy_conflict, unresolved_order=unresolved_order)
     for line in lines:
         mapped = 'needs mapping' not in line.get('benefit_basis', '')

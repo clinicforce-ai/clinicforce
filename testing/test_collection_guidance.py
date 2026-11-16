@@ -21,7 +21,7 @@ def scenario(amount=3800):
                     'requirements': {kind: {'required': 'unknown', 'cleared': False} for kind in ('referral', 'authorization')}}}]}}
 
 
-def test_humana_medicare_ppo_defers_copay_until_qmb_check():
+def test_humana_medicare_ppo_withholds_copay_until_qmb_check():
     result = scenario(4000)
     result.update(payer='Humana Health Plan', plan_details={'stedi': {
         'names': ['Humana Honor'], 'medicare_ppo_evidence': 'synthetic-status'}})
@@ -39,11 +39,10 @@ def test_humana_medicare_ppo_defers_copay_until_qmb_check():
                                 'kind': 'copay', 'service_type_code': '98',
                                 'amount_cents': 4000, 'network': 'IN_NETWORK'}])
     guidance = collection_guidance.build(result)
-    assert guidance['amount_cents'] == 0
-    assert guidance['basis'] == 'qmb_status_pending'
-    assert encounter_summary.build({**result, 'collection_guidance': guidance})['collect_today_cents'] == 0
+    assert guidance['amount_cents'] is None
+    assert encounter_summary.build({**result, 'collection_guidance': guidance})['collect_today_cents'] is None
     paid = collection_guidance.build(result, {'payments': {'reference': 'synthetic-receipt', 'amount_cents': 1500}})
-    assert paid['amount_cents'] == 0
+    assert paid['amount_cents'] is None
     for changed in (
         {'billing_protection': {'status': 'qmb'}},
         {'identity': {'status': 'review'}},
@@ -170,9 +169,7 @@ def test_original_medicare_office_collects_zero_without_zeroing_patient_liabilit
     result['stedi_payer']['id'] = 'TPTWE'
     assert collection_guidance.build(result)['amount_cents'] == 0
     result['benefits']['plan_details'] = {'names': ['Example Medicare Advantage PPO']}
-    pending = collection_guidance.build(result)
-    assert pending['amount_cents'] == 0
-    assert pending['basis'] == 'qmb_status_pending'
+    assert collection_guidance.build(result)['amount_cents'] is None
     result['benefits'].pop('plan_details')
     result['stedi_payer']['id'] = 'EXAMPLE'
     assert collection_guidance.build(result)['amount_cents'] is None
