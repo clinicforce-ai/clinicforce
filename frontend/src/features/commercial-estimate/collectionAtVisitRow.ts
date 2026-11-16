@@ -66,6 +66,17 @@ export function collectionAtVisitRow(
     bluecardDeductible: ReturnType<typeof bluecardOfficeDeductibleScenario>
   },
 ): CostBreakdownRow {
+  if (
+    !model.previousEstimate &&
+    result.collection_guidance?.basis === 'qmb_status_pending' &&
+    result.collection_guidance.amount_cents === 0
+  )
+    return {
+      label: 'Amount to collect at visit · Medicare protection pending',
+      value: money(0),
+      detail: result.collection_guidance.reason,
+      emphasis: true,
+    }
   const officePlanning = result.aetna_office_planning
   if (officePlanning?.status === 'planning_only' && officePlanning.collectable === false) {
     const balance = Math.max(

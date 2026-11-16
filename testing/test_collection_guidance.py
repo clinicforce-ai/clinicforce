@@ -21,7 +21,7 @@ def scenario(amount=3800):
                     'requirements': {kind: {'required': 'unknown', 'cleared': False} for kind in ('referral', 'authorization')}}}]}}
 
 
-def test_humana_medical_status_message_collects_refundable_specialist_copay():
+def test_humana_medicare_ppo_defers_copay_until_qmb_check():
     result = scenario(4000)
     result.update(payer='Humana Health Plan', plan_details={'stedi': {
         'names': ['Humana Honor'], 'medicare_ppo_evidence': 'synthetic-status'}})
@@ -39,33 +39,34 @@ def test_humana_medical_status_message_collects_refundable_specialist_copay():
                                 'kind': 'copay', 'service_type_code': '98',
                                 'amount_cents': 4000, 'network': 'IN_NETWORK'}])
     guidance = collection_guidance.build(result)
-    assert guidance['amount_cents'] == 4000
-    assert guidance['basis'] == 'humana_specialist_copay_advance'
-    assert guidance['collection_rule']['mode'] == 'humana_specialist_copay_advance'
-    assert encounter_summary.build({**result, 'collection_guidance': guidance})['collect_today_cents'] == 4000
+    assert guidance['amount_cents'] == 0
+    assert guidance['basis'] == 'qmb_status_pending'
+    assert encounter_summary.build({**result, 'collection_guidance': guidance})['collect_today_cents'] == 0
     paid = collection_guidance.build(result, {'payments': {'reference': 'synthetic-receipt', 'amount_cents': 1500}})
-    assert paid['amount_cents'] == 2500
+    assert paid['amount_cents'] == 0
     for changed in (
         {'billing_protection': {'status': 'qmb'}},
         {'identity': {'status': 'review'}},
         {'benefits': {**result['benefits'], 'has_secondary': True}},
         {'benefits': {**result['benefits'], 'service_date_matches': False}},
-        {'price_range': {**result['price_range'], 'lines': [{**line, 'allowed_cents': None}]}},
         {'price_range': {**result['price_range'], 'lines': [{**line, 'benefits': {
             **line['benefits'], 'deductible_applies': True}}]}},
         {'price_range': {**result['price_range'], 'lines': [{**line, 'benefits': {
             **line['benefits'], 'copay_id': 'other-benefit'}}]}},
     ):
-        assert collection_guidance.build({**result, **changed})['amount_cents'] is None
+        assert collection_guidance.build({**result, **changed})['amount_cents'] in {None, 0}, changed
 
 
 def test_nmct_collects_matched_stedi_office_copay_without_cpt_rate():
     result = scenario(1500)
     result.pop('collection_policy')
     result.update(payer='Humana Health Plan', plan_details={'stedi': {
-        'names': ['Humana TotalComplete']}},
+        'names': ['Humana TotalComplete'], 'medicare_hmo_evidence': 'synthetic-active-stc30'}},
         nmct_fixed_office_copay_advance_enabled=True)
     result['identity'] = {'status': 'matched', 'binding': 'synthetic-binding', 'match_version': 2}
+    result['billing_protection'] = {'status': 'not_qmb', 'identity_binding': 'synthetic-binding',
+                                    'reference': 'synthetic member verification',
+                                    'verified_at': '2026-11-16T12:00:00Z'}
     result['benefits'].update(identity=result['identity'], service_date_matches=True,
         oop_remaining_cents=331000, coinsurance_percent='0')
     price = result['price_range']
@@ -88,6 +89,17 @@ def test_nmct_collects_matched_stedi_office_copay_without_cpt_rate():
     assert encounter_summary.build({**result, 'collection_guidance': guidance})['collect_today_cents'] == 1500
     paid = collection_guidance.build(result, {'payments': {'reference': 'synthetic-receipt', 'amount_cents': 500}})
     assert paid['amount_cents'] == 1000
+    unresolved = {**result, 'billing_protection': {}}
+    pending = collection_guidance.build(unresolved)
+    assert pending['amount_cents'] == 0
+    assert pending['basis'] == 'qmb_status_pending'
+    assert 'Collect $0' in pending['reason']
+    assert encounter_summary.build({**unresolved, 'collection_guidance': pending})['collect_today_cents'] == 0
+    protected = {**result, 'billing_protection': {'status': 'qmb',
+        'identity_binding': 'synthetic-binding', 'reference': 'synthetic member verification',
+        'verified_at': '2026-11-16T12:00:00Z'}}
+    assert collection_guidance.build(protected)['basis'] == 'qmb_protection'
+    assert collection_guidance.build(protected)['amount_cents'] == 0
     other_payer = deepcopy(result)
     other_payer.update(payer='Example Health', plan_details={'stedi': {'names': ['Example Choice']}})
     assert collection_guidance.build(other_payer)['amount_cents'] == 1500
@@ -106,7 +118,7 @@ def test_nmct_collects_matched_stedi_office_copay_without_cpt_rate():
         {'price_range': {**price, 'lines': [{**line, 'benefits': {
             **line['benefits'], 'deductible_applies': True}}]}},
     ):
-        assert collection_guidance.build({**result, **changed})['amount_cents'] is None
+        assert collection_guidance.build({**result, **changed})['amount_cents'] in {None, 0}
 
 
 def test_patient_share_and_collection_policy_are_independent():
@@ -158,7 +170,9 @@ def test_original_medicare_office_collects_zero_without_zeroing_patient_liabilit
     result['stedi_payer']['id'] = 'TPTWE'
     assert collection_guidance.build(result)['amount_cents'] == 0
     result['benefits']['plan_details'] = {'names': ['Example Medicare Advantage PPO']}
-    assert collection_guidance.build(result)['amount_cents'] is None
+    pending = collection_guidance.build(result)
+    assert pending['amount_cents'] == 0
+    assert pending['basis'] == 'qmb_status_pending'
     result['benefits'].pop('plan_details')
     result['stedi_payer']['id'] = 'EXAMPLE'
     assert collection_guidance.build(result)['amount_cents'] is None

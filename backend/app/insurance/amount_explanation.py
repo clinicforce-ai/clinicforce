@@ -127,9 +127,9 @@ def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network
         return 'the selected CPTs do not form a billable service combination', 'service_selection_invalid'
     if benefits.get('active') is True and network == 'unknown':
         return 'the exact plan and provider have no current clinic network link for this visit', 'provider_network_unresolved'
-    medical_names = (((result.get('plan_details') or {}).get('stedi') or {}).get('names') or [])
-    if (is_medicare_advantage(medical_names)
-            and (result.get('price_range') or {}).get('complete')
+    plan = ((result.get('plan_details') or {}).get('stedi') or {})
+    medical_names = plan.get('names') or []
+    if ((is_medicare_advantage(medical_names) or plan.get('medicare_hmo_evidence'))
             and (result.get('collection_guidance') or {}).get('amount_cents') is None):
         protection = result.get('billing_protection') or {}
         if benefits.get('qmb_status') == 'protected' or protection.get('status') == 'qmb':
@@ -206,7 +206,7 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
     amount = guidance.get('amount_cents')
     medical_names = (((result.get('plan_details') or {}).get('stedi') or {}).get('names') or [])
     identified_product = (((result.get('plan_details') or {}).get('stedi') or {}).get('identified_product'))
-    ma_ppo = is_medicare_advantage(medical_names)
+    ma_plan = is_medicare_advantage(medical_names) or bool((((result.get('plan_details') or {}).get('stedi') or {}).get('medicare_hmo_evidence')))
     if result.get('payment_mode') == 'cash':
         named_package = (result.get('cash_quote') or {}).get('selection') and (result.get('cash_quote') or {}).get('complete')
         visit_reason = (result.get('cash_quote') or {}).get('reason')
@@ -247,6 +247,8 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
                             'final patient liability follows the processed claim')
             else:
                 sentence = f'Collect $0 today: {cause}, so {_collection_action(code, result, guidance.get("source_errors"))}'
+        elif basis == 'qmb_status_pending':
+            sentence, code = guidance['reason'], 'qmb_status_unresolved'
         elif basis == 'diagnostic_day_copay': sentence, code = (f'Collect {_money(amount)} once for diagnostic testing as a per-day copay; deductible and final share follow the claim', 'diagnostic_copay_partial')
         elif basis in {'office_copay', 'ecw_billing_note'} and (amount > 0 or basis == 'office_copay'):
             office_terms = [(line.get('benefits') or {}) for line in lines
@@ -277,7 +279,7 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
                 sentence += f', while {missing} is excluded because its patient cost is unknown'
             elif basis == 'office_copay' and price.get('complete') and price.get('patient_min_cents') is not None and price['patient_min_cents'] > amount:
                 sentence += '; other estimated patient costs follow the claim'
-            elif network == 'out_of_network' and not ma_ppo:
+            elif network == 'out_of_network' and not ma_plan:
                 sentence += ', while any extra doctor charge remains unknown'
             code = 'office_copay_partial' if unpriced else 'office_copay'
             if basis == 'office_copay' and identified_product in {'FEP Blue Basic PSHB', 'FEP Blue Standard FEHB'} and amount > 0:
@@ -348,7 +350,7 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
                             sentence += ', and the office deductible does not apply'
                     if paid:
                         sentence += ', after the recorded payment'
-                    if network == 'out_of_network' and not ma_ppo:
+                    if network == 'out_of_network' and not ma_plan:
                         sentence += ', though extra doctor charges remain unknown'
                 else:
                     sentence = 'No payment is due now under the applicable plan benefits'
@@ -359,7 +361,7 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
                             'This estimate uses the plan’s copay, deductible, and share of NMCT’s contract prices for the planned care'
                             if network == 'in_network' else
                             'This estimate uses the payer’s out-of-network allowed price under Medicare Advantage member billing protections'
-                            if network == 'out_of_network' and ma_ppo else
+                            if network == 'out_of_network' and ma_plan else
                             'This estimate uses the payer’s out-of-network allowed price, though any extra doctor charge remains unknown'
                             if network == 'out_of_network' else
                             'This is the known payment for the planned care, while other costs remain unknown')

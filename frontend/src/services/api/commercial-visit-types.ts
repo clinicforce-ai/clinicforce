@@ -328,6 +328,7 @@ export type BotoxPreview = {
 export type StediPlanDetails = {
   names?: string[]
   medicare_ppo_evidence?: string | null
+  medicare_hmo_evidence?: string | null
   supplementary_names?: string[]
   network_names?: string[]
   identified_product?: string | null

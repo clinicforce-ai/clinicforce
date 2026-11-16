@@ -196,6 +196,13 @@ def plan_details(payload: dict) -> dict:
         and str(row.get('planCoverage') or row.get('planCoverageDescription') or '').strip() == names[0]
         and any(re.fullmatch(r'Medicare(?: Advantage)? PPO', note.strip(), re.I)
                 for note in _benefit_notes([row.get('messages'), row.get('additionalInformation')]))), None)
+    medicare_hmo_evidence = next((row['evidence_path'] for row in rows
+        if len(names) == 1 and row.get('code') == 'status'
+        and str(row.get('status') or '').upper() in {'ACTIVE', 'ACTIVE_COVERAGE'}
+        and '30' in (row.get('serviceTypeCodes') or [])
+        and str(row.get('planCoverage') or row.get('planCoverageDescription') or '').strip() == names[0]
+        and str(row.get('insuranceType') or '').upper()
+            == 'HEALTH_MAINTENANCE_ORGANIZATION_HMO_MEDICARE_RISK'), None)
     subscriber = payload.get("subscriber") or {}
     info = payload.get("planInformation") or {}
     additional = (payload.get('dependent') or subscriber).get("additionalInformation") or subscriber.get('additionalInformation') or {}
@@ -241,6 +248,7 @@ def plan_details(payload: dict) -> dict:
     fep_product = 'FEP Blue Basic PSHB' if fep_basic else 'FEP Blue Standard FEHB' if fep_standard else None
     return {"names": names, "supplementary_names": supplementary,
             "medicare_ppo_evidence": medicare_ppo_evidence,
+            "medicare_hmo_evidence": medicare_hmo_evidence,
             "response_payer_name": str(response_payer_name).strip() if response_payer_name else None,
             "plan_number": subscriber.get("planNumber") or info.get("planNumber") or (additional.get('plan') or {}).get('number'),
             "group_number": group,

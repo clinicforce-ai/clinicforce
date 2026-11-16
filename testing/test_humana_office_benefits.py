@@ -1,5 +1,17 @@
 """Humana's shared STC 98 response must select the in-person specialist tier."""
 from app.insurance import collection_guidance, commercial
+from app.insurance.stedi_benefits.fields import plan_details
+
+
+def test_medical_hmo_type_is_bound_to_active_stc30_plan():
+    status = {'service': {'system': 'STC', 'value': '30'},
+              'status': 'ACTIVE_COVERAGE',
+              'insuranceType': 'HEALTH_MAINTENANCE_ORGANIZATION_HMO_MEDICARE_RISK'}
+    response = {'plans': [{'name': 'Synthetic Total Plan',
+                           'benefits': {'statuses': [status]}}]}
+    assert plan_details(response)['medicare_hmo_evidence'] == 'plans[0].benefits.statuses[0]'
+    response['plans'][0]['benefits']['statuses'][0]['status'] = 'INACTIVE'
+    assert plan_details(response)['medicare_hmo_evidence'] is None
 
 
 def test_humana_specialist_office_terms_exclude_other_services_and_combined_tier():

@@ -106,9 +106,10 @@ export default function ArrivalAmountSummary({
     !model.cash &&
     !model.previousEstimate &&
     !model.calculating &&
-    ['cms_msp_part_b_deferral', 'aetna_choice_family_oop_deferral'].includes(
-      result.collection_guidance?.collection_rule?.mode || '',
-    )
+    (result.collection_guidance?.basis === 'qmb_status_pending' ||
+      ['cms_msp_part_b_deferral', 'aetna_choice_family_oop_deferral'].includes(
+        result.collection_guidance?.collection_rule?.mode || '',
+      ))
   )
     return (
       <>

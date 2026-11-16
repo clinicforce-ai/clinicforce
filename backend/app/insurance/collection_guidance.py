@@ -14,6 +14,7 @@ from app.insurance.collection.billing_note import apply_billing_note
 from app.insurance.collection.benefit_gates import apply_family_oop_deferrals, apply_trs_hd_office_refundable_deposit, prepare_benefit_evidence, preview_zero_individual_oop_applies
 from app.insurance.collection.healthselect_zero import applies as healthselect_zero_applies
 from app.insurance.collection.humana_office import apply as apply_humana_office_copay
+from app.insurance.collection.qmb_pending import apply as apply_qmb_pending
 from app.insurance.collection import secondary_order
 from app.insurance.identity import patient_benefits_bound
 from app.insurance.benefit_review import annual_oop_conflict_with_known_remaining, selected_service_blocker, selected_service_detail
@@ -86,17 +87,15 @@ def build(result: dict, review: dict | None = None) -> dict:
     unresolved_order, same_policy_conflict, primary_secondary_copay, medicare_secondary = secondary_order.state(result)
     payer_plan = ((result.get('plan_details') or {}).get('stedi') or benefits.get('plan_details') or {})
     medical_names = payer_fees.fee_schedule_products(str(result.get('payer') or ''), payer_plan)
-    ma_ppo = is_medicare_advantage(medical_names)
+    ma_plan = is_medicare_advantage(medical_names) or bool(payer_plan.get('medicare_hmo_evidence'))
     qmb_clearance = result.get('billing_protection') or {}
     member_bound = patient_benefits_bound(identity)
     qmb_protected = (member_bound and benefits.get('qmb_status') == 'protected' or
         member_bound and qmb_clearance.get('status') == 'qmb'
-        and qmb_clearance.get('identity_binding') == identity.get('binding')
-        and qmb_clearance.get('reference') and qmb_clearance.get('verified_at'))
-    qmb_unresolved = ma_ppo and not (qmb_clearance.get('status') == 'not_qmb'
+        and qmb_clearance.get('identity_binding') == identity.get('binding') and qmb_clearance.get('reference') and qmb_clearance.get('verified_at'))
+    qmb_unresolved = ma_plan and not (qmb_clearance.get('status') == 'not_qmb'
         and qmb_clearance.get('reference') and qmb_clearance.get('verified_at')
-        and qmb_clearance.get('identity_binding') == identity.get('binding')
-        and not qmb_protected)
+        and qmb_clearance.get('identity_binding') == identity.get('binding') and not qmb_protected)
     unapproved_services = result.get('service_selection_status') == 'preview'
     recommended = (result.get('service_plan') or {}).get('recommended_ids') or []
     proposed_ids = [line.get('id') for line in result.get('codes') or []]
@@ -175,7 +174,7 @@ def build(result: dict, review: dict | None = None) -> dict:
                         reason=('Estimated patient share using the clinic-approved Medicare fee schedule and member benefits. Apply Medicare member billing protections.'
                                 if medicare_schedule else
                                 'Estimated patient share of the payer out-of-network allowed amount. Apply Medicare Advantage member billing protections.'
-                                if ma_ppo and benefits.get('network_status') == 'out_of_network' else
+                                if ma_plan and benefits.get('network_status') == 'out_of_network' else
                                 'Estimated patient share of the payer out-of-network allowed amount. Possible additional doctor charges remain unknown.'
                                 if benefits.get('network_status') == 'out_of_network' else
                                 'Estimated copay, deductible and coinsurance using the applicable visit benefits and clinic rates.'))
@@ -185,7 +184,7 @@ def build(result: dict, review: dict | None = None) -> dict:
                 line.get('allowed_basis') in {'payer_out_of_network', 'medicare_fee_schedule'} for line in lines):
             amount = None
     amount, note = apply_billing_note(result, collection_benefits, price, lines, guidance, assumptions, amount, identity, source_errors, adverse)
-    if (ma_ppo and qmb_protected and active_payer_benefits and not benefits.get('has_secondary')
+    if (ma_plan and qmb_protected and active_payer_benefits and not benefits.get('has_secondary')
             and not benefits.get('network_conflict') and not source_errors):
         amount = 0
         guidance.update(status='zero_advance', basis='qmb_protection',
@@ -367,7 +366,7 @@ def build(result: dict, review: dict | None = None) -> dict:
             guidance['reason'] = 'The payer returned a coverage date that cannot be interpreted for this visit.'
         elif same_policy_conflict:
             guidance['reason'] = 'The same medical policy returned conflicting subscriber, date or office benefit evidence. Reconcile the payer responses before collecting.'
-        elif qmb_unresolved and price.get('complete'):
+        elif qmb_unresolved:
             guidance['reason'] = ('QMB protection prohibits collecting Medicare cost sharing from this member.'
                                   if qmb_protected else
                                   'Medicare Advantage QMB cost-sharing protection has not been ruled out for this member. Verify QMB status before any advance collection.')
@@ -448,13 +447,15 @@ def build(result: dict, review: dict | None = None) -> dict:
             guidance.update(reason='The Cigna visit share needs its Explanation of Estimate before a check-in amount can be set.',
                 patient_message='Your visit payment is pending a Cigna estimate; this does not mean you owe $0.')
     secondary_order.apply_original_medicare_deferral(result, guidance, source_errors, member_bound, bool(adverse))
-    secondary_order.apply_part_b_deferral(result, guidance, source_errors, member_bound, ma_ppo)
+    secondary_order.apply_part_b_deferral(result, guidance, source_errors, member_bound, ma_plan)
     apply_family_oop_deferrals(result, guidance, member_bound=member_bound, source_errors=source_errors, adverse=bool(adverse), same_policy_conflict=same_policy_conflict)
     apply_trs_hd_office_refundable_deposit(result, guidance, member_bound=member_bound, source_errors=source_errors, adverse=bool(adverse), same_policy_conflict=same_policy_conflict, review=review)
     apply_bluecard_family_deposit(result, guidance, review, safe=bool(safe), qmb_protected=bool(qmb_protected), qmb_unresolved=bool(qmb_unresolved))
     apply_blue_ppo_family_quote(result, guidance, review, assumptions, safe=bool(safe))
     apply_cigna_quotes(result, guidance, review, assumptions, safe=bool(safe))
-    apply_humana_office_copay(result, guidance, review, allowed=not any((qmb_protected, adverse, source_errors, line_blocker, same_policy_conflict, unresolved_order, unconfirmed_zero_oop)))
+    apply_humana_office_copay(result, guidance, review, allowed=not any((qmb_protected, qmb_unresolved, adverse, source_errors, line_blocker, same_policy_conflict, unresolved_order, unconfirmed_zero_oop)))
+    apply_qmb_pending(result, guidance, unresolved=qmb_unresolved, protected=qmb_protected,
+        member_bound=member_bound, source_errors=source_errors, same_policy_conflict=same_policy_conflict, unresolved_order=unresolved_order)
     for line in lines:
         mapped = 'needs mapping' not in line.get('benefit_basis', '')
         terms = (line.get('benefits') or {}) if mapped else {}
