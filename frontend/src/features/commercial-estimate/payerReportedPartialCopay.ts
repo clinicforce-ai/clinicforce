@@ -141,7 +141,9 @@ export function specialistOfficeCopay(
           networks.includes(row.network) &&
           (row.places_of_service?.includes('11') ||
             (officeRequest && !row.places_of_service?.length)) &&
-          /^Specialist(?: Visit or Evaluation| Benefit does apply to member.s out-of-pocket maximum)?$/i.test(row.payer_note || '') &&
+          /^Specialist(?: Visit or Evaluation| Benefit does apply to member.s out-of-pocket maximum)?$/i.test(
+            row.payer_note || '',
+          ) &&
           !/telemedicine|teladoc|virtual/i.test(row.payer_note || '') &&
           row.plan_association !== 'supplementary' &&
           Number.isInteger(row.amount_cents) &&
