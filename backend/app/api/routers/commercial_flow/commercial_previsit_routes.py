@@ -23,7 +23,7 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     Saved reads project current network rules; an intact protected 2026 FEP Blue Standard response can refresh a Preferred $40 office copay and deductible waiver under current clinic policy without a payer call or write. plan_details.stedi.response_payer_name records the organization that answered the protected eligibility response; it does not identify a plan product.
     benefits.reported_secondary_payer names one dated, patient-bound medical
     271 secondary payer; it does not verify Medicare entitlement or claim order.
-    Fresh saved Cigna responses are reparsed without treating an exact
+    An uncoded saved Cigna BTX visit can rebind its selected policy from the hash-verified protected 271 without a new payer call. Fresh saved Cigna responses are reparsed without treating an exact
     "Attribution Status - Not applicable" STC 30 exclusion as inactive coverage.
     Card-printed tiered office copays remain reference-only until visit coverage, network, service and collection checks pass.
     aetna_office_planning shows conditional deductible-applies/waived Commercial specialist shares within seven days, or the separate patient copay and Aetna plan remainder for a matched Value Plus PPO response one day early; collectable is false, and collection_guidance and visit-date coverage are unchanged.
