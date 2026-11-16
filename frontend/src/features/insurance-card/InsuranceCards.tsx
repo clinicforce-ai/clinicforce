@@ -1,9 +1,17 @@
 import { useCallback, useEffect, useState } from 'react'
 import './InsuranceCards.css'
 import { request } from '../../services/api/client'
+import { deleteStaffCardDocument } from '../../services/api/staff-intake'
 
 type Cards = {
-  cards: Array<{ id: string; title: string; content_type: string; url: string; source?: string }>
+  cards: Array<{
+    id: string
+    intake_id?: string
+    title: string
+    content_type: string
+    url: string
+    source?: string
+  }>
   message: string
 }
 export default function InsuranceCards({
@@ -11,15 +19,18 @@ export default function InsuranceCards({
   background = false,
   inline = false,
   historicalEstimate = false,
+  onCardDeleted,
 }: {
   intakeId: string
   background?: boolean
   inline?: boolean
   historicalEstimate?: boolean
+  onCardDeleted?: (cleanupPending: boolean) => Promise<void>
 }) {
   const [data, setData] = useState<Cards | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [deletingId, setDeletingId] = useState('')
   const read = useCallback(async (): Promise<Cards> => {
     return request<Cards>(`/api/staff/intakes/${encodeURIComponent(intakeId)}/cards`)
   }, [intakeId])
@@ -76,14 +87,58 @@ export default function InsuranceCards({
             {card.title} ·{' '}
             {card.source === 'ecw_current' ? 'Current eCW card' : 'ClinicForce upload'}
           </figcaption>
+          <div className="insurance-card-actions">
+            <a href={card.url} target="_blank" rel="noreferrer">
+              Open card
+            </a>
+            {onCardDeleted && card.source === 'clinicforce_upload' && card.intake_id && (
+              <button
+                type="button"
+                className="insurance-card-delete"
+                disabled={!!deletingId}
+                onClick={async () => {
+                  if (
+                    !window.confirm(
+                      `Delete ${card.title} from this clinic patient record? The saved file will be removed from storage. This cannot be undone.`,
+                    )
+                  )
+                    return
+                  setDeletingId(card.id)
+                  setError('')
+                  try {
+                    const result = await deleteStaffCardDocument(card.intake_id!, card.id)
+                    setData(
+                      (current) =>
+                        current && {
+                          ...current,
+                          cards: current.cards.filter((item) => item.id !== card.id),
+                        },
+                    )
+                    try {
+                      await onCardDeleted(result.cleanup_pending)
+                    } catch {
+                      setError(
+                        'Card removed, but the patient profile could not refresh. Reload the page.',
+                      )
+                    }
+                  } catch (caught) {
+                    setError(
+                      caught instanceof Error ? caught.message : 'The card could not be deleted.',
+                    )
+                  } finally {
+                    setDeletingId('')
+                  }
+                }}
+              >
+                {deletingId === card.id ? 'Deleting card…' : 'Delete insurance card'}
+              </button>
+            )}
+          </div>
           {card.content_type === 'application/pdf' ? (
             <iframe title={card.title} src={card.url} />
           ) : (
             <img src={card.url} alt={card.title} />
           )}
-          <a href={card.url} target="_blank" rel="noreferrer">
-            Open card
-          </a>
         </figure>
       ))}
     </>

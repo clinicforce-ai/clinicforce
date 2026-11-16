@@ -13,11 +13,13 @@ interface Props {
   deleting: boolean
   cleanupPending: boolean
   error: string
+  notice: string
   onBack: () => void
   onDelete: () => void
   onOpenIntake: (id: string) => void
   onRecheckEstimate: (intakeId: string, appointmentId: string) => void
   onRequestCard: (patient: ClinicalPatient) => void
+  onCardDeleted: () => Promise<void>
 }
 
 export default function ClinicalPatientDetail({
@@ -27,13 +29,16 @@ export default function ClinicalPatientDetail({
   deleting,
   cleanupPending,
   error,
+  notice,
   onBack,
   onDelete,
   onOpenIntake,
   onRecheckEstimate,
   onRequestCard,
+  onCardDeleted,
 }: Props) {
   const [estimateRefresh, setEstimateRefresh] = useState(0)
+  const [cardNotice, setCardNotice] = useState('')
   return (
     <div className="staff-narrow">
       <button className="staff-text-button" disabled={deleting} onClick={onBack}>
@@ -90,12 +95,25 @@ export default function ClinicalPatientDetail({
           {error}
         </p>
       )}
+      {(notice || cardNotice) && (
+        <p className="staff-alert staff-success" role="status">
+          {notice || cardNotice}
+        </p>
+      )}
       {selected.card_status === 'received' && selected.latest_intake_id && (
         <InsuranceCards
           key={selected.latest_intake_id}
           intakeId={selected.latest_intake_id}
           background
           inline
+          onCardDeleted={async (pending) => {
+            setCardNotice(
+              pending
+                ? 'Card removed; S3 cleanup is pending. Retry file cleanup from the patient list.'
+                : 'Uploaded card deleted. Use Request insurance card to request a replacement.',
+            )
+            await onCardDeleted()
+          }}
         />
       )}
       {selected.clinic_patient_id && selected.identity_status === 'confirmed' && (

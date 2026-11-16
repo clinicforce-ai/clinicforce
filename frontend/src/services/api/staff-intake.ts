@@ -74,3 +74,9 @@ export const deleteStaffIntake = (id: string) =>
     `/api/staff/intakes/${encodeURIComponent(id)}`,
     { method: 'DELETE' },
   )
+
+export const deleteStaffCardDocument = (intakeId: string, documentId: string) =>
+  request<{ deleted: boolean; cleanup_pending: boolean }>(
+    `/api/staff/intakes/${encodeURIComponent(intakeId)}/documents/${encodeURIComponent(documentId)}`,
+    { method: 'DELETE' },
+  )

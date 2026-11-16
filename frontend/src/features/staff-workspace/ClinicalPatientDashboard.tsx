@@ -241,6 +241,10 @@ export default function ClinicalPatientDashboard({
       setDateLookupLoading(false)
       setDateLookupError('')
       setDashboard(updated)
+      setSelected(
+        (current) =>
+          current && (updated.patients.find((patient) => patient.id === current.id) || null),
+      )
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Patients could not be loaded.')
     } finally {
@@ -369,6 +373,7 @@ export default function ClinicalPatientDashboard({
         deleting={deleting}
         cleanupPending={cleanupPending}
         error={error}
+        notice={notice}
         onBack={() => {
           setSelected(null)
           setError('')
@@ -378,6 +383,7 @@ export default function ClinicalPatientDashboard({
         onOpenIntake={onOpenIntake}
         onRecheckEstimate={onRecheckEstimate}
         onRequestCard={onRequestCard}
+        onCardDeleted={() => refresh(false)}
       />
     )
   return (
