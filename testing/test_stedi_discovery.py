@@ -369,17 +369,17 @@ def test_active_part_d_plan_does_not_become_office_medical_coverage(layout):
     item = {'payer': {'name': 'Wellcare'}, 'subscriber': {
         'dates': {'plan': {'start': '2026-01-01', 'end': '2026-12-31'}}}}
     if layout == 'plans':
-        item['plans'] = [{'name': 'Value Script (PDP)', 'benefits': {'statuses': [
-            {'service': {'system': 'STC', 'value': '30'}, 'status': 'ACTIVE',
-             'planCoverageDescription': 'Health Benefit Plan Coverage'}]}}]
+        item['plans'] = [{'name': 'Value Script (PDP) (S4802155000)', 'benefits': {'statuses': [
+            {'service': {'system': 'STC', 'value': code}, 'status': 'ACTIVE',
+             'planCoverageDescription': 'Health Benefit Plan Coverage'} for code in ('30', '98')]}}]
     else:
-        item['benefitsInformation'] = [{'code': '1', 'serviceTypeCodes': ['30'],
-            'planCoverageDescription': 'Value Script (PDP)'}]
+        item['benefitsInformation'] = [{'code': '1', 'serviceTypeCodes': [code],
+            'planCoverageDescription': 'Value Script (PDP) (S4802155000)'} for code in ('30', '98')]
     inputs = {'service_date': '2026-11-16'}
     details = commercial.plan_details(item)
     assert details['names'] == []
-    assert details['supplementary_names'] == ['Value Script (PDP)']
-    assert insurance_product.classify(['Value Script (PDP)']) == 'supplementary'
+    assert details['supplementary_names'] == ['Value Script (PDP) (S4802155000)']
+    assert insurance_product.classify(details['supplementary_names']) == 'supplementary'
     assert commercial.normalize_stedi_271(item, '98', False,
                                            service_date=inputs['service_date'])['active'] is not True
     assert not discovery.active_medical(item, inputs)
