@@ -105,8 +105,42 @@ def upgrade_saved_biopsy_preview(result: dict, case: dict) -> None:
     result['service_plan'] = {**plan, 'selection_source': 'suggested'}
 
 
+def refresh_saved_cigna_btx_identity(result: dict, case: dict) -> None:
+    """Rebind an uncoded BTX visit from the intact saved Cigna response."""
+    context = case.get('previsit_context') or {}
+    inputs, source = context.get('inputs') or {}, context.get('source') or {}
+    old = result.get('benefits') or {}
+    if (str(result.get('payer') or '').casefold() != 'cigna'
+            or (result.get('service_plan') or {}).get('kind') != 'botox'
+            or (result.get('identity') or {}).get('status') != 'review'
+            or result.get('codes') or (result.get('price_range') or {}).get('lines')
+            or result.get('payment_mode') == 'cash'
+            or old.get('active') is not True or old.get('service_date_matches') is False
+            or old.get('coverage_status_conflict') or old.get('source_errors')
+            or inputs.get('service_date') != result.get('service_date')
+            or case.get('previsit', {}).get('request_state') != 'complete'
+            or not case.get('previsit_raw_object_key') or not case.get('previsit_raw_sha256')):
+        return
+    try:
+        raw = _api.object_store.get_object_bytes(case['previsit_raw_object_key'])
+        if _api.hashlib.sha256(raw).hexdigest() != case['previsit_raw_sha256']:
+            return
+        fresh = _api._case_benefits(_api.json.loads(raw), inputs, source, case)
+        matched = fresh.get('identity') or {}
+        if (matched.get('reconciliation_rule') != 'cigna_member_suffix'
+                or not patient_plan_applies(fresh, matched, inputs['service_date'])
+                or fresh.get('source_errors')):
+            return
+    except Exception:
+        return
+    result['benefits'] = fresh
+    result['identity'] = matched
+    suppress_saved_ambiguous_combined_zero_oop(result)
+
+
 def refresh_saved_cigna_office_benefits(result: dict, case: dict, practice_id: str) -> None:
-    """Reproject an older Cigna office check from its verified protected 271."""
+    """Reproject saved Cigna office evidence from its verified protected 271."""
+    refresh_saved_cigna_btx_identity(result, case)
     context = case.get('previsit_context') or {}
     inputs = context.get('inputs') or {}
     price = result.get('price_range') or {}
