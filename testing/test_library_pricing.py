@@ -132,6 +132,7 @@ def test_final_session_and_named_package_cash_prices_do_not_infer_cpt_scope():
     assert selected['cash_quote']['min_cents'] == 50000
     assert all(line['cash_included'] for line in selected['price_range']['lines'])
     assert selected['cash_quote']['package_label'] == 'One Hand'
+    assert selected['cash_quote']['likely_cpt_examples'] == '95909 + 95886'
     assert selected['cash_quote']['source'] == 'named-source.docx'
     assert selected['cash_quote']['effective_from'] == '2026-09-04'
     assert not quote(rows, [{'code': '95909', 'units': 1}, {'code': '62270', 'units': 1}],

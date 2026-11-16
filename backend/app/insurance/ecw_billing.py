@@ -1,4 +1,4 @@
-"""Read explicit collection instructions from returned, visit-linked billing notes.
+"""Read explicit collection instructions from returned, visit-linked eCW notes.
 
 These are EHR collection instructions, not a replacement payer eligibility response.
 Unknown or conflicting prose stays visible for review rather than supplying money.
@@ -9,11 +9,20 @@ from datetime import datetime, timezone
 from app.insurance import commercial
 
 
+def cash_without_coverage(source: dict) -> bool:
+    """Use cash when the completed eCW coverage read has no policy or payer."""
+    return (source.get('coverage_retrieval', {}).get('status') == 'empty'
+            and source.get('active_coverages') == 0
+            and (source.get('saved_eligibility') or {}).get('status') != 'verified_active'
+            and not source.get('payer') and not source.get('insurance_candidates'))
+
+
 def collection_note(fields: list[dict]) -> dict | None:
     evidence = []
     for field in fields:
         label = re.sub(r'[^a-z]', '', str(field.get('label') or '').lower())
-        if label not in {'billingnote', 'billingnotes', 'billinginstruction', 'billinginstructions'}:
+        billing_field = label in {'billingnote', 'billingnotes', 'billinginstruction', 'billinginstructions'}
+        if not billing_field and label not in {'generalcomments', 'appointmentnote', 'generalnotes'}:
             continue
         reference = str(field.get('source') or '')
         if not re.match(r'^(?:Encounter|Appointment)/[A-Za-z0-9.-]+\.', reference):
@@ -24,11 +33,27 @@ def collection_note(fields: list[dict]) -> dict | None:
                 return None
         except (KeyError, ValueError, TypeError):
             return None
-        text = ' '.join(str(field.get('text') or '').lower().split()).strip(' .')
-        if re.fullmatch(r'(?:no need to (?:take|collect) (?:any )?money from (?:the )?patient|do not collect(?: (?:any )?money)?(?: from (?:the )?patient)?)(?:[.; ]+secondary will take\s*care)?', text):
-            parsed = {'kind': 'no_collection', 'amount_cents': 0}
-        elif re.fullmatch(r'self[ -]?pay', text):
+        text = str(field.get('text') or '')
+        if label == 'generalnotes':
+            header = re.split(r'Patient entered comments on healow\s*:', text, flags=re.I)[0]
+            preferences = re.findall(r'(?im)^\s*Patient payment preference\s*:\s*([^,;\r\n]+)', header)
+            if not preferences:
+                continue
+            if len(preferences) != 1 or not re.fullmatch(r'self[ -]?pay', preferences[0].strip(), re.I):
+                return None
+            text = preferences[0]
+        text = ' '.join(text.lower().split()).strip(' .')
+        patient_cash_choice = re.fullmatch(
+            r'(?:patient|pt)(?: (?:states?|stated|says?|said|confirmed|reported))?'
+            r'(?: (?:he|she|they))? (?:will|wants to|elects? to|elected to) self[ -]?pay', text)
+        if patient_cash_choice or re.fullmatch(r'self[ -]?pay', text):
             parsed = {'kind': 'self_pay'}
+        elif not billing_field:
+            if re.search(r'\bself[ -]?pay\b', text):
+                return None
+            continue
+        elif re.fullmatch(r'(?:no need to (?:take|collect) (?:any )?money from (?:the )?patient|do not collect(?: (?:any )?money)?(?: from (?:the )?patient)?)(?:[.; ]+secondary will take\s*care)?', text):
+            parsed = {'kind': 'no_collection', 'amount_cents': 0}
         else:
             # Accept complete, explicit clauses only; no partial matches inside
             # conditional, negated, historical or patient-entered instructions.

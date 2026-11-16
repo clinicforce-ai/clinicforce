@@ -94,9 +94,18 @@ def test_visit_note_copay_cannot_replace_unknown_network_for_active_payer_benefi
     assert collection_guidance.build(value)['amount_cents'] is None
 
 
-def test_ehr_self_pay_note_uses_the_active_schedule_and_explicit_staff_selection_wins():
+@pytest.mark.parametrize('label,text', [
+    ('Billing Notes', 'Self Pay'),
+    ('Billing Notes', 'Patient stated they will self pay'),
+    ('General comments', 'Patient will self pay'),
+    ('Appointment note', 'Self Pay'),
+    ('Appointment note', 'Pt elected to self-pay'),
+])
+def test_ehr_self_pay_note_uses_the_active_schedule_and_explicit_staff_selection_wins(label, text):
     inputs = {'service_date': '2026-10-07', 'visit_type': 'new', 'lines': []}
-    source = {'active_coverages': 0, 'appointment_fields': fields('Self Pay')}
+    note_fields = fields(text)
+    note_fields[0]['label'] = label
+    source = {'active_coverages': 0, 'appointment_fields': note_fields}
     schedule = {'id': 'schedule', 'filename': 'approved.csv', 'effective_from': '2026-01-01',
         'rows': [{'code': str(c), 'description': 'Office', 'cash_cents': 18723} for c in range(99202, 99206)]}
     case = {}
@@ -107,6 +116,84 @@ def test_ehr_self_pay_note_uses_the_active_schedule_and_explicit_staff_selection
         case['visit_review']['payment_mode'] = 'insurance'
         api._finish_previsit(value, case, inputs, source, None, {'practice_id': 'clinic'}, '')
         assert value['payment_mode'] == 'insurance'
+
+
+def test_four_area_cash_booking_uses_full_study_package_without_guessing_cpts():
+    inputs = {'service_date': '2026-11-16', 'visit_type': 'established',
+              'reason': 'Reason: EMG 4 Areas', 'appointment_reason': 'EMG 4 Areas', 'lines': []}
+    source = {'active_coverages': 0, 'coverage_retrieval': {'status': 'empty'},
+              'appointment_notes_status': 'not_exposed', 'appointment_fields': []}
+    schedule = {'id': 'schedule', 'filename': 'synthetic-cash.docx', 'effective_from': '2026-09-04',
+        'rows': [{'code': 'named:full-study', 'cash_cents': 130000, 'price_kind': 'named_package',
+                  'label': 'Comprehensive Full Study - Arms & Legs',
+                  'likely_cpt_examples': '95912 or 95913 + appropriate EMG units',
+                  'description': 'Comprehensive Full Study - Arms & Legs'}]}
+    case = {}
+    result = {'benefits': {}, 'issues': []}
+    with patch.object(api.commercial_store, 'list_connections', return_value=[]), \
+         patch.object(api.practice_prices, 'current', return_value=schedule), \
+         patch.object(api.cpt_suggester.boto3, 'client', side_effect=RuntimeError('offline test')):
+        api._finish_previsit(result, case, inputs, source, None, {'practice_id': 'clinic'}, '')
+        case['visit_review']['cash_selection'] = ''
+        cleared = {'benefits': {}, 'issues': []}
+        api._finish_previsit(cleared, case, inputs, source, None, {'practice_id': 'clinic'}, '')
+        case['visit_review']['payment_mode'] = 'insurance'
+        insured = {'benefits': {}, 'issues': []}
+        api._finish_previsit(insured, case, inputs, source, None, {'practice_id': 'clinic'}, '')
+    assert result['payment_mode'] == 'cash'
+    assert result['cash_quote']['selection'] == 'named:full-study'
+    assert result['cash_quote']['selection_source'] == 'appointment_scope'
+    assert result['cash_quote']['min_cents'] == 130000
+    assert result['cash_quote']['likely_cpt_examples'] == '95912 or 95913 + appropriate EMG units'
+    assert result['collection_guidance']['amount_cents'] == 130000
+    assert 'confirm the planned scope' in result['collection_guidance']['reason']
+    assert result['collection_guidance']['services'] == []
+    assert result['selected_ids'] == []
+    assert cleared['cash_quote']['selection'] == '' and cleared['collection_guidance']['amount_cents'] is None
+    assert insured['payment_mode'] == 'insurance' and insured['cash_quote']['selection'] == ''
+
+
+@pytest.mark.parametrize('change', [
+    {'coverage_retrieval': {'status': 'unavailable'}},
+    {'coverage_retrieval': {'status': 'returned'}},
+    {'active_coverages': 1},
+    {'payer': 'Example Payer'},
+    {'insurance_candidates': [{'payer': 'Example Payer'}]},
+    {'saved_eligibility': {'status': 'verified_active'}},
+])
+def test_incomplete_or_other_insurance_evidence_does_not_prove_empty_coverage(change):
+    source = {'coverage_retrieval': {'status': 'empty'}, 'active_coverages': 0, **change}
+    assert not ecw_billing.cash_without_coverage(source)
+
+
+@pytest.mark.parametrize('text', [
+    'Patient will self pay if insurance denies',
+    'Patient said they may self pay',
+    'Patient will not self pay',
+    'Patient self paid at the last visit',
+])
+def test_conditional_or_historical_appointment_comments_do_not_select_cash(text):
+    value = fields(text)
+    value[0]['label'] = 'General comments'
+    assert ecw_billing.collection_note(value) is None
+
+
+def test_conflicting_appointment_self_pay_comments_do_not_select_cash():
+    choice = fields('Patient will self pay')
+    choice[0]['label'] = 'Appointment note'
+    negated = fields('Patient will not self pay')
+    negated[0]['label'] = 'General comments'
+    assert ecw_billing.collection_note([*choice, *negated]) is None
+
+
+def test_staff_payment_preference_in_ecw_general_notes_selects_cash_without_patient_comments():
+    note = fields('Patient payment preference: Self Pay\nPatient entered comments on healow : I have insurance')
+    note[0]['label'] = 'General Notes'
+    assert ecw_billing.collection_note(note)['kind'] == 'self_pay'
+    note[0]['text'] = 'Patient entered comments on healow : Patient payment preference: Self Pay'
+    assert ecw_billing.collection_note(note) is None
+    note[0]['text'] = 'Patient payment preference: Self Pay\nPatient payment preference: Insurance'
+    assert ecw_billing.collection_note(note) is None
 
 
 @pytest.mark.parametrize('self_pay_source', ['registration', 'billing_note'])

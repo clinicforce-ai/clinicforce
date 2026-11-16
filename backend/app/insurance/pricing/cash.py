@@ -7,7 +7,8 @@ import json
 def _cash_rule(row: dict) -> tuple:
     return (row.get('price_kind', 'per_unit'), row.get('cash_cents'), row.get('base_cents', 0),
             json.dumps(row.get('components'), sort_keys=True), row.get('session_group'),
-            row.get('requires_session'), row.get('label'), row.get('indication'), row.get('scope_note'))
+            row.get('requires_session'), row.get('label'), row.get('indication'), row.get('scope_note'),
+            row.get('likely_cpt_examples'))
 
 
 def apply(result: dict, config: dict, review: dict | None = None) -> None:
@@ -25,6 +26,7 @@ def apply(result: dict, config: dict, review: dict | None = None) -> None:
             'effective_from': config['effective_from'],
             'packages': [{'id': rule['code'], 'label': rule['label'], 'amount_cents': rule['cash_cents'],
                           'indication': rule.get('indication'), 'scope_note': rule.get('scope_note'),
+                          'likely_cpt_examples': rule.get('likely_cpt_examples'),
                           'filename': rule.get('schedule_filename', config['filename']),
                           'effective_from': rule.get('schedule_effective_from', config['effective_from']),
                           'source': rule.get('source')} for rule in named]}
@@ -105,6 +107,13 @@ def apply(result: dict, config: dict, review: dict | None = None) -> None:
                             cash_rule=package.get('source'))
             amounts = [package['cash_cents']]
             packages = [(package, list(range(len(priced['lines']))))]
+        elif (package.get('price_kind') == 'named_package'
+              and package.get('label', '').casefold() == 'comprehensive full study - arms & legs'
+              and (review or {}).get('_cash_package_scope') == 'four_limbs'
+              and priced.get('mode') == 'alternatives'
+              and codes and all(code in nerve_codes for code in codes)):
+            amounts = [package['cash_cents']]
+            packages = [(package, [])]
         else:
             amounts = [None]
     complete = bool(amounts) and all(value is not None for value in amounts) and not priced.get('service_issues')
@@ -115,8 +124,12 @@ def apply(result: dict, config: dict, review: dict | None = None) -> None:
     result['cash_quote'] = {'complete': complete, 'source': package.get('schedule_filename', config['filename']) if selection else config['filename'],
         'effective_from': package.get('schedule_effective_from', config['effective_from']) if selection else config['effective_from'],
         'selection': selection,
+        'selection_source': 'appointment_scope' if (review or {}).get('_cash_package_scope') == 'four_limbs' else 'clinician' if selection else None,
         'package_label': package.get('label') if selection else None,
-        'message': ('Selected NCS/EMG package includes the focused visit and planned testing.' if selection and complete else
+        'likely_cpt_examples': package.get('likely_cpt_examples') if selection else None,
+        'message': ('The four-limb NCS/EMG package price includes the focused visit; confirm the planned scope before collection.'
+                    if selection and complete and (review or {}).get('_cash_package_scope') == 'four_limbs' else
+                    'Selected NCS/EMG package includes the focused visit and planned testing.' if selection and complete else
                     'Practice cash schedule for the selected services.' if complete else
                     'The cash schedule has missing or conflicting prices for the selected services.')}
     result['practice_cash_source'] = {'filename': config['filename'], 'effective_from': config['effective_from'], 'version': config['id'], 'versions': config.get('versions', [config['id']])}

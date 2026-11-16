@@ -85,6 +85,7 @@ def _named_cash_rules(table: dict, source: dict, final: set[str]) -> tuple[list[
             identifier = 'named:' + hashlib.sha256(label.casefold().encode()).hexdigest()[:20]
             packages.append({'code': identifier, 'cash_cents': dollars(amount), 'price_kind': 'named_package',
                              'label': label, 'indication': indication, 'scope_note': str(row[3] or '').strip(), 'description': label,
+                             'likely_cpt_examples': str(row[2] or '').strip(),
                              'modifier': '', 'effective_to': source.get('effective_to'), 'source': evidence})
         return packages, issues
     return None

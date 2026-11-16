@@ -514,6 +514,9 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_self_pay_billing_note_skips_paid_eligibility(self):
         await self._flow(date.today().isoformat(), billing_note='Self Pay')
 
+    async def test_empty_ecw_coverage_uses_four_area_cash_price_without_stedi(self):
+        await self._flow(date.today().isoformat(), empty_coverage=True)
+
     async def test_saved_insurance_hold_prevents_paid_refresh(self):
         await self._flow((date.today() + timedelta(days=2)).isoformat(), refresh=True, too_early=True, saved_hold=True)
 
@@ -584,7 +587,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_newer_conflicting_ecw_check_refreshes_cached_stedi_evidence(self):
         await self._flow(date.today().isoformat(), newer_ecw=True)
 
-    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None, pos=None, scheduled_code=None, emg_review=False, expect_preliminary=False, visit_type='new', combined_emg=False, secondary_mismatch=False, cash_office=False, telehealth=False, confirmed_card=False, aetna_payer_id=None, cash_package=False, two_coverages=False):
+    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None, pos=None, scheduled_code=None, emg_review=False, expect_preliminary=False, visit_type='new', combined_emg=False, secondary_mismatch=False, cash_office=False, telehealth=False, confirmed_card=False, aetna_payer_id=None, cash_package=False, two_coverages=False, empty_coverage=False):
         if cash_office:
             self.cash_current.return_value = {'id': 'synthetic-cash', 'filename': 'synthetic.csv',
                 'effective_from': '2026-01-01', 'rows': [{'code': '99204', 'cash_cents': 25000,
@@ -595,6 +598,12 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                     {'code': '99203', 'cash_cents': 25000, 'description': 'Office consultation'},
                     {'code': 'named:onehand', 'cash_cents': 50000, 'price_kind': 'named_package',
                      'label': 'One-hand carpal tunnel', 'description': 'One-hand carpal tunnel'}]}
+        if empty_coverage:
+            self.cash_current.return_value = {'id': 'synthetic-cash', 'filename': 'synthetic.docx',
+                'effective_from': '2026-09-04', 'rows': [
+                    {'code': 'named:full-study', 'cash_cents': 130000, 'price_kind': 'named_package',
+                     'label': 'Comprehensive Full Study - Arms & Legs',
+                     'description': 'Comprehensive Full Study - Arms & Legs'}]}
         session = {"practice_id": "clinic", "intake_id": "intake", "patient_id": "patient",
                    "share_manifest_id": "", "staff": {"id": "staff", "display_name": "Staff", "practice_name": "Clinic"},
                    "intake": {"updated_at": "version", "patient": {"given_name": "Pat", "family_name": "Example",
@@ -613,6 +622,9 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
             inputs['reason'] = 'Televisit'
         if cash_package:
             inputs['reason'] = 'One-hand carpal tunnel EMG/NCS'
+        if empty_coverage:
+            inputs.update(reason='Reason: EMG 4 Areas', appointment_reason='EMG 4 Areas',
+                          member_id=None, relationship=None, subscriber={})
         if scheduled_code:
             inputs['lines'] = [{'id': 'documented-service', 'code': scheduled_code,
                                 'service_status': 'scheduled', 'units': 1,
@@ -623,6 +635,9 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         source = {"appointment_id": "visit-1", "_patient_id": "p", "coverage_id": "coverage-1", "active_coverages": 1,
                   "payer": "Blue Cross Blue Shield Tx", "plan": "CI", "rendering_provider": {"npi": "1234567890", "first_name": "Ada", "last_name": "Clinician"},
                   "billing_provider": {"name": "Clinic", "npi": "1811853260"}, "location_id": "office"}
+        if empty_coverage:
+            source.update(coverage_id='', active_coverages=0, payer=None, plan=None,
+                          coverage_retrieval={'status': 'empty'}, appointment_notes_status='not_exposed')
         if two_coverages:
             source['active_coverages'] = 2
             source['coverage_records'] = [
@@ -981,6 +996,13 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                 self.assertIn('newer Stedi', refreshed['eligibility_reconciliation']['message'])
                 self.assertEqual(refreshed['price_range']['mode'], 'alternatives')
                 self.assertEqual(refreshed['selected_ids'], [])
+                return
+            if empty_coverage:
+                self.assertEqual(result['payment_mode'], 'cash')
+                self.assertEqual(result['cash_quote']['min_cents'], 130000)
+                self.assertEqual(result['collection_guidance']['amount_cents'], 130000)
+                self.assertEqual(result['selected_ids'], [])
+                client.post.assert_not_awaited()
                 return
             if self_pay or billing_note == 'Self Pay':
                 self.assertEqual(result['payment_mode'], 'cash')

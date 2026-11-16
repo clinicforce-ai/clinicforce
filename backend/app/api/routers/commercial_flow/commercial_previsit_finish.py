@@ -168,7 +168,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     # eCW self-pay fields do not authorize an automatic UHC insurance-to-cash switch.
     result['payment_mode'] = review.get('payment_mode',
         'insurance' if united_healthcare else
-        'cash' if source.get('self_pay_recorded') or note_self_pay else 'insurance')
+        'cash' if source.get('self_pay_recorded') or note_self_pay or _api.ecw_billing.cash_without_coverage(source) else 'insurance')
     result['ecw_saved_eligibility'] = {k: v for k, v in (source.get('saved_eligibility') or {}).items() if not k.startswith('_')}
     labels = {'refresh_context': 'Visit details', 'selected_ids': 'Services', 'confirmed_units': 'Service quantities', 'payment_mode': 'Payment method',
               'cash_selection': 'Cash package', 'cash_visit_quote': 'Visit cash quote',
@@ -284,7 +284,19 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         except _api.HTTPException:
             result.pop('mapping_candidate', None)
     if uploaded_cash and not _api.visit_estimate.is_telehealth(planning_inputs):
-        _api.practice_prices.apply(result, uploaded_cash, review)
+        cash_review = review
+        if (result['payment_mode'] == 'cash' and 'cash_selection' not in review
+                and 'selected_ids' not in review and not result.get('selected_ids')
+                and (result.get('price_range') or {}).get('mode') == 'alternatives'
+                and _api.re.fullmatch(r'\s*EMG\s*4\s*Areas\s*', str(inputs.get('appointment_reason')
+                    or inputs.get('appointment_type') or inputs.get('reason') or ''), _api.re.I)):
+            full_study = [row for row in uploaded_cash['rows']
+                          if row.get('price_kind') == 'named_package'
+                          and row.get('label', '').casefold() == 'comprehensive full study - arms & legs']
+            if len(full_study) == 1:
+                cash_review = {**review, 'cash_selection': full_study[0]['code'],
+                               '_cash_package_scope': 'four_limbs'}
+        _api.practice_prices.apply(result, uploaded_cash, cash_review)
     _api.practice_prices.apply_visit_quote(result, review)
     attach_requirements(_api, result, case, planning_inputs, source, session, connections, payer_id)
     result.pop('cigna_office_fee_scenarios', None)

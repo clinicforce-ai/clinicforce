@@ -12,6 +12,8 @@ from app.api.routers.commercial_flow.commercial_previsit_appointment import load
     "response and member ID preserves that visit binding for reuse. A recent single discovery "
     "candidate with an address conflict can trigger "
     "one automatic member-specific payer inquiry; only a matching active 271 supplies benefits. "
+    "A completed empty eCW Coverage read with no payer, insurance candidate or active saved eligibility selects Cash and skips Stedi; a failed coverage read does not. This does not assert that the patient is uninsured. "
+    "A dated eCW appointment note, general comment, or staff-recorded General Notes payment preference that explicitly records self-pay selects cash mode for non-UHC visits unless staff chose a payment mode; patient-entered healow comments are excluded. An exact EMG 4 Areas booking may quote the active full arms-and-legs cash package with no CPT selected; confirm all four limbs before collecting, and do not treat likely CPT examples as performed codes. "
     "A booked EMG/NCS visit without a study count returns one provisional "
     "scenario with mutually exclusive CPT levels; an exact suggested CPT plan is priced immediately "
     "from patient-bound benefits and clinic rates, and clinician edits recalculate it. A booked unilateral "
@@ -88,9 +90,9 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     separate scope is rejected; a successful Stedi 271 remains valid benefit
     evidence. Missing eligibility or secondary-benefit coordination does not
     imply zero liability.
-    Explicit visit-linked eCW billing notes can supply a collection instruction
-    or a fallback office copay; their source and timestamp accompany the result.
-    They do not establish payer eligibility.
+    A completed empty eCW Coverage read with no payer or candidate selects Cash without Stedi; an unavailable read does not. This does not declare the patient uninsured.
+    Explicit dated eCW notes can guide collection or select cash outside the UHC exception; patient-entered healow comments are excluded. Notes do not establish payer eligibility.
+    An exact EMG 4 Areas booking can quote the active full arms-and-legs package without selecting illustrative CPTs; staff confirm four-limb scope before collection.
     Patient-bound card OCR fills only matching missing eCW fields. An exact HPI card match replaces an eCW PHCS or MultiPlan network label for payer routing. If only the
     member ID differs and eCW has one active policy, Stedi checks the eCW ID.
     Other conflicts use a uniquely supported card route or wait for review; no
@@ -171,14 +173,8 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     ecw_patient_selection_required before payer requests; staff must confirm
     a patient through the lookup workflow.
 
-    Terminal and unavailable searches do not imply recovery is still pending.
-    recovery.exhausted remains false until every applicable stage has finished;
-    recovery.steps records safe outcomes and unavailable prerequisites.
-    Completed recovery without usable coverage, or completed insurance processing
-    without a supported insurance amount, falls back to configured cash pricing
-    unless staff explicitly retained insurance mode or the payer is UnitedHealthcare.
-    Missing cash rates leave
-    collection_guidance.amount_cents null; no price is invented.
+    Terminal and unavailable searches do not imply pending recovery. recovery.exhausted stays false until every applicable stage finishes; recovery.steps records outcomes and unavailable prerequisites.
+    Completed recovery without usable coverage or a supported insured amount falls back to configured cash unless staff retained Insurance or the payer is UHC. Missing cash rates leave amount_cents null.
     Office estimates reconcile corroborated Cigna base/suffix identifiers, use the
     rendering provider specialty and visit setting, scope named TMJ exclusions to
     linked clinical context, and recognize provider-specific network evidence.
@@ -347,11 +343,13 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
                          stage='eligibility', reason_code='outside_check_window')
         return await incomplete_result()
     billing_note = _api.ecw_billing.collection_note(source.get('appointment_fields') or [])
-    if source.get('self_pay_recorded') or (billing_note or {}).get('kind') == 'self_pay':
+    no_ecw_coverage = _api.ecw_billing.cash_without_coverage(source)
+    if (source.get('self_pay_recorded') or (billing_note or {}).get('kind') == 'self_pay'
+            or no_ecw_coverage):
         if card_task:
             card_task.cancel()
         _api.collection_event('previsit_deferred', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
-                         stage='eligibility', reason_code='self_pay_recorded')
+                         stage='eligibility', reason_code='no_ecw_coverage' if no_ecw_coverage else 'self_pay_recorded')
         return await incomplete_result()
 
     try:

@@ -267,6 +267,7 @@ export type PrevisitEstimate = {
       amount_cents: number
       indication?: string
       scope_note?: string
+      likely_cpt_examples?: string
       filename?: string
       source?: Record<string, unknown>
     }>
@@ -274,7 +275,9 @@ export type PrevisitEstimate = {
   cash_quote?: {
     complete: boolean
     selection: string
+    selection_source?: 'appointment_scope' | 'clinician' | null
     package_label?: string | null
+    likely_cpt_examples?: string | null
     source: string
     effective_from: string
     message: string
