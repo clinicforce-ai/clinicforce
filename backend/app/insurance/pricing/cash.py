@@ -11,6 +11,18 @@ def _cash_rule(row: dict) -> tuple:
             row.get('likely_cpt_examples'))
 
 
+def unique_named_package(config: dict, label: str) -> dict | None:
+    """Return one effective package after the same conflict check used by apply."""
+    matches = [row for row in config['rows']
+               if row.get('price_kind') == 'named_package' and row.get('label', '').casefold() == label.casefold()]
+    codes = {row['code'] for row in matches}
+    if len(codes) != 1:
+        return None
+    code = next(iter(codes))
+    rows = [row for row in config['rows'] if row['code'] == code and not row.get('modifier')]
+    return matches[0] if len({_cash_rule(row) for row in rows}) == 1 else None
+
+
 def apply(result: dict, config: dict, review: dict | None = None) -> None:
     priced = result['price_range']
     result.pop('cash_schedule', None)

@@ -21,6 +21,15 @@ def _visit_context_parts(inputs: dict, source: dict) -> dict:
     return context
 
 
+def _four_area_booking(inputs: dict) -> bool:
+    reason = str(inputs.get('appointment_reason') or '').strip()
+    if not reason:
+        context = str(inputs.get('reason') or '').strip()
+        labeled = _api.re.search(r'(?:^|;\s*)Reason:\s*([^;]+)', context, _api.re.I)
+        reason = labeled.group(1).strip() if labeled else context
+    return bool(_api.re.fullmatch(r'EMG\s*4\s*Areas', reason, _api.re.I))
+
+
 def _visit_context_changes(saved_inputs: dict, saved_source: dict, current_inputs: dict, current_source: dict) -> list[str]:
     saved, current = _visit_context_parts(saved_inputs, saved_source), _visit_context_parts(current_inputs, current_source)
     return [key for key in dict.fromkeys([*saved, *current]) if saved.get(key) != current.get(key)]
@@ -287,13 +296,11 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         cash_review = review
         if (result['payment_mode'] == 'cash'
                 and (result.get('price_range') or {}).get('mode') in {'alternatives', 'services'}
-                and _api.re.fullmatch(r'\s*EMG\s*4\s*Areas\s*', str(inputs.get('appointment_reason')
-                    or inputs.get('appointment_type') or inputs.get('reason') or ''), _api.re.I)):
-            full_study = [row for row in uploaded_cash['rows']
-                          if row.get('price_kind') == 'named_package'
-                          and row.get('label', '').casefold() == 'comprehensive full study - arms & legs']
-            if len(full_study) == 1:
-                cash_review = {**review, 'cash_selection': full_study[0]['code'],
+                and _four_area_booking(inputs)):
+            full_study = _api.practice_prices.unique_named_package(
+                uploaded_cash, 'Comprehensive Full Study - Arms & Legs')
+            if full_study:
+                cash_review = {**review, 'cash_selection': full_study['code'],
                                '_cash_package_scope': 'four_limbs'}
         _api.practice_prices.apply(result, uploaded_cash, cash_review)
     _api.practice_prices.apply_visit_quote(result, review)

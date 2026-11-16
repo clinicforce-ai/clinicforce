@@ -74,6 +74,15 @@ def test_cash_never_changes_insurance_or_sums_alternative_services():
     assert not result['price_range']['cash_complete'] and 'cash_max_cents' not in result['price_range']
 
 
+def test_named_cash_package_deduplicates_equal_active_rows_but_rejects_conflicts():
+    row = {'code': 'named:full-study', 'cash_cents': 130000, 'price_kind': 'named_package',
+           'label': 'Comprehensive Full Study - Arms & Legs'}
+    config = {'rows': [row, {**row, 'schedule_id': 'second-active-source'}]}
+    assert practice_prices.unique_named_package(config, row['label']) == row
+    config['rows'][1]['cash_cents'] = 120000
+    assert practice_prices.unique_named_package(config, row['label']) is None
+
+
 @pytest.mark.skipif(not os.getenv('STAFF_TEST_DATABASE_URL'), reason='Requires disposable PostgreSQL')
 def test_schedule_activation_and_effective_dates_are_practice_scoped():
     url = os.environ['STAFF_TEST_DATABASE_URL']; schema = 'cash_' + uuid4().hex
