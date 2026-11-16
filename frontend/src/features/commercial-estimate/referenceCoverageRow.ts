@@ -111,6 +111,16 @@ export function payerOrderRow(
       value: `${result.payer || 'Selected payer'} 271 lists ${reported.payer} as secondary`,
       detail: 'Secondary entitlement and claim order have not been independently verified.',
     }
+  const cob = result.coordination
+  if (cob?.status === 'primacy_reported' && cob.payer_roles?.length)
+    return {
+      label: 'Payer order',
+      value: `Stedi COB: ${cob.payer_roles
+        .map((row) => `${row.payer_name} ${row.role.replace(' Payer', '').toLowerCase()}`)
+        .join(' · ')}`,
+      detail:
+        'Match the payer-reported roles to this patient and the other active policies before collection.',
+    }
   return benefits?.has_secondary || result.recovery?.reason_code === 'multiple_active_policies'
     ? { label: 'Payer order', value: 'Multiple active policies · order not verified' }
     : null

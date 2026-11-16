@@ -9,12 +9,59 @@ from app.insurance.identity import payer_identity_verified
 DRUG_CODES = cpt_rules.SERVICE_FAMILIES['botulinum_drug']['codes']
 PROCEDURE_CODES = cpt_rules.SERVICE_FAMILIES['chemodenervation']['codes']
 SELECTABLE_CODES = DRUG_CODES | PROCEDURE_CODES
+PLANNING_PROMPT = ('\nFor Botox or BTX, choose the one supplied injection procedure supported by the current '
+                   'indication or comparable completed history. Do not add a drug line without documented dose '
+                   'and supply, or a separate E/M without independently planned evaluation.')
 
 
 def is_botox_visit(inputs: dict) -> bool:
     current = ' '.join(str(inputs.get(key) or '') for key in ('reason', 'appointment_type'))
     current += ' ' + ' '.join(str(row.get('description') or '') for row in inputs.get('lines') or [])
-    return bool(re.search(r'\b(?:botox|onabotulinumtoxin\w*|chemodenerv\w*)\b', current, re.I))
+    return bool(re.search(r'\b(?:btx|botox|onabotulinumtoxin\w*|chemodenerv\w*)\b', current, re.I))
+
+
+def planning_procedure(inputs: dict, source: dict) -> str | None:
+    """Identify one injection procedure from current scope or comparable completed care."""
+    reason = str(inputs.get('reason') or '')
+    current = set()
+    if re.search(r'\b(?:chronic migraine|migraine prophylaxis)\b', reason, re.I):
+        current.add('64615')
+    if re.search(r'\b(?:hemifacial spasm|blepharospasm|facial spasm)\b', reason, re.I):
+        current.add('64612')
+    if current:
+        return next(iter(current)) if len(current) == 1 else None
+    history = {code for row in (source.get('recent_completed_appointments') or [])[:10]
+               if isinstance(row, dict) and re.search(r'\b(?:btx|botox|chemodenerv\w*)\b',
+                                                       str(row.get('reason') or ''), re.I)
+               for code in row.get('coded_services') or [] if code in PROCEDURE_CODES}
+    return next(iter(history)) if len(history) == 1 else None
+
+
+def planning_candidates(inputs: dict, source: dict, available: list[dict]) -> tuple[str | None, list[dict]]:
+    procedure = planning_procedure(inputs, source)
+    return procedure, [row for row in available if row['code'] == procedure]
+
+
+def unresolved_plan(baseline: dict) -> dict:
+    return {**baseline, 'kind': 'botox', 'recommended_ids': [],
+            'recommendation_basis': 'The current reason and comparable completed visits do not identify one injection procedure.',
+            'method': 'appointment', 'version': 19}
+
+
+def planned_result(baseline: dict, choices: list[dict], by_code: dict, inputs: dict,
+                   procedure: str, basis: str, method: str) -> dict:
+    if not choices:
+        choices = [{'code': procedure, 'units': 1}]
+        current_scope = planning_procedure(inputs, {}) == procedure
+        basis = ('One provisional injection procedure from the current reason.' if current_scope else
+                 'One provisional injection procedure from comparable completed eCW history.')
+        method = 'appointment' if current_scope else 'history'
+    baseline.setdefault('assumptions', []).append(
+        'Confirm injection anatomy, drug and dose, supply source, modifiers and authorization before billing or collection.')
+    baseline.update(kind='botox', recommended_ids=[by_code[row['code']]['id'] for row in choices],
+                    recommended_units={by_code[row['code']]['id']: row['units'] for row in choices},
+                    recommendation_basis=basis, method=method, version=19)
+    return baseline
 
 
 def provisional_office_injection(result: dict, options: list[dict], review: dict | None = None) -> dict | None:

@@ -625,7 +625,7 @@ def test_requirement_status_does_not_hide_supported_office_copay(restriction):
         None if restriction == 'coinsurance' else 5500)
 
 
-@pytest.mark.parametrize('change', ['patient', 'group', 'missing_group', 'payer', 'base', 'suffix', 'subscriber', 'relationship', 'multiple'])
+@pytest.mark.parametrize('change', ['patient', 'group', 'missing_group', 'payer', 'base', 'suffix', 'subscriber', 'relationship'])
 def test_suffix_reconciliation_requires_independent_patient_and_policy_evidence(change):
     payload, inputs, source = example()
     if change == 'patient': payload['subscriber']['dateOfBirth'] = '1981-01-15'
@@ -636,7 +636,6 @@ def test_suffix_reconciliation_requires_independent_patient_and_policy_evidence(
     if change == 'suffix': inputs['member_id'] = '98765432102'
     if change == 'subscriber': inputs['subscriber']['firstName'] = 'Other'
     if change == 'relationship': inputs['relationship'] = '19'
-    if change == 'multiple': source['active_coverages'] = 2
     comparison = identity.compare(payload, api._coverage_snapshot(inputs, source))
     assert comparison['status'] == 'review'
     assert comparison['reconciliation_rule'] is None
@@ -660,6 +659,23 @@ def test_cigna_group_or_policy_number_corroborates_long_member_suffix():
     assert identity.compare(payload, api._coverage_snapshot(inputs, source))['reconciliation_rule'] == 'cigna_member_suffix'
 
 
+def test_cigna_missing_ecw_group_binds_linked_self_person_suffix_with_other_policies():
+    payload, inputs, source = example()
+    inputs['member_id'] = '987654321'
+    inputs['group_number'] = None
+    payload['subscriber']['memberId'] = '98765432101'
+    payload['subscriber'].pop('groupNumber')
+    payload['subscriber']['additionalInformation'] = {'groupOrPolicyNumber': 'SYNTHETIC-GROUP'}
+    source['active_coverages'] = 2
+    source['_patient_id'] = 'synthetic-patient'
+    coverage = api._coverage_snapshot(inputs, source)
+    coverage['subscriber_patient_linked'] = True
+    matched = identity.compare(payload, coverage)
+    assert matched['reconciliation_rule'] == 'cigna_member_suffix'
+    assert identity.payer_identity_verified(matched)
+    assert identity.compare(payload, {**coverage, 'subscriber_patient_linked': False})['status'] == 'review'
+
+
 def test_corroborated_cigna_member_suffix_qualifies_for_member_specific_rules():
     payload, inputs, source = example()
     comparison = identity.compare(payload, api._coverage_snapshot(inputs, source))
@@ -668,7 +684,10 @@ def test_corroborated_cigna_member_suffix_qualifies_for_member_specific_rules():
 
     source['active_coverages'] = 2
     other = identity.compare(payload, api._coverage_snapshot(inputs, source))
-    assert not identity.payer_identity_verified(other)
+    assert identity.payer_identity_verified(other)
+    result = finish(payload, inputs, source, payer='Cigna')
+    assert result['benefits']['has_secondary'] is True
+    assert result['collection_guidance']['amount_cents'] is None
 
 
 def test_cigna_oap_product_label_resolves_office_referral_rule():

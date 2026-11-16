@@ -1,4 +1,4 @@
-"""Bounded COB follow-up for a matched UHC member with overlapping coverage."""
+"""Bounded COB follow-up for a matched member with overlapping coverage."""
 from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
@@ -13,8 +13,7 @@ async def _check_previsit_cob(case: dict, session: dict, provider: dict, *,
     _api.commercial.discard_stale_directory_payer(result, context.get('payer_id'))
     benefits = result.get('benefits') or {}
     recovery = case.get('previsit_discovery') or {}
-    if (not _api.commercial.is_united_healthcare_payer(result, payer)
-            or not (benefits.get('has_secondary') or recovery.get('reason_code') == 'multiple_active_policies')):
+    if not (benefits.get('has_secondary') or recovery.get('reason_code') == 'multiple_active_policies'):
         return
     existing = case.get('previsit_cob') or {}
     if existing.get('state') in {'pending', 'complete', 'indeterminate'}:

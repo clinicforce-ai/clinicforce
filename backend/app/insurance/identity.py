@@ -148,6 +148,7 @@ def compare(payload: dict, coverage: dict, evidence: dict | None = None) -> dict
                 for k in ('first_name', 'last_name', 'birth_date'))
         and not policy_differences)
     # Cigna accepts a base ID with or without its two-digit person suffix.
+    # Other active policies affect payer order, not this selected policy's identity.
     # Never equate two different explicit suffixes or use demographics alone.
     base, extended = sorted((expected_member, returned_member), key=len)
     payer_plan = plan_details(payload)
@@ -158,14 +159,16 @@ def compare(payload: dict, coverage: dict, evidence: dict | None = None) -> dict
         if str(payload.get('payerId') or '') == '62308' else None)
     group_matches = bool(coverage.get('group_number') and returned_group
         and normalized(coverage['group_number']) == normalized(returned_group))
-    # Cigna may append the self-person suffix 00 when eCW has only the base ID
-    # and no group. Keep the payer's group as plan evidence, and require every
-    # available demographic anchor; a conflicting eCW group still blocks reuse.
+    # Cigna may append a two-digit person suffix when eCW has only the base ID
+    # and no group. For suffixes other than 00, require eCW's patient/subscriber
+    # link as an independent anchor. A conflicting eCW group still blocks reuse.
     missing_ecw_group_self_suffix = bool(not coverage.get('group_number') and returned_group
-        and expected_member == base and returned_member == extended and extended.endswith('00'))
+        and expected_member == base and returned_member == extended
+        and (extended.endswith('00') or (extended[-2:].isdigit()
+            and coverage.get('patient_id') and coverage.get('subscriber_patient_linked') is True)))
     cigna_suffix = (str(payload.get('payerId') or '') == '62308'
         and len(base) in {9, 12} and len(extended) == len(base) + 2 and extended == base + extended[-2:]
-        and extended[-2:].isdigit() and coverage.get('coverage_id') and coverage.get('active_coverages') == 1
+        and extended[-2:].isdigit() and coverage.get('coverage_id')
         and (group_matches or missing_ecw_group_self_suffix) and not policy_differences
         and expected['relationship'] == returned['relationship'] in {'self', 'spouse', 'child', 'other'}
         and all(expected[k] and returned[k] and key(k, expected[k]) == key(k, returned[k])
