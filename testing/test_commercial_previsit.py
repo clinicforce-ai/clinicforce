@@ -517,6 +517,9 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_empty_ecw_coverage_uses_four_area_cash_price_without_stedi(self):
         await self._flow(date.today().isoformat(), empty_coverage=True)
 
+    async def test_four_area_cash_price_with_documented_ncs_emg_codes(self):
+        await self._flow(date.today().isoformat(), empty_coverage=True, scheduled_code='95908,95886')
+
     async def test_saved_insurance_hold_prevents_paid_refresh(self):
         await self._flow((date.today() + timedelta(days=2)).isoformat(), refresh=True, too_early=True, saved_hold=True)
 
@@ -626,9 +629,10 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
             inputs.update(reason='Reason: EMG 4 Areas', appointment_reason='EMG 4 Areas',
                           member_id=None, relationship=None, subscriber={})
         if scheduled_code:
-            inputs['lines'] = [{'id': 'documented-service', 'code': scheduled_code,
-                                'service_status': 'scheduled', 'units': 1,
-                                'source': 'eCW ServiceRequest'}]
+            codes = scheduled_code.split(',')
+            inputs['lines'] = [{'id': 'documented-service' if len(codes) == 1 else f'documented-service-{index}',
+                                'code': code, 'service_status': 'scheduled', 'units': 1,
+                                'source': 'eCW ServiceRequest'} for index, code in enumerate(codes)]
         if combined_emg:
             inputs.update(reason='EMG for right cervical radiculopathy', visit_type='established',
                           place_of_service='11')
@@ -907,7 +911,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(cleared['selected_service_count'], 0)
                 self.assertNotIn('provisional_scenario', cleared)
                 return
-            if scheduled_code:
+            if scheduled_code and not empty_coverage:
                 self.assertEqual(result['service_selection_status'], 'preview')
                 self.assertEqual(result['selected_ids'], ['documented-service'])
                 self.assertEqual([row['code'] for row in result['codes']], [scheduled_code])
@@ -1001,7 +1005,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result['payment_mode'], 'cash')
                 self.assertEqual(result['cash_quote']['min_cents'], 130000)
                 self.assertEqual(result['collection_guidance']['amount_cents'], 130000)
-                self.assertEqual(result['selected_ids'], [])
+                self.assertEqual(result['selected_ids'], ['documented-service-0', 'documented-service-1'] if scheduled_code else [])
                 client.post.assert_not_awaited()
                 return
             if self_pay or billing_note == 'Self Pay':
