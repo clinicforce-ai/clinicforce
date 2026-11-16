@@ -63,9 +63,6 @@ def test_nmct_collects_matched_stedi_office_copay_without_cpt_rate():
         'names': ['Humana TotalComplete'], 'medicare_hmo_evidence': 'synthetic-active-stc30'}},
         nmct_fixed_office_copay_advance_enabled=True)
     result['identity'] = {'status': 'matched', 'binding': 'synthetic-binding', 'match_version': 2}
-    result['billing_protection'] = {'status': 'not_qmb', 'identity_binding': 'synthetic-binding',
-                                    'reference': 'synthetic member verification',
-                                    'verified_at': '2026-11-16T12:00:00Z'}
     result['benefits'].update(identity=result['identity'], service_date_matches=True,
         oop_remaining_cents=331000, coinsurance_percent='0')
     price = result['price_range']
@@ -86,14 +83,14 @@ def test_nmct_collects_matched_stedi_office_copay_without_cpt_rate():
     assert guidance['basis'] == 'office_copay'
     assert guidance['collection_rule']['mode'] == 'nmct_fixed_office_copay_advance'
     assert encounter_summary.build({**result, 'collection_guidance': guidance})['collect_today_cents'] == 1500
+    with_fee = deepcopy(result)
+    with_fee['price_range']['lines'][0].update(allowed_cents=11362,
+        allowed_basis='payer_fee_schedule', rate_resolution={'status': 'RESOLVED'},
+        issues=['Confirm the remaining individual deductible that applies to this visit.'])
+    assert collection_guidance.build(with_fee)['amount_cents'] == 1500
     paid = collection_guidance.build(result, {'payments': {'reference': 'synthetic-receipt', 'amount_cents': 500}})
     assert paid['amount_cents'] == 1000
-    unresolved = {**result, 'billing_protection': {}}
-    pending = collection_guidance.build(unresolved)
-    assert pending['amount_cents'] == 0
-    assert pending['basis'] == 'qmb_status_pending'
-    assert 'Collect $0' in pending['reason']
-    assert encounter_summary.build({**unresolved, 'collection_guidance': pending})['collect_today_cents'] == 0
+    assert not result.get('billing_protection')
     protected = {**result, 'billing_protection': {'status': 'qmb',
         'identity_binding': 'synthetic-binding', 'reference': 'synthetic member verification',
         'verified_at': '2026-11-16T12:00:00Z'}}

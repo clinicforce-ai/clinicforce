@@ -251,7 +251,6 @@ export function deriveCommercialEstimateView({
     result?.encounter_summary?.collect_today_cents === 0
   const clinicInstructionAmount =
     healthselectZeroArrival ||
-    guidance?.basis === 'qmb_status_pending' ||
     guidance?.basis === 'claim_after_service' ||
     (guidance?.basis === 'ecw_billing_note' &&
       (guidance.amount_cents === 0 || benefits?.active !== true))

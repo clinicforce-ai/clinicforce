@@ -268,6 +268,9 @@ def _reprice_saved_new_network(result: dict, case: dict, practice_id: str, payer
                  'payer_plan_bound': patient_plan_applies(benefits, identity, str(inputs.get('service_date') or '')),
                  'payer_plan_names': [plan['identified_product']] if plan.get('identified_product') else plan.get('names') or [],
                  'payer_network_names': plan.get('network_names') or []}
+        if (exact['payer_plan_bound'] and plan.get('medicare_hmo_evidence')
+                and (benefits.get('plan_details') or {}).get('names') == plan.get('names')):
+            benefits['plan_details']['medicare_hmo_evidence'] = plan['medicare_hmo_evidence']
         price, issues = _api._previsit_range(practice_id, inputs, exact,
                                        str((payer or {}).get('id') or context.get('payer_id') or ''),
                                        result.get('codes') or [], benefits, payload=payload,
@@ -280,10 +283,12 @@ def _reprice_saved_new_network(result: dict, case: dict, practice_id: str, payer
         # clinic pricing configuration is temporarily unavailable.
         return
     result['price_range'] = price
-    if is_schedule_payer and price.get('complete') and not issues:
+    if (is_schedule_payer and (price.get('complete') or price.get('lines')
+            and all((line.get('rate_resolution') or {}).get('status') == 'RESOLVED'
+                    for line in price['lines']))):
         result['issues'] = [issue for issue in result.get('issues') or []
                             if not (str(issue).startswith('Clinic pricing:') or
-                                    'clinic contract or CPT rate changed' in str(issue).lower() or
+                                    'clinic contract or cpt rate changed' in str(issue).lower() or
                                     'single enabled clinic connection' in str(issue).lower())]
 
 

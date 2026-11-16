@@ -54,6 +54,9 @@ def fee_schedule_products(payer_name: str, plan: dict | None) -> list[str]:
     if (payer_key(payer_name) == 'humana' and len(names) == 1
             and plan.get('medicare_ppo_evidence')):
         return ['Humana Medicare Advantage PPO']
+    if (payer_key(payer_name) == 'humana' and len(names) == 1
+            and plan.get('medicare_hmo_evidence')):
+        return ['Humana Medicare Advantage HMO']
     if names:
         return names
     networks = plan.get('network_names') or []

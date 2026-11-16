@@ -14,7 +14,6 @@ from app.insurance.collection.billing_note import apply_billing_note
 from app.insurance.collection.benefit_gates import apply_family_oop_deferrals, apply_trs_hd_office_refundable_deposit, prepare_benefit_evidence, preview_zero_individual_oop_applies
 from app.insurance.collection.healthselect_zero import applies as healthselect_zero_applies
 from app.insurance.collection.humana_office import apply as apply_humana_office_copay
-from app.insurance.collection.qmb_pending import apply as apply_qmb_pending
 from app.insurance.collection import secondary_order
 from app.insurance.identity import patient_benefits_bound
 from app.insurance.benefit_review import annual_oop_conflict_with_known_remaining, selected_service_blocker, selected_service_detail
@@ -93,7 +92,8 @@ def build(result: dict, review: dict | None = None) -> dict:
     qmb_protected = (member_bound and benefits.get('qmb_status') == 'protected' or
         member_bound and qmb_clearance.get('status') == 'qmb'
         and qmb_clearance.get('identity_binding') == identity.get('binding') and qmb_clearance.get('reference') and qmb_clearance.get('verified_at'))
-    qmb_unresolved = ma_plan and not (qmb_clearance.get('status') == 'not_qmb'
+    qmb_unresolved = ma_plan and (not payer_plan.get('medicare_hmo_evidence')
+        or benefits.get('qmb_status') == 'protected' or qmb_clearance.get('status') == 'qmb') and not (qmb_clearance.get('status') == 'not_qmb'
         and qmb_clearance.get('reference') and qmb_clearance.get('verified_at')
         and qmb_clearance.get('identity_binding') == identity.get('binding') and not qmb_protected)
     unapproved_services = result.get('service_selection_status') == 'preview'
@@ -454,8 +454,6 @@ def build(result: dict, review: dict | None = None) -> dict:
     apply_blue_ppo_family_quote(result, guidance, review, assumptions, safe=bool(safe))
     apply_cigna_quotes(result, guidance, review, assumptions, safe=bool(safe))
     apply_humana_office_copay(result, guidance, review, allowed=not any((qmb_protected, qmb_unresolved, adverse, source_errors, line_blocker, same_policy_conflict, unresolved_order, unconfirmed_zero_oop)))
-    apply_qmb_pending(result, guidance, unresolved=qmb_unresolved and bool(payer_plan.get('medicare_hmo_evidence')), protected=qmb_protected,
-        member_bound=member_bound, source_errors=source_errors, same_policy_conflict=same_policy_conflict, unresolved_order=unresolved_order)
     for line in lines:
         mapped = 'needs mapping' not in line.get('benefit_basis', '')
         terms = (line.get('benefits') or {}) if mapped else {}

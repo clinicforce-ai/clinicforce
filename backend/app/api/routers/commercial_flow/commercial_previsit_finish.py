@@ -103,6 +103,9 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                 for row in office_rows for note in row.get('messages') or []))
     payer_plan = _api.commercial.plan_details(administrator.get('30') or administrator.get('98') or payload or {})
     payer_plan_bound = patient_plan_applies(result['benefits'], comparison, inputs['service_date'])
+    if (payer_plan_bound and payer_plan.get('medicare_hmo_evidence')
+            and (result['benefits'].get('plan_details') or {}).get('names') == payer_plan.get('names')):
+        result['benefits']['plan_details']['medicare_hmo_evidence'] = payer_plan['medicare_hmo_evidence']
     payer_plan = published_plan_benefits.identify_card_plan(
         payer_plan, result.get('card_check') or {}, str(result.get('payer') or source.get('payer') or ''), payer_plan_bound)
     card_check = result.get('card_check') or {}

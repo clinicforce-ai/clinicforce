@@ -98,6 +98,66 @@ def test_humana_office_plan_uses_explicit_stedi_medicare_ppo_message():
     assert payer_fees.fee_schedule_products('Humana', mixed) != ['Humana Medicare Advantage PPO']
 
 
+def test_humana_totalcomplete_hmo_uses_imported_99203_fee():
+    status = {'status': 'ACTIVE_COVERAGE', 'service': {'system': 'STC', 'value': '30'},
+              'insuranceType': 'HEALTH_MAINTENANCE_ORGANIZATION_HMO_MEDICARE_RISK'}
+    plan = commercial.plan_details({'plans': [{'name': 'Humana TotalComplete',
+                                               'benefits': {'statuses': [status]}}]})
+    assert payer_fees.fee_schedule_products('Humana Health Plan', plan) == ['Humana Medicare Advantage HMO']
+    assert payer_fees.schedule_for('Humana Health Plan', payer_fees.fee_schedule_products('Humana Health Plan', plan)) == ('humana', 'medicare')
+    sql = (Path(__file__).resolve().parents[1] / 'scripts/sql/2026-11-13-payer-fee-schedules.sql').read_text()
+    imported = sqlite3.connect(':memory:')
+    imported.executescript(sql)
+    row = imported.execute('''SELECT code, allowed_cents, source_reference, effective_from
+        FROM payer_fee_schedule WHERE payer_key='humana' AND category='medicare' AND code='99203' ''').fetchone()
+    db = FakeDatabase([dict(zip(('code', 'allowed_cents', 'source_reference', 'effective_from'), row))])
+    benefits = {'plan_details': plan, 'identity': {'binding': 'synthetic-person'},
+                'network_status': 'in_network'}
+    inputs = {'service_date': '2026-11-17', 'place_of_service': '11',
+              'rendering_provider': {'npi': '1234567890'}}
+    line = {'id': 'office', 'code': '99203', 'units': 1, 'modifiers': []}
+    with patch.object(payer_fees, 'active_schedule', return_value=True), \
+         patch.object(payer_fees, '_connection', return_value=db):
+        priced, issues = _previsit_range('synthetic-practice', inputs,
+            {'rendering_provider': {'npi': '1234567890'}, 'payer_plan_bound': True},
+            'synthetic-route', [line], benefits, payer_name='Humana Health Plan')
+    assert priced['lines'][0]['allowed_cents'] == 11362
+    assert priced['lines'][0]['allowed_basis'] == 'payer_fee_schedule'
+    assert not issues
+
+
+def test_saved_humana_hmo_rate_replaces_stale_rate_warning(monkeypatch):
+    import hashlib
+    from app.api.routers.commercial_flow import commercial_previsit_saved_pricing as saved
+
+    raw = b'{}'
+    plan = {'names': ['Humana TotalComplete'], 'medicare_hmo_evidence': 'synthetic-stc30'}
+    result = {'payer': 'Humana Health Plan', 'service_date': '2026-11-17',
+              'plan_details': {'stedi': plan}, 'identity': {'binding': 'synthetic-person'},
+              'benefits': {'active': True, 'plan_details': {'names': plan['names']},
+                           'network_status': 'in_network'},
+              'codes': [{'id': 'office', 'code': '99203', 'units': 1}],
+              'issues': ['The clinic contract or CPT rate changed since this saved estimate was calculated.'],
+              'price_range': {'lines': [{'id': 'office', 'code': '99203'}]}}
+    case = {'previsit_raw_object_key': 'synthetic-eligibility',
+            'previsit_raw_sha256': hashlib.sha256(raw).hexdigest(),
+            'previsit_context': {'inputs': {'service_date': '2026-11-17'}, 'source': {}}}
+    priced = {'complete': False, 'lines': [{'id': 'office', 'code': '99203',
+        'allowed_cents': 11362, 'rate_resolution': {'status': 'RESOLVED'}}]}
+    monkeypatch.setattr(saved._api.object_store, 'get_object_bytes', lambda _: raw)
+    monkeypatch.setattr(saved, 'patient_plan_applies', lambda *_: True)
+    monkeypatch.setattr(saved, '_payer_plan_pricing_source', lambda *args: {})
+    monkeypatch.setattr(saved.payer_fees, 'active_schedule', lambda *_: True)
+    def reprice(*args, **kwargs):
+        assert args[5]['plan_details']['medicare_hmo_evidence'] == 'synthetic-stc30'
+        return priced, ['Confirm the remaining individual deductible that applies to this visit.']
+    monkeypatch.setattr(saved._api, '_previsit_range', reprice)
+    saved._reprice_saved_new_network(result, case, 'synthetic-practice',
+                                    {'id': 'route', 'display_name': 'Humana Health Plan'})
+    assert result['price_range']['lines'][0]['allowed_cents'] == 11362
+    assert result['issues'] == []
+
+
 def test_uhc_network_only_product_prices_selected_televisit_from_database():
     line = {'id': 'office', 'code': '99213', 'units': 1, 'modifiers': []}
     benefits = {'plan_details': {'names': [], 'network_names': ['UNITEDHEALTHCARE CHOICE PLUS'],
