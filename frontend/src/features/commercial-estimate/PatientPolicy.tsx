@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { ArrowRight } from 'lucide-react'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import InsuranceCards from '../insurance-card/InsuranceCards'
@@ -33,6 +34,7 @@ export default function PatientPolicy({
     busy,
     saveReview,
   } = model
+  const [cardNotice, setCardNotice] = useState('')
   const mismatchFields = [
     ...(result.identity?.differences || []),
     ...(result.identity?.policy_differences || []),
@@ -197,7 +199,19 @@ export default function PatientPolicy({
             background
             inline
             historicalEstimate={readOnly}
+            onCardDeleted={async (pending) => {
+              setCardNotice(
+                pending
+                  ? 'Card removed from this record. Stored file cleanup is pending; retry it from Clinical patients.'
+                  : 'Card deleted. This saved estimate may still reflect it; recheck the visit before relying on the result.',
+              )
+            }}
           />
+        )}
+        {cardNotice && (
+          <p className="visit-muted" role="status">
+            {cardNotice}
+          </p>
         )}
         {result.card_check && (
           <p className="visit-muted" role="status">
