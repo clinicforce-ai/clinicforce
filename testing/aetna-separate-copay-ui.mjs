@@ -278,4 +278,29 @@ const officeTable = renderToStaticMarkup(React.createElement(CommercialCostBreak
 assert.match(officeTable, /Clinic Aetna fee reference.*\$93\.25/)
 assert.match(officeTable, /Conditional patient share.*\$93\.25.*\$27\.98/)
 assert.match(officeTable, /Amount to collect at visit.*do not collect yet/)
+const medicareOffice = {
+  ...officeScenario,
+  plan_details: { stedi: { names: ['Aetna Medicare Value Plus (PPO)'] } },
+  aetna_office_planning: { status: 'planning_only', code: '99213', allowed_cents: 9633,
+    copay_cents: 5000, plan_share_cents: 4633, deductible_remaining_cents: 0,
+    oop_remaining_cents: 530265, coinsurance_percent: '0',
+    deductible_applies_cents: 5000, deductible_waived_cents: 5000,
+    payer_response_date: '2026-11-15', service_date: '2026-11-16', collectable: false },
+}
+const medicareView = deriveCommercialEstimateView({ result: medicareOffice,
+  appointments: [], selectedVisit: null, busy: null, error: null, readOnly: true,
+  recovering: false })
+assert.equal(medicareView.provisionalAmount, 5000)
+const medicareModel = { ...officeModel, ...medicareView, supportedAmount: false }
+const medicareSummary = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
+  { model: medicareModel, result: medicareOffice, partialCopay: null, visibleAmount: true }))
+assert.match(medicareSummary, /\$50\.00 estimated patient copay/)
+assert.match(medicareSummary, /\$46\.33 estimated Aetna share/)
+const medicareTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+  { model: medicareModel, result: medicareOffice }))
+assert.match(medicareTable, /Clinic Aetna fee reference.*\$96\.33/)
+assert.match(medicareTable, /Conditional patient share.*\$50\.00/)
+assert.match(medicareTable, /Estimated Aetna share.*\$46\.33/)
+assert.match(medicareTable, /Amount to collect at visit.*\$50\.00 conditional planning amount/)
+assert.doesNotMatch(medicareTable, /\$46\.33 conditional planning amount/)
 console.log('Aetna separate copay: $40 office reference; $0 general OOP does not erase the separate cap')

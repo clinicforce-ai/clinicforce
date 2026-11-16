@@ -166,6 +166,8 @@ def _collection_action(code: str, result: dict, source_errors: list[dict] | None
         return 'ask the payer whether the planned CPT is covered on this visit date, then rerun the insured estimate'
     if code == 'coverage_date_invalid':
         return 'obtain the correct coverage dates from the payer for this visit, then rerun the insured estimate'
+    if code == 'payer_service_date_mismatch':
+        return f'obtain {_payer_label(result, "payer")} office benefits for the scheduled visit date, then rerun the insured estimate'
     if code == 'provider_network_conflict':
         payer = _payer_label(result, 'the payer')
         return f'ask {payer} whether the rendering provider participates in this exact product at this location, correct the clinic network record, and rerun the insured estimate'

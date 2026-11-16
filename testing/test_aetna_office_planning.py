@@ -104,3 +104,29 @@ def test_choice_pos_ii_published_office_requirements_keep_member_check():
         assert decision['status'] == 'Not required'
         assert decision['member_specific_check'] is True
         assert decision['sources'][0]['url'].startswith('https://www.aetna.com/')
+
+
+def test_prior_day_aetna_medicare_copay_is_patient_share_not_plan_share():
+    result, inputs = _case()
+    result['plan_details']['stedi'] = {
+        'names': ['Aetna Medicare Value Plus (PPO)'],
+        'group_number': '000003-TX', 'plan_number': '000003-TX000083'}
+    result['reference_benefits'].update(
+        returned_service_dates={'start': '2026-11-15'},
+        network_status='in_network', deductible_remaining_cents=0,
+        oop_remaining_cents=530265)
+    result['codes'][0]['code'] = '99213'
+    result['reference_benefits']['reported_options'] = [
+        {'kind': 'copay', 'service_type_code': '98', 'network': 'IN_NETWORK',
+         'amount_cents': 5000, 'payer_note': 'Specialist Visit or Evaluation'},
+        {'kind': 'coinsurance', 'service_type_code': '98', 'network': 'IN_NETWORK',
+         'percent': '0', 'payer_note': 'Specialist Visit or Evaluation'}]
+    with patch.object(aetna_office_planning.aetna_fees, 'matching_rates',
+                      return_value=[{'allowed_cents': 9633, 'source_reference': 'synthetic clinic fee'}]) as lookup:
+        planning = aetna_office_planning.estimate(result, inputs)
+    assert lookup.call_args.args[:3] == ('advantage', '2026-11-16', result['codes'])
+    assert (planning['allowed_cents'], planning['copay_cents'], planning['plan_share_cents']) == (9633, 5000, 4633)
+    assert planning['deductible_applies_cents'] == 5000
+    assert planning['collectable'] is False
+    result['reference_benefits']['qmb_status'] = 'protected'
+    assert aetna_office_planning.estimate(result, inputs) is None

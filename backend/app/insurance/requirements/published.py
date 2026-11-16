@@ -9,13 +9,14 @@ from app.insurance.identity import generic_plan_label, payer_identity_verified
 from app.insurance.library_network_exclusions import product_kind
 from app.insurance.requirements.evidence import _key
 from app.insurance.requirements.aetna_choice_pos_ii import prior_date_office
+from app.insurance.requirements.aetna_value_plus import office_99213 as aetna_value_plus_office
 from app.insurance.requirements.uhc_choice_plus import UHC_TEXAS_CHOICE_PLUS_SOURCE, _uhc_choice_plus_referral
 from app.insurance.requirements.fep_sources import FEP_PSHB_2026_SOURCE, FEP_STANDARD_2026_SOURCE
 BCBSTX_PAYER_NAMES = {'bcbstx', 'bcbstexas', 'bluecrossblueshieldoftexas',
                       'bluecrossandblueshieldoftexas', 'bluecrossblueshieldtx',
                       'bluecrossblueshieldtexas'}
 # Saved estimates re-evaluate requirement decisions when a published rule changes.
-PUBLISHED_RULESET_VERSION = '2026-11-15-aetna-choice-pos-ii-office-v17'
+PUBLISHED_RULESET_VERSION = '2026-11-16-aetna-value-plus-office-v18'
 BLUECARD_PPO_REFERRAL_SOURCE = {
     'label': 'BCBSTX BlueCard provider manual, PPO definition',
     'url': 'https://www.bcbstx.com/content/dam/hcsc/docs/provider/tx/claims/bluecard/bluecard-program-prov-manual.pdf',
@@ -152,8 +153,8 @@ AETNA_CHOICE_POS_II_SOURCE = {
 }
 AETNA_MEDICARE_PPO_REFERRAL_SOURCE = {
     'label': 'Aetna Medicare PPO specialist referral guidance',
-    'url': 'https://www.aetna.com/medicare/compare-plans-enroll/medicare-advantage-ppo-plans.html',
-    'source_version': '2026 PPO guidance, checked 2026-10-28', 'verified_at': '2026-10-28',
+    'url': 'https://www.aetna.com/content/dam/aetna/pdfs/aetnacom/healthcare-professionals/assets/documents/Aetna-Medicare-PPO-Plans.pdf',
+    'source_version': 'March 2026 provider guide, checked 2026-11-16', 'verified_at': '2026-11-16',
     'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
 }
 AETNA_PPO_REFERRAL_SOURCE = {
@@ -171,7 +172,7 @@ AETNA_2026_PRECERT_SOURCE = {
 AETNA_2026_OFFICE_PRECERT_SOURCE = {
     'label': 'Aetna 2026 participating-provider precertification list, November edition',
     'url': 'https://www.aetna.com/content/dam/aetna/pdfs/aetnacom/healthcare-professionals/2026_Precert_List.pdf',
-    'source_version': 'November 1, 2026 list checked 2026-11-15', 'verified_at': '2026-11-15',
+    'source_version': 'November 1, 2026 list checked 2026-11-16', 'verified_at': '2026-11-16',
     'effective_from': '2026-11-01', 'effective_to': '2026-12-31',
 }
 MEDICARE_REFERRAL_SOURCE = {
@@ -205,6 +206,7 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
     day = str(context.get('service_date') or '')
     payer_names = context.get('payer_names') or set()
     prior_date_aetna_choice = prior_date_office(result, context, plans, codes)
+    value_plus_office = aetna_value_plus_office(result, context, plans, codes)
     same_day_bcbstx_visit = (
         (kind == 'referral' or kind == 'authorization' and codes == {'99213'}
          and str(context.get('pos') or '') == '11')
@@ -226,7 +228,7 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
     if (not codes or not '2026-01-01' <= day <= '2026-12-31'
             or benefits.get('active') is not True
             or not (stedi_cpt_authorization.visit_coverage_bound(benefits, day)
-                    or same_day_bcbstx_visit or same_day_uhc_lppo_office or prior_date_aetna_choice)
+                    or same_day_bcbstx_visit or same_day_uhc_lppo_office or prior_date_aetna_choice or value_plus_office)
             or not payer_identity_verified(identity) or not result.get('benefit_source')
             or not context.get('member_id')):
         return None
@@ -257,6 +259,10 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
         if kind == 'referral':
             return rule('Not required', 'Choice POS II permits direct specialist office visits under the published product rule. Confirm the member terms and visit-date coverage.', AETNA_CHOICE_POS_II_SOURCE, check=True)
         return rule('Not required', 'Routine office CPT 99203 is absent from Aetna’s November 2026 participating-provider precertification list. Confirm member or delegated exceptions.', AETNA_2026_OFFICE_PRECERT_SOURCE, check=True)
+    if value_plus_office:
+        if kind == 'referral':
+            return rule('Not required', 'Aetna Medicare PPO specialist office visits do not require a referral.', AETNA_MEDICARE_PPO_REFERRAL_SOURCE)
+        return rule('Not required', 'Routine CPT 99213 is absent from Aetna’s November 2026 participating-provider precertification list.', AETNA_2026_OFFICE_PRECERT_SOURCE)
     bluecard_ppo_office = (kind in {'referral', 'authorization'} and in_network and office
         and str(context.get('pos') or '') == '11' and names & BCBSTX_PAYER_NAMES
         and len(exact) == 1 and len(plans) == 1

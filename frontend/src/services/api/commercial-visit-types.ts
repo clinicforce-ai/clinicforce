@@ -5,6 +5,8 @@ export type AetnaOfficePlanning = {
   status: 'planning_only'
   code: string
   allowed_cents: number
+  copay_cents?: number
+  plan_share_cents?: number
   deductible_remaining_cents: number
   oop_remaining_cents: number
   coinsurance_percent: string

@@ -86,3 +86,18 @@ export function provisionalEstimateAmounts({
       : null)
   return { feeProxyAmount, provisionalAmount }
 }
+
+export function provisionalSummaryExplanation(
+  result: PrevisitEstimate | null,
+  provisionalAmount: number | null,
+  explanation: string,
+): string {
+  if (provisionalAmount == null) return explanation
+  if (result?.aetna_office_planning?.copay_cents != null)
+    return 'The payer-reported specialist copay is the estimated patient share. The approved Aetna fee less that copay is the estimated plan share. Visit-date coverage, Medicare billing protection and prior payments still control collection.'
+  if (result?.aetna_office_planning)
+    return 'Deductible-applies planning amount from the approved Aetna office fee and prior-date payer terms. Confirm visit-date coverage, provider network, deductible applicability, other coverage and prior payments before setting a collection amount.'
+  if (result?.provisional_scenario?.kind === 'ncs_study_count')
+    return 'Estimated patient share across alternative NCS study counts. Muscle testing is excluded unless documented. Do not collect this planning range.'
+  return 'Estimated patient share for the provisional CPT scenario. Review the services and requirements before collecting.'
+}

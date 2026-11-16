@@ -134,16 +134,26 @@ export default function ArrivalAmountSummary({
     )
     return (
       <>
-        <span>Conditional Aetna office share · do not collect yet</span>
+        <span>Conditional Aetna patient share · do not collect yet</span>
         <strong role="status">{money(balance)}</strong>
-        <p>
-          Approved clinic fee {money(aetnaOffice.allowed_cents)}; payer reported{' '}
-          {aetnaOffice.coinsurance_percent}% specialist office coinsurance and{' '}
-          {money(aetnaOffice.deductible_remaining_cents)} remaining deductible for another date. If
-          the deductible is waived, the share is {money(aetnaOffice.deductible_waived_cents)} before
-          prior payments. Confirm visit-date coverage, network, deductible applicability, other
-          coverage and prior payments before setting a collection amount.
-        </p>
+        {aetnaOffice.copay_cents != null ? (
+          <p>
+            {money(aetnaOffice.allowed_cents)} clinic Aetna fee reference ={' '}
+            {money(aetnaOffice.copay_cents)} estimated patient copay +{' '}
+            {money(aetnaOffice.plan_share_cents!)} estimated Aetna share. The Aetna share is paid by
+            the plan, not collected from the patient. The payer returned benefits for an earlier
+            date; Medicare billing protection and prior payments still control collection.
+          </p>
+        ) : (
+          <p>
+            Approved clinic fee {money(aetnaOffice.allowed_cents)}; payer reported{' '}
+            {aetnaOffice.coinsurance_percent}% specialist office coinsurance and{' '}
+            {money(aetnaOffice.deductible_remaining_cents)} remaining deductible for another date.
+            If the deductible is waived, the share is {money(aetnaOffice.deductible_waived_cents)}{' '}
+            before prior payments. Confirm visit-date coverage, network, deductible applicability,
+            other coverage and prior payments before setting a collection amount.
+          </p>
+        )}
       </>
     )
   }

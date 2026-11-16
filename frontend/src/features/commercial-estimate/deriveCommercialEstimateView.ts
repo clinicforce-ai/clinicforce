@@ -6,7 +6,10 @@ import { selectedRequirementIssue } from './selectedRequirementIssue'
 import { visitServiceLabel } from './visitServiceLabel'
 import { benefitPresentation } from './benefitPresentation'
 import { payerPlanDisplay } from './payerPlanDisplay'
-import { provisionalEstimateAmounts } from './provisionalEstimateAmounts'
+import {
+  provisionalEstimateAmounts,
+  provisionalSummaryExplanation,
+} from './provisionalEstimateAmounts'
 import { networkEvidenceStatus } from './networkEvidenceStatus'
 import { emgOptionPresentation } from './emgOptionPresentation'
 import type { CommercialEstimateActions } from './useCommercialEstimateActions'
@@ -425,14 +428,7 @@ export function deriveCommercialEstimateView({
     emgScenario && !calculating && !/nerve testing/i.test(baseExplanation)
       ? `${baseExplanation} ${emg.total_min_cents != null ? 'The nerve-testing total below is for planning only' : 'Nerve testing is excluded because its patient cost is unknown'}.`
       : baseExplanation
-  const summaryExplanation =
-    provisionalAmount != null
-      ? result?.aetna_office_planning
-        ? 'Deductible-applies planning amount from the approved Aetna office fee and prior-date payer terms. Confirm visit-date coverage, provider network, deductible applicability, other coverage and prior payments before setting a collection amount.'
-        : result?.provisional_scenario?.kind === 'ncs_study_count'
-          ? 'Estimated patient share across alternative NCS study counts. Muscle testing is excluded unless documented. Do not collect this planning range.'
-          : 'Estimated patient share for the provisional CPT scenario. Review the services and requirements before collecting.'
-      : explanation
+  const summaryExplanation = provisionalSummaryExplanation(result, provisionalAmount, explanation)
   const provider = result?.appointment_context?.rendering_provider?.name
   const anticipatedService = visitServiceLabel(result)
   return {
