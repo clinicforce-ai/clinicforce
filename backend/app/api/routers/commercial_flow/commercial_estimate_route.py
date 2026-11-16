@@ -13,7 +13,7 @@ from app.api.routers.commercial_flow.commercial_previsit_appointment import load
     "candidate with an address conflict can trigger "
     "one automatic member-specific payer inquiry; only a matching active 271 supplies benefits. "
     "A completed empty eCW Coverage read with no payer, insurance candidate or active saved eligibility selects Cash and skips Stedi; a failed coverage read does not. This does not assert that the patient is uninsured. "
-    "A dated eCW appointment note, general comment, or staff-recorded General Notes payment preference that explicitly records self-pay selects cash mode for non-UHC visits unless staff chose a payment mode; patient-entered healow comments are excluded. An exact EMG 4 Areas booking automatically quotes the active full arms-and-legs cash package with NCS alternatives or compatible documented NCS/EMG codes; no staff package selection is required. Confirm four-limb scope before collecting; likely CPT examples are not performed codes. "
+    "A dated eCW appointment note, general comment, or staff-recorded General Notes payment preference that explicitly records self-pay selects cash mode for non-UHC visits unless staff chose a payment mode; patient-entered healow comments are excluded. An exact EMG 4 Areas booking automatically quotes the active full arms-and-legs cash package with NCS alternatives or compatible documented NCS/EMG codes; no staff package selection is required. An earlier manual package choice is replaced for this exact booking; the package and CPT edit controls are hidden for this matched visit, and available planning CPTs appear beside the amount. Confirm four-limb scope before collecting; planning CPTs are not performed codes. "
     "A booked EMG/NCS visit without a study count returns one provisional "
     "scenario with mutually exclusive CPT levels; an exact suggested CPT plan is priced immediately "
     "from patient-bound benefits and clinic rates, and clinician edits recalculate it. A booked unilateral "
@@ -92,7 +92,7 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     imply zero liability.
     A completed empty eCW Coverage read with no payer or candidate selects Cash without Stedi; an unavailable read does not. This does not declare the patient uninsured.
     Explicit dated eCW notes can guide collection or select cash outside the UHC exception; patient-entered healow comments are excluded. Notes do not establish payer eligibility.
-    An exact EMG 4 Areas booking automatically quotes the active full arms-and-legs package with NCS alternatives or compatible documented NCS/EMG codes, without staff package selection. Confirm four-limb scope before collection.
+    An exact EMG 4 Areas booking automatically quotes the active full arms-and-legs package with NCS alternatives or compatible documented NCS/EMG codes, without staff package selection. It replaces an earlier package choice and shows available planning CPTs directly; confirm four-limb scope before collection.
     Patient-bound card OCR fills only matching missing eCW fields. An exact HPI card match replaces an eCW PHCS or MultiPlan network label for payer routing. If only the
     member ID differs and eCW has one active policy, Stedi checks the eCW ID.
     Other conflicts use a uniquely supported card route or wait for review; no

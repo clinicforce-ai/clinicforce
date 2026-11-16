@@ -12,6 +12,8 @@ export default function CommercialServicesDetail({
   expanded?: boolean
 }) {
   const { readOnly, busy, setNotice, recovering, saveReview, anticipatedService } = model
+  const automaticScope =
+    result.payment_mode === 'cash' && result.cash_quote?.selection_source === 'appointment_scope'
   return (
     <details
       id={expanded ? 'latest-visit-detail-services' : 'visit-detail-services'}
@@ -19,25 +21,34 @@ export default function CommercialServicesDetail({
       open={expanded || undefined}
     >
       <summary>
-        {readOnly ? 'Saved service plan' : 'Review planned CPTs and additional care'}
+        {readOnly
+          ? 'Saved service plan'
+          : automaticScope
+            ? result.service_plan?.method === 'llm'
+              ? 'AI planning CPTs'
+              : 'Planned CPTs'
+            : 'Review planned CPTs and additional care'}
       </summary>
       <div className="visit-detail-body">
         <p>{anticipatedService}</p>
-        {readOnly ? (
-          <ul>
-            {result.codes.map((row, index) => (
-              <li key={row.id || index}>
-                <strong>
-                  CPT {row.code} × {row.units ?? 'Units not retained'}
-                </strong>
-                {row.description && <p>{row.description}</p>}
-                <small>
-                  {row.source}
-                  {row.modifiers?.length ? ` · Modifiers ${row.modifiers.join(', ')}` : ''}
-                </small>
-              </li>
-            ))}
-          </ul>
+        {readOnly || automaticScope ? (
+          <>
+            {!result.codes.length && <p>Planning CPTs are pending for this booked scope.</p>}
+            <ul>
+              {result.codes.map((row, index) => (
+                <li key={row.id || index}>
+                  <strong>
+                    CPT {row.code} × {row.units ?? 'Units not retained'}
+                  </strong>
+                  {row.description && <p>{row.description}</p>}
+                  <small>
+                    {row.source}
+                    {row.modifiers?.length ? ` · Modifiers ${row.modifiers.join(', ')}` : ''}
+                  </small>
+                </li>
+              ))}
+            </ul>
+          </>
         ) : (
           <>
             <ServicePlanner

@@ -149,7 +149,9 @@ def test_four_area_cash_booking_uses_full_study_package_without_guessing_cpts():
     assert 'confirm the planned scope' in result['collection_guidance']['reason']
     assert result['collection_guidance']['services'] == []
     assert result['selected_ids'] == []
-    assert cleared['cash_quote']['selection'] == '' and cleared['collection_guidance']['amount_cents'] is None
+    assert cleared['cash_quote']['selection'] == 'named:full-study'
+    assert cleared['cash_quote']['selection_source'] == 'appointment_scope'
+    assert cleared['collection_guidance']['amount_cents'] == 130000
     assert insured['payment_mode'] == 'insurance' and insured['cash_quote']['selection'] == ''
 
 
