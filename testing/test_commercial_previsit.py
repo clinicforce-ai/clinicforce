@@ -523,6 +523,14 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_four_area_cash_replaces_stale_two_hand_package(self):
         await self._flow(date.today().isoformat(), empty_coverage=True, scheduled_code='95908,95886', stale_cash_selection=True)
 
+    async def test_four_area_cash_from_composite_ecw_reason_without_reason_code(self):
+        await self._flow(date.today().isoformat(), empty_coverage=True, scheduled_code='95908,95886',
+                         four_area_reason_only=True)
+
+    async def test_four_area_cash_with_duplicate_active_package_rows(self):
+        await self._flow(date.today().isoformat(), empty_coverage=True, scheduled_code='95908,95886',
+                         duplicate_full_study=True)
+
     async def test_saved_insurance_hold_prevents_paid_refresh(self):
         await self._flow((date.today() + timedelta(days=2)).isoformat(), refresh=True, too_early=True, saved_hold=True)
 
@@ -593,7 +601,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_newer_conflicting_ecw_check_refreshes_cached_stedi_evidence(self):
         await self._flow(date.today().isoformat(), newer_ecw=True)
 
-    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None, pos=None, scheduled_code=None, emg_review=False, expect_preliminary=False, visit_type='new', combined_emg=False, secondary_mismatch=False, cash_office=False, telehealth=False, confirmed_card=False, aetna_payer_id=None, cash_package=False, two_coverages=False, empty_coverage=False, stale_cash_selection=False):
+    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None, pos=None, scheduled_code=None, emg_review=False, expect_preliminary=False, visit_type='new', combined_emg=False, secondary_mismatch=False, cash_office=False, telehealth=False, confirmed_card=False, aetna_payer_id=None, cash_package=False, two_coverages=False, empty_coverage=False, stale_cash_selection=False, four_area_reason_only=False, duplicate_full_study=False):
         if cash_office:
             self.cash_current.return_value = {'id': 'synthetic-cash', 'filename': 'synthetic.csv',
                 'effective_from': '2026-01-01', 'rows': [{'code': '99204', 'cash_cents': 25000,
@@ -613,6 +621,9 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                     {'code': 'named:both-hands', 'cash_cents': 70000, 'price_kind': 'named_package',
                      'label': 'Carpal Tunnel Evaluation - Both Hands',
                      'description': 'Carpal Tunnel Evaluation - Both Hands'}]}
+            if duplicate_full_study:
+                self.cash_current.return_value['rows'].append({**self.cash_current.return_value['rows'][0],
+                    'schedule_id': 'another-active-source'})
         session = {"practice_id": "clinic", "intake_id": "intake", "patient_id": "patient",
                    "share_manifest_id": "", "staff": {"id": "staff", "display_name": "Staff", "practice_name": "Clinic"},
                    "intake": {"updated_at": "version", "patient": {"given_name": "Pat", "family_name": "Example",
@@ -634,6 +645,9 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         if empty_coverage:
             inputs.update(reason='Reason: EMG 4 Areas', appointment_reason='EMG 4 Areas',
                           member_id=None, relationship=None, subscriber={})
+        if four_area_reason_only:
+            inputs.update(reason='Reason: EMG 4 Areas; Visit type: EMG Visit',
+                          appointment_reason=None, appointment_type='EMG Visit')
         if scheduled_code:
             codes = scheduled_code.split(',')
             inputs['lines'] = [{'id': 'documented-service' if len(codes) == 1 else f'documented-service-{index}',
