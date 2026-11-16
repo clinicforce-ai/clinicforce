@@ -21,7 +21,7 @@ const result = {
     deductible_remaining_cents: 0, oop_remaining_cents: 90000,
     reported_options: [
       { kind: 'copay', service_type_code: '98', coverage_level: 'INDIVIDUAL',
-        network: 'IN_NETWORK', places_of_service: ['11'], payer_note: 'Specialist Visit or Evaluation',
+        network: 'IN_NETWORK', places_of_service: ['11'], payer_note: "Specialist Benefit does apply to member's out-of-pocket maximum",
         amount_cents: 4000 },
       { kind: 'coinsurance', service_type_code: '98', coverage_level: 'INDIVIDUAL',
         network: 'IN_NETWORK', places_of_service: [], percent: '0' },
@@ -42,7 +42,7 @@ const values = {
 }
 const row = collectionAtVisitRow(result, model, values)
 assert.match(row.value, /\$40\.00/)
-assert.match(row.label, /pending/i)
+assert.match(row.label, /refundable office advance/i)
 assert.match(row.detail, /\$900\.00/)
 assert.match(row.detail, /0%/)
 assert.match(row.detail, /BTX/i)
@@ -54,14 +54,15 @@ for (const changed of [
   { payer: 'United Healthcare' },
 ]) {
   const blocked = collectionAtVisitRow({ ...result, ...changed }, model, values)
-  assert.doesNotMatch(blocked.value, /\$40\.00 conditional/)
+  assert.notEqual(blocked.value, '$40.00')
 }
 const { default: CommercialCostBreakdown } = await load('../frontend/src/features/commercial-estimate/CommercialCostBreakdown.tsx')
 const React = require('react')
 const { renderToStaticMarkup } = require('react-dom/server')
 const html = renderToStaticMarkup(React.createElement(CommercialCostBreakdown, { result, model }))
-assert.match(html, /\$40\.00 conditional specialist office visit/)
+assert.match(html, /Amount to collect at visit · refundable office advance/)
+assert.match(html, /\$40\.00/)
 assert.match(html, /Conditional office-only share/)
 assert.match(html, /\$40\.00 specialist office scenario; full BTX share unknown/)
 assert.match(html, /\$900\.00/)
-console.log('Cigna BTX office-only scenario remains visible and noncollectible')
+console.log('Cigna BTX refundable office advance shown with office-only limits')

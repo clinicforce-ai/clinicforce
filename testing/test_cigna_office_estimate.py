@@ -659,6 +659,23 @@ def test_cigna_group_or_policy_number_corroborates_long_member_suffix():
     assert identity.compare(payload, api._coverage_snapshot(inputs, source))['reconciliation_rule'] == 'cigna_member_suffix'
 
 
+def test_cigna_missing_ecw_group_binds_linked_self_person_suffix_with_other_policies():
+    payload, inputs, source = example()
+    inputs['member_id'] = '987654321'
+    inputs['group_number'] = None
+    payload['subscriber']['memberId'] = '98765432101'
+    payload['subscriber'].pop('groupNumber')
+    payload['subscriber']['additionalInformation'] = {'groupOrPolicyNumber': 'SYNTHETIC-GROUP'}
+    source['active_coverages'] = 2
+    source['_patient_id'] = 'synthetic-patient'
+    coverage = api._coverage_snapshot(inputs, source)
+    coverage['subscriber_patient_linked'] = True
+    matched = identity.compare(payload, coverage)
+    assert matched['reconciliation_rule'] == 'cigna_member_suffix'
+    assert identity.payer_identity_verified(matched)
+    assert identity.compare(payload, {**coverage, 'subscriber_patient_linked': False})['status'] == 'review'
+
+
 def test_corroborated_cigna_member_suffix_qualifies_for_member_specific_rules():
     payload, inputs, source = example()
     comparison = identity.compare(payload, api._coverage_snapshot(inputs, source))

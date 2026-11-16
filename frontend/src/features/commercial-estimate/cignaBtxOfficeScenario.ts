@@ -46,9 +46,9 @@ export function cignaBtxOfficeScenario(
   )
   return {
     modeledAmountCents: officeCopay,
-    label: 'Amount to collect at visit · office scenario pending',
-    value: `${money(balance)} conditional specialist office visit · do not collect yet`,
-    detail: `min(${money(officeCopay)} office copay + $0.00 remaining deductible + 0% office coinsurance, ${money(benefits.oop_remaining_cents)} remaining out-of-pocket) = ${money(officeCopay)} before verified prior payments. BTX injection and drug charges, separate E/M work, payer order and the final allowed amount are not established. This is an office-only scenario, not an approved charge.`,
+    label: 'Amount to collect at visit · refundable office advance',
+    value: money(balance),
+    detail: `Clinic-directed provisional advance: min(${money(officeCopay)} specialist office copay + $0.00 remaining deductible + 0% office coinsurance, ${money(benefits.oop_remaining_cents)} remaining out-of-pocket) = ${money(officeCopay)} before verified prior payments. BTX injection and drug charges, separate E/M work, payer order and the final allowed amount are not established. Apply the advance to the processed claim and refund any excess.`,
     emphasis: true,
   }
 }
