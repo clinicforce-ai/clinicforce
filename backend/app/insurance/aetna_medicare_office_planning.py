@@ -23,7 +23,7 @@ def estimate(result: dict, inputs: dict) -> dict | None:
             or plan.get('plan_number') != '000003-TX000083'
             or benefits.get('active') is not True or benefits.get('service_date_matches') is not False
             or (visit - returned).days != 1 or not patient_benefits_bound(identity)
-            or benefits.get('network_status') != 'in_network' or benefits.get('has_secondary')
+            or benefits.get('network_status') == 'out_of_network' or benefits.get('has_secondary')
             or benefits.get('network_conflict') or benefits.get('coverage_status_conflict')
             or benefits.get('coverage_dates_invalid') or benefits.get('historical_only')
             or benefits.get('source_errors') or benefits.get('qmb_status') == 'protected'

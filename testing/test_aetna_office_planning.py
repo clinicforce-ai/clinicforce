@@ -128,5 +128,12 @@ def test_prior_day_aetna_medicare_copay_is_patient_share_not_plan_share():
     assert (planning['allowed_cents'], planning['copay_cents'], planning['plan_share_cents']) == (9633, 5000, 4633)
     assert planning['deductible_applies_cents'] == 5000
     assert planning['collectable'] is False
+    result['reference_benefits']['network_status'] = 'unknown'
+    with patch.object(aetna_office_planning.aetna_fees, 'matching_rates',
+                      return_value=[{'allowed_cents': 9633}]):
+        assert aetna_office_planning.estimate(result, inputs)['plan_share_cents'] == 4633
+    result['reference_benefits']['network_status'] = 'out_of_network'
+    assert aetna_office_planning.estimate(result, inputs) is None
+    result['reference_benefits']['network_status'] = 'in_network'
     result['reference_benefits']['qmb_status'] = 'protected'
     assert aetna_office_planning.estimate(result, inputs) is None

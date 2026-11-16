@@ -103,7 +103,7 @@ export default function CommercialCostTables({
     visibleRows.push({
       label: 'Estimated Aetna share',
       value: money(planning.plan_share_cents),
-      detail: `${money(planning.allowed_cents)} clinic Aetna fee reference less ${money(planning.copay_cents!)} patient copay. This is paid by Aetna after an eligible claim, not collected from the patient.`,
+      detail: `${money(planning.allowed_cents)} clinic Aetna fee reference less ${money(planning.copay_cents!)} patient copay, if covered in-network. This is paid by Aetna after an eligible claim, not collected from the patient.`,
     })
   return (
     <>

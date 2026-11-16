@@ -94,7 +94,7 @@ export function collectionAtVisitRow(
       value: `${money(balance)} conditional planning amount · do not collect yet`,
       detail:
         officePlanning.copay_cents != null
-          ? `${money(officePlanning.allowed_cents)} clinic Aetna fee reference = ${money(officePlanning.copay_cents)} estimated patient copay + ${money(officePlanning.plan_share_cents!)} estimated Aetna share. The Aetna share is not a patient charge. The payer echoed an earlier date; visit-date coverage, Medicare billing protection and prior payments still control collection.`
+          ? `${money(officePlanning.allowed_cents)} clinic Aetna fee reference = ${money(officePlanning.copay_cents)} estimated patient copay + ${money(officePlanning.plan_share_cents!)} estimated Aetna share if covered in-network. The Aetna share is not a patient charge. The payer echoed an earlier date; visit-date coverage, provider tier, Medicare billing protection and prior payments still control collection.`
           : `If the office deductible applies: min(${money(officePlanning.allowed_cents)} clinic Aetna fee, ${money(officePlanning.deductible_remaining_cents)} remaining deductible, ${money(officePlanning.oop_remaining_cents)} remaining out-of-pocket) = ${money(officePlanning.deductible_applies_cents)} before recorded payments. If waived, ${officePlanning.coinsurance_percent}% coinsurance gives ${money(officePlanning.deductible_waived_cents)}. Confirm visit-date eligibility, provider network, deductible applicability, other coverage and prior payments before charging.`,
       emphasis: true,
     }
