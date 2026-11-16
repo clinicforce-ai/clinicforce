@@ -1,6 +1,7 @@
 import type { PrevisitEstimate } from '../../services/api/commercial-estimator'
 import type { CostBreakdownRow } from '../insurance-estimate/CostBreakdownTable'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
+import { cignaBtxOfficeScenario } from './cignaBtxOfficeScenario'
 import { money } from './format'
 
 export function publishedGehaZero(result: PrevisitEstimate) {
@@ -147,6 +148,13 @@ export function applyCostRowCopy(
   result: PrevisitEstimate,
   model: CommercialEstimateModel,
 ) {
+  const cignaBtxScenario = cignaBtxOfficeScenario(result, model)
+  const share = cignaBtxScenario && rows.find((row) => row.label === 'Estimated patient share')
+  if (share && cignaBtxScenario) {
+    share.label = 'Conditional office-only share'
+    share.value = `${money(cignaBtxScenario.modeledAmountCents)} specialist office scenario; full BTX share unknown`
+    share.detail = cignaBtxScenario.detail
+  }
   if (
     pendingHumanaSpecialistCopay(result, model) != null ||
     supportedHumanaSpecialistAdvance(result, model)

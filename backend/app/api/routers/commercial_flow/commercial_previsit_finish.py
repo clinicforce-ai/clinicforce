@@ -157,6 +157,8 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         [(row['id'], row.get('units')) for row in available]], sort_keys=True).encode()).hexdigest()
     prior_plan = case.get('previsit_plan') or {}
     if (prior_plan.get('key') != plan_key or prior_plan.get('plan', {}).get('version') != 19
+            or botox_review.is_botox_visit(inputs) and prior_plan.get('plan', {}).get('kind') != 'botox'
+            or botox_review.is_botox_visit(inputs) and prior_plan.get('plan', {}).get('method') == 'clinician'
             or prior_plan.get('plan', {}).get('method') == 'unavailable'):
         prior_plan = {'key': plan_key, 'plan': _api.cpt_suggester.recommend_visit_plan(
             planning_inputs, source, available)}

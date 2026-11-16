@@ -18,6 +18,7 @@ const { default: PayerReportedPlanFigures } = await load('../frontend/src/featur
 const { suggestedDiagnosisRows } = await load('../frontend/src/features/commercial-estimate/suggestedDiagnosisRows.ts')
 const { commercialRequirementRows } = await load('../frontend/src/features/commercial-estimate/commercialRequirementStatus.ts')
 const { payerOrderRow } = await load('../frontend/src/features/commercial-estimate/referenceCoverageRow.ts')
+const { coveragePolicyStatus } = await load('../frontend/src/features/commercial-estimate/coveragePolicyStatus.ts')
 const { default: CommercialCostBreakdown } = await load('../frontend/src/features/commercial-estimate/CommercialCostBreakdown.tsx')
 const { default: ArrivalAmountSummary } = await load('../frontend/src/features/commercial-estimate/ArrivalAmountSummary.tsx')
 const React = require('react')
@@ -231,6 +232,22 @@ assert.match(sharedOfficeRow.detail, /Medicare.*adjudication/i)
 const sharedPayerOrder = payerOrderRow(sharedOfficeMedicare, sharedOfficeMedicare.benefits)
 assert.match(sharedPayerOrder.value, /Aetna 271 lists MEDICARE as secondary/)
 assert.match(sharedPayerOrder.detail, /not been independently verified/)
+const reportedCob = { ...sharedOfficeMedicare,
+  benefits: { ...sharedOfficeMedicare.benefits, reported_secondary_payer: null },
+  coordination: { status: 'primacy_reported', primacy_determined: true,
+    payer_roles: [{ role: 'Secondary Payer', payer_name: 'SYNTHETIC OTHER PLAN' }] },
+  recovery: { reason_code: 'multiple_active_policies' },
+}
+assert.match(payerOrderRow(reportedCob, reportedCob.benefits).value,
+  /Stedi COB: SYNTHETIC OTHER PLAN secondary/)
+assert.match(payerOrderRow(reportedCob, reportedCob.benefits).detail,
+  /other active policies/)
+assert.equal(coveragePolicyStatus({ result: reportedCob, tooEarly: false, readOnly: false,
+  busy: null, patientBenefitsBound: true }), 'Stedi COB reports payer roles · reconcile policies')
+assert.equal(coveragePolicyStatus({ result: { ...reportedCob, coordination: undefined,
+  benefits: { ...reportedCob.benefits, active: true, service_date_matches: true } },
+  tooEarly: false, readOnly: false, busy: null, patientBenefitsBound: true }),
+  'Aetna coverage active · payer order unverified')
 const savedModel = { ...model, networkLabel: 'Not determined', anticipatedService: 'Office visit',
   amountText: 'Confirm payer order', planName: 'Aetna Choice POS II',
   policyStatus: 'Coverage dates differ from visit' }

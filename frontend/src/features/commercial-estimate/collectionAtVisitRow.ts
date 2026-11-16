@@ -4,6 +4,7 @@ import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { feeProxyFormula } from './coinsuranceFormula'
 import { money } from './format'
 import type { bluecardOfficeDeductibleScenario } from './bluecardOfficeDeductibleScenario'
+import { cignaBtxOfficeScenario } from './cignaBtxOfficeScenario'
 
 export { pendingBluecardOfficeCopay, pendingCignaOfficeCopay } from './pendingOfficeCopays'
 import { pendingCignaOfficeCopay } from './pendingOfficeCopays'
@@ -80,6 +81,8 @@ export function collectionAtVisitRow(
       emphasis: true,
     }
   }
+  const cignaBtxScenario = cignaBtxOfficeScenario(result, model)
+  if (cignaBtxScenario) return cignaBtxScenario
   const {
     combinedPlan,
     feeProxy,

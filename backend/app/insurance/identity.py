@@ -148,6 +148,7 @@ def compare(payload: dict, coverage: dict, evidence: dict | None = None) -> dict
                 for k in ('first_name', 'last_name', 'birth_date'))
         and not policy_differences)
     # Cigna accepts a base ID with or without its two-digit person suffix.
+    # Other active policies affect payer order, not this selected policy's identity.
     # Never equate two different explicit suffixes or use demographics alone.
     base, extended = sorted((expected_member, returned_member), key=len)
     payer_plan = plan_details(payload)
@@ -165,7 +166,7 @@ def compare(payload: dict, coverage: dict, evidence: dict | None = None) -> dict
         and expected_member == base and returned_member == extended and extended.endswith('00'))
     cigna_suffix = (str(payload.get('payerId') or '') == '62308'
         and len(base) in {9, 12} and len(extended) == len(base) + 2 and extended == base + extended[-2:]
-        and extended[-2:].isdigit() and coverage.get('coverage_id') and coverage.get('active_coverages') == 1
+        and extended[-2:].isdigit() and coverage.get('coverage_id')
         and (group_matches or missing_ecw_group_self_suffix) and not policy_differences
         and expected['relationship'] == returned['relationship'] in {'self', 'spouse', 'child', 'other'}
         and all(expected[k] and returned[k] and key(k, expected[k]) == key(k, returned[k])

@@ -1,6 +1,7 @@
 """Synthetic Botox planning and financial guards; no payer or eCW calls."""
 from datetime import date
-from unittest.mock import patch
+import json
+from unittest.mock import MagicMock, patch
 
 from app.api.routers import commercial_estimator as api
 from app.insurance import amount_explanation, botox_review, commercial, cpt_suggester, visit_estimate
@@ -30,17 +31,66 @@ def _codes(*entries):
             for code, units in entries]
 
 
-def test_booking_and_bedrock_candidates_never_select_billed_care():
+def test_bare_booking_without_comparable_history_keeps_procedure_unselected():
     assert api._previsit_codes(BOOKING) == []
+    assert api._previsit_codes({'reason': 'BTX', 'visit_type': 'established', 'lines': []}) == []
     assert api._previsit_service_types(BOOKING) == ['98', '1', '2', '30']
+    assert api._previsit_service_types({'reason': 'BTX', 'lines': []}) == ['98', '1', '2', '30']
     assert api._previsit_service_types({'reason': 'Botox injection received from pharmacy', 'lines': []}) == ['98', '1', '2', '30']
     available = _codes(('99214', 1), ('64612', 1), ('J0585', 80))
     for row in available:
         row['source'] = 'eCW scheduled service'
-    with patch.object(cpt_suggester.boto3, 'client') as bedrock:
+    model = MagicMock()
+    model.converse.return_value = {'output': {'message': {'content': [{'toolUse': {
+        'name': 'submit_visit_plan', 'input': {'services': [{'code': '64612', 'units': 1}],
+            'reason': 'Guessed from BTX', 'assumptions': [], 'cash_package': ''}}}]}}}
+    with patch.object(cpt_suggester.boto3, 'client', return_value=model):
         plan = cpt_suggester.recommend_visit_plan(BOOKING, {}, available)
         assert plan['kind'] == 'botox' and plan['recommended_ids'] == []
-        bedrock.assert_not_called()
+        model.converse.assert_not_called()
+
+
+def test_comparable_completed_botox_history_selects_one_provisional_procedure():
+    available = [{'id': code, 'code': code, 'source': 'CPT planning catalog', 'units': 1}
+                 for code in ('64612', '64615', 'J0585', '99214')]
+    history = [{'date': '2026-09-01', 'reason': 'BTX facial spasm',
+                'coded_services': ['64612', 'J0585'], 'status': 'finished'}]
+    with patch.object(cpt_suggester.boto3, 'client', side_effect=RuntimeError('offline')):
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'BTX', 'visit_type': 'established'},
+            {'recent_completed_appointments': history}, available)
+    assert plan['kind'] == 'botox'
+    assert plan['recommended_ids'] == ['64612']
+    assert plan['recommended_units'] == {'64612': 1}
+    assert plan['method'] == 'history'
+    assert 'J0585' not in plan['recommended_ids']
+
+
+def test_botox_model_uses_comparable_history_for_provisional_procedure_only():
+    available = [{'id': code, 'code': code, 'source': 'CPT planning catalog', 'units': 1}
+                 for code in ('64612', '64615', 'J0585', '99214')]
+    history = [{'date': '2026-09-01', 'reason': 'BTX facial spasm',
+                'coded_services': ['64612', 'J0585']}]
+    model = MagicMock()
+    model.converse.return_value = {'output': {'message': {'content': [{'toolUse': {
+        'name': 'submit_visit_plan', 'input': {'services': [{'code': '64612', 'units': 1}],
+            'reason': 'Comparable prior injection.', 'assumptions': [], 'cash_package': ''}}}]}}}
+    with patch.object(cpt_suggester.boto3, 'client', return_value=model):
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'BTX', 'visit_type': 'established'},
+            {'recent_completed_appointments': history}, available)
+    request = json.loads(model.converse.call_args.kwargs['messages'][0]['content'][0]['text'])
+    assert request['history'][0]['coded_services'] == ['64612', 'J0585']
+    assert [row['code'] for row in request['available_codes']] == ['64612']
+    assert plan['recommended_ids'] == ['64612'] and plan['method'] == 'llm'
+
+
+def test_conflicting_completed_botox_procedures_do_not_select_one_from_bare_btx():
+    history = [{'reason': 'BTX facial spasm', 'coded_services': ['64612']},
+               {'reason': 'BTX chronic migraine', 'coded_services': ['64615']}]
+    assert botox_review.planning_procedure({'reason': 'BTX'},
+                                            {'recent_completed_appointments': history}) is None
+    assert botox_review.planning_procedure({'reason': 'BTX for chronic migraine'}, {}) == '64615'
 
 
 def test_provisional_office_injection_uses_exact_fee_and_injection_benefit_only():
