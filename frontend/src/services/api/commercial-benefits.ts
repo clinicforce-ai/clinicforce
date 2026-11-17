@@ -47,6 +47,7 @@ export type PrevisitBenefits = null | {
     | 'clinic_attested_phcs_roster'
     | 'clinic_attested_cigna_tpa'
     | 'clinic_attested_cigna_ppo'
+    | 'clinic_attested_aetna_office'
     | null
   network_evidence_ids?: string[]
   selected_benefit_ids?: string[]

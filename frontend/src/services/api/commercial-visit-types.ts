@@ -12,6 +12,7 @@ export type AetnaOfficePlanning = {
   coinsurance_percent: string | null
   deductible_applies_cents: number
   deductible_waived_cents: number
+  gross_coinsurance_cents?: number
   payer_response_date: string
   service_date: string
   rate_source?: string | null

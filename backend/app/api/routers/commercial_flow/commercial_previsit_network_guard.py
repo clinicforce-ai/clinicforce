@@ -11,6 +11,7 @@ from app.insurance import commercial, commercial_store, group_contract_support, 
 from app.insurance import identity as insurance_identity
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies
 from app.api.routers.commercial_flow.commercial_previsit_tpa import cigna_primary_route
+from app.api.routers.commercial_flow.aetna_office_network_attestation import apply_nmct_aetna_office_attestation
 
 
 def scoped_admin_nonparticipation(practice_id: str, payer: dict | None, inputs: dict,
@@ -373,6 +374,9 @@ def recheck_saved_network_evidence(result: dict, case: dict, practice_id: str, p
                 return
             if apply_nmct_library_contract(result, benefits, nmct_document):
                 return
+        if not nmct_document and apply_nmct_aetna_office_attestation(
+                result, benefits, practice_id, context.get('inputs') or {}, source, plan):
+            return
         if not nmct_document and re.fullmatch(r'\s*Cigna\s*', payer_name, re.I):
             try:
                 raw = object_store.get_object_bytes(case['previsit_raw_object_key'])

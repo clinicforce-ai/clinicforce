@@ -24,12 +24,19 @@ def estimate(result: dict, inputs: dict) -> dict | None:
         response_day = date.fromisoformat(str((benefits.get('returned_service_dates') or {}).get('start') or '')[:10])
     except ValueError:
         return None
+    exact_zero_office = (day == response_day and benefits.get('service_date_matches') is True
+                         and names == ['Aetna Choice POS II']
+                         and benefits.get('oop_remaining_cents') == 0
+                         and len(codes) == 1 and codes[0].get('code') in
+                             {'99212', '99213', '99214', '99215'})
     if (result.get('payment_mode') == 'cash'
             or ((result.get('collection_guidance') or {}).get('collection_rule') or {}).get('mode')
                 in {'cms_msp_part_b_deferral', 'aetna_choice_family_oop_deferral'}
             or aetna_fees.category(str(result.get('payer') or ''), names) != 'commercial'
-            or benefits.get('active') is not True or benefits.get('service_date_matches') is not False
-            or not 1 <= (day - response_day).days <= 7 or not patient_benefits_bound(identity)
+            or benefits.get('active') is not True
+            or not (exact_zero_office or (benefits.get('service_date_matches') is False
+                                         and 1 <= (day - response_day).days <= 7))
+            or not patient_benefits_bound(identity)
             or benefits.get('coverage_status_conflict') or benefits.get('coverage_dates_invalid')
             or benefits.get('network_conflict') or benefits.get('network_status') == 'out_of_network'
             or benefits.get('historical_only')
@@ -68,7 +75,9 @@ def estimate(result: dict, inputs: dict) -> dict | None:
     allowed = rates[0]['allowed_cents']
     if allowed < 0:
         return None
-    waived = min(oop, int((Decimal(allowed) * percent / 100).quantize(Decimal('1'), rounding=ROUND_HALF_UP)))
+    gross_coinsurance = int((Decimal(allowed) * percent / 100).quantize(
+        Decimal('1'), rounding=ROUND_HALF_UP))
+    waived = min(oop, gross_coinsurance)
     deductible_part = min(allowed, deductible)
     after_deductible = int((Decimal(allowed - deductible_part) * percent / 100).quantize(
         Decimal('1'), rounding=ROUND_HALF_UP))
@@ -76,7 +85,8 @@ def estimate(result: dict, inputs: dict) -> dict | None:
     return {'status': 'planning_only', 'code': codes[0]['code'], 'allowed_cents': allowed,
             'deductible_remaining_cents': deductible, 'oop_remaining_cents': oop,
             'coinsurance_percent': str(percent), 'deductible_applies_cents': applies,
-            'deductible_waived_cents': waived, 'payer_response_date': response_day.isoformat(),
+            'deductible_waived_cents': waived, 'gross_coinsurance_cents': gross_coinsurance,
+            'payer_response_date': response_day.isoformat(),
             'service_date': visit_day, 'rate_source': rates[0].get('source_reference'),
             'collectable': False}
 

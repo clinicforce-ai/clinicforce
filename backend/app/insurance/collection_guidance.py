@@ -18,8 +18,7 @@ from app.insurance.collection import secondary_order, blue_advantage_hmo_deposit
 from app.insurance.identity import patient_benefits_bound
 from app.insurance.benefit_review import annual_oop_conflict_with_known_remaining, selected_service_blocker, selected_service_detail
 from app.insurance.network_participation import participation_conflict, verified_in_network, verified_out_of_network
-from app.insurance import encounter_summary, payer_fees
-from app.insurance.insurance_product import is_medicare_advantage
+from app.insurance import encounter_summary, payer_fees, insurance_product
 from app.insurance.published_plan_benefits import FEP_STANDARD_2026, GEHA_HIGH_PSHB_MA_16615_2026
 def emg_option(result: dict, rates: list[dict], rules: dict, payload: dict | None, service_date: str, review: dict) -> dict:
     return _emg_option(result, rates, rules, payload, service_date, review, build_collection=build)
@@ -53,6 +52,7 @@ def build(result: dict, review: dict | None = None) -> dict:
                                    'Payer statement about the requesting provider' if verified_in_network(benefits) and benefits.get('network_source') == 'payer_participation_message' else
                                    'Current Clinical Library contract' if verified_in_network(benefits) and benefits.get('network_source') == 'clinic_library_contract' else
                                    'Clinic-stated PHCS/MultiPlan participation; payer-specific provider tier not returned' if benefits.get('network_source') == 'clinic_attested_phcs_roster' else
+                                   'Clinic-stated Aetna Choice POS II office participation for the matched group and provider; payer confirmation not returned' if benefits.get('network_source') == 'clinic_attested_aetna_office' else
                                    ('Clinic-stated Cigna participation for this Allegiance-administered office visit; provider tier not independently confirmed by the administrator' if benefits.get('network_source') == 'clinic_attested_cigna_tpa' else 'Clinic-stated Cigna PPO participation for the matched office provider; payer confirmation not returned') if benefits.get('network_source') in {'clinic_attested_cigna_tpa', 'clinic_attested_cigna_ppo'} else
                                    'Legacy NMCT clinic policy; recalculate against current Clinical Library contracts' if benefits.get('network_source') == 'clinic_nmct_policy' else
                                    'No contract linked to this exact payer product and provider' if benefits.get('network_source') == 'clinic_library_absent' else
@@ -85,7 +85,7 @@ def build(result: dict, review: dict | None = None) -> dict:
     unresolved_order, same_policy_conflict, primary_secondary_copay, medicare_secondary = secondary_order.state(result)
     payer_plan = ((result.get('plan_details') or {}).get('stedi') or benefits.get('plan_details') or {})
     medical_names = payer_fees.fee_schedule_products(str(result.get('payer') or ''), payer_plan)
-    ma_plan = is_medicare_advantage(medical_names) or bool(payer_plan.get('medicare_hmo_evidence'))
+    ma_plan = insurance_product.is_medicare_advantage(medical_names) or bool(payer_plan.get('medicare_hmo_evidence'))
     qmb_clearance = result.get('billing_protection') or {}
     member_bound = patient_benefits_bound(identity)
     qmb_protected = (member_bound and benefits.get('qmb_status') == 'protected' or

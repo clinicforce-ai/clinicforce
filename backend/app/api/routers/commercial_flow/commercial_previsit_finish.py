@@ -5,9 +5,10 @@ from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_catalog import build_catalog
 from app.api.routers.commercial_flow.commercial_previsit_requirements import attach_requirements
 from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_uhc_dsnp_office_reference
+from app.api.routers.commercial_flow.commercial_previsit_network_guard import apply_nmct_aetna_office_attestation
 from app.api.routers.commercial_flow.commercial_previsit_tpa import cigna_primary_route
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies
-from app.insurance import blue_cross_proxy, botox_review, choice_plus_emg_proxy, cigna_clinic_quote, evidence_resolution, payer_fees, published_plan_benefits, uhc_dsnp_office_proxy
+from app.insurance import aetna_office_planning, blue_cross_proxy, botox_review, choice_plus_emg_proxy, cigna_clinic_quote, evidence_resolution, payer_fees, published_plan_benefits, uhc_dsnp_office_proxy
 
 def _visit_context_parts(inputs: dict, source: dict) -> dict:
     context = {'coverage': {k: v for k, v in _api._coverage_snapshot(inputs, source).items() if k != 'other_active_coverage'},
@@ -331,6 +332,10 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
             result['provisional_collection_target'] = target
     result['nmct_bcbstx_refundable_advance_enabled'] = _api.network_participation.is_nmct_practice(session['practice_id'])
     result['nmct_fixed_office_copay_advance_enabled'] = result['nmct_bcbstx_refundable_advance_enabled']
+    if (result['benefits'].get('network_status') == 'unknown'):
+        apply_nmct_aetna_office_attestation(result, result['benefits'], session['practice_id'],
+            inputs, pricing_source or source, (result.get('plan_details') or {}).get('stedi') or {})
+    aetna_office_planning.attach(result, inputs)
     result['collection_guidance'] = _api.collection_guidance.build(result, review)
     result.pop('botox_preview', None)
     if botox_review.is_botox_visit(inputs) and payload:

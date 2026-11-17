@@ -22,11 +22,13 @@ export function referenceCoverageRow(
     : [result.payer || 'Payer not recorded', model.planName].filter(Boolean).join(' · ')
   const detail = result.reference_benefits
     ? `Stedi subscriber and benefit values used for this reference; eCW identity differs · Stedi requested ${requestedDate}; payer returned service date ${benefits?.returned_service_dates?.start ? visitDate(benefits.returned_service_dates.start) : 'unavailable'}`
-    : benefits?.service_date_matches === false
-      ? `${model.policyStatus} · Visit ${requestedDate}; payer response ${benefits.returned_service_dates?.start ? visitDate(benefits.returned_service_dates.start) : 'date differs'} · reference estimate only`
-      : result.service_date
-        ? `${model.policyStatus} · Visit ${requestedDate}`
-        : model.policyStatus
+    : result.collection_guidance?.collection_rule?.mode === 'aetna_office_individual_oop_deferral'
+      ? `Aetna office benefits used for the $0 check-in calculation · Visit ${requestedDate}; payer response ${benefits?.returned_service_dates?.start ? visitDate(benefits.returned_service_dates.start) : 'date unavailable'} · final responsibility follows the claim`
+      : benefits?.service_date_matches === false
+        ? `${model.policyStatus} · Visit ${requestedDate}; payer response ${benefits.returned_service_dates?.start ? visitDate(benefits.returned_service_dates.start) : 'date differs'} · reference estimate only`
+        : result.service_date
+          ? `${model.policyStatus} · Visit ${requestedDate}`
+          : model.policyStatus
   const order = benefits?.primary_secondary_order
   const bluecardHome =
     result.network_evidence?.product_network_source === 'signed_bluecard_agreement'

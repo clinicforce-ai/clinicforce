@@ -471,9 +471,11 @@ export function collectionAtVisitRow(
     !model.cash &&
     !model.previousEstimate &&
     !model.calculating &&
-    ['cms_msp_part_b_deferral', 'aetna_choice_family_oop_deferral'].includes(
-      result.collection_guidance?.collection_rule?.mode || '',
-    )
+    [
+      'cms_msp_part_b_deferral',
+      'aetna_choice_family_oop_deferral',
+      'aetna_office_individual_oop_deferral',
+    ].includes(result.collection_guidance?.collection_rule?.mode || '')
   ) {
     row.label = 'Amount to collect at visit'
     row.value = money(0)

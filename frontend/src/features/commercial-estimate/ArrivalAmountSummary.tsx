@@ -12,6 +12,7 @@ import { bluecardOfficeDeductibleScenario } from './bluecardOfficeDeductibleScen
 import { humanaApprovedCollection } from './humanaApprovedCollection'
 import { cignaBtxOfficeScenario } from './cignaBtxOfficeScenario'
 import CignaBtxArrivalAmount from './CignaBtxArrivalAmount'
+import AetnaOfficeZeroArrival from './AetnaOfficeZeroArrival'
 
 export default function ArrivalAmountSummary({
   model,
@@ -46,6 +47,14 @@ export default function ArrivalAmountSummary({
     )
   const cignaBtxAdvance = cignaBtxOfficeScenario(result, model)
   if (cignaBtxAdvance) return <CignaBtxArrivalAmount row={cignaBtxAdvance} />
+  if (
+    !model.cash &&
+    !model.previousEstimate &&
+    !model.calculating &&
+    result.collection_guidance?.collection_rule?.mode === 'aetna_office_individual_oop_deferral' &&
+    result.aetna_office_planning
+  )
+    return <AetnaOfficeZeroArrival office={result.aetna_office_planning} />
   if (
     !model.cash &&
     !model.previousEstimate &&
