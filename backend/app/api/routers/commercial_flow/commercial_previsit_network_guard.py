@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 import hashlib
 import json
+from fastapi import HTTPException
 
 from app.core import object_store, staff_store
 from app.insurance import commercial, commercial_store, group_contract_support, insurance_product, inventory_certification, library_network_exclusions, network_participation
@@ -273,6 +274,41 @@ def _clear_saved_tier(result: dict, reason: str) -> None:
     result.pop('planning_estimate', None)
 
 
+def _current_nmct_linked_group_agreement(result: dict, case: dict, practice_id: str,
+                                         payer: dict | None, document: dict) -> bool:
+    """Recheck the provider-scoped Library link that originally supported this saved tier."""
+    benefits = result.get('benefits') or {}
+    saved = result.get('network_evidence') or {}
+    context = case.get('previsit_context') or {}
+    inputs = context.get('inputs') or {}
+    source = ((case.get('previsit_discovery') or {}).get('pricing_source')
+              or context.get('source') or {})
+    plan = ((result.get('plan_details') or {}).get('stedi') or {})
+    names = [plan['identified_product']] if plan.get('identified_product') else plan.get('names') or []
+    if (not payer or saved.get('origin') != 'signed_group_agreement'
+            or saved.get('document_id') != document.get('id')
+            or benefits.get('network_source') != 'clinic_group_agreement'
+            or benefits.get('network_status') != 'in_network'
+            or network_participation.participation_conflict(benefits)
+            or not patient_plan_applies(benefits, result.get('identity') or benefits.get('identity') or {},
+                                        str(inputs.get('service_date') or ''))):
+        return False
+    from app.api.routers.commercial_flow import commercial_practice, commercial_previsit_pricing
+    exact = {**source, 'payer_plan_bound': True, 'payer_plan_names': names,
+             'payer_network_names': plan.get('network_names') or [],
+             'payer_plan_scope': {key: plan.get(key) for key in ('plan_number', 'group_number')}}
+    try:
+        _, network, profile = commercial_practice._previsit_practice_path(
+            practice_id, {**inputs, 'payer_id': payer['id']}, exact)
+        current = commercial_previsit_pricing._network_contract_evidence(
+            practice_id, network, profile, str(inputs.get('service_date') or ''))
+    except (HTTPException, commercial.CommercialError):
+        return False
+    return all(saved.get(key) == current.get(key) for key in (
+        'document_id', 'origin', 'network_name', 'evidence_reference', 'locator',
+        'effective_from', 'effective_to'))
+
+
 def recheck_saved_inventory(result: dict, case: dict, practice_id: str, payer: dict | None) -> None:
     """A revoked or changed certification cannot revive a saved OON collection."""
     benefits = result.get('benefits') or {}
@@ -333,6 +369,8 @@ def recheck_saved_network_evidence(result: dict, case: dict, practice_id: str, p
         if nmct_document:
             if benefits.get('network_status') == 'out_of_network' and benefits.get('network_source') != 'payer_participation_message':
                 _clear_saved_tier(result, 'NMCT has a current insurer contract. Recalculate the saved out-of-network amount.')
+            if _current_nmct_linked_group_agreement(result, case, practice_id, payer, nmct_document):
+                return
             if apply_nmct_library_contract(result, benefits, nmct_document):
                 return
         if not nmct_document and re.fullmatch(r'\s*Cigna\s*', payer_name, re.I):
