@@ -158,6 +158,86 @@ def test_saved_humana_hmo_rate_replaces_stale_rate_warning(monkeypatch):
     assert result['issues'] == []
 
 
+def test_older_saved_humana_hmo_reprices_from_verified_raw_status(monkeypatch):
+    import hashlib
+    import json
+    from app.api.routers.commercial_flow import commercial_previsit_saved_pricing as saved
+
+    office = {'service': {'system': 'STC', 'value': '98'},
+              'network': {'indicator': 'IN_NETWORK'}, 'coverageLevel': 'INDIVIDUAL',
+              'messages': ['PHYSICIAN OFFICE VISIT SPECIALIST']}
+    payload = {'plans': [{'name': 'Humana TotalComplete', 'benefits': {'statuses': [
+        {'status': 'ACTIVE_COVERAGE', 'service': {'system': 'STC', 'value': '30'},
+         'insuranceType': 'HEALTH_MAINTENANCE_ORGANIZATION_HMO_MEDICARE_RISK'},
+        {'status': 'ACTIVE_COVERAGE', 'service': {'system': 'STC', 'value': '98'}}],
+        'coPayment': [{**office, 'amount': 15, 'timePeriod': 'VISIT'}],
+        'coInsurance': [{**office, 'percent': 0}],
+        'outOfPocket': [{'service': {'system': 'STC', 'value': '30'},
+            'amount': 3310, 'timePeriod': 'REMAINING', 'coverageLevel': 'INDIVIDUAL',
+            'network': {'indicator': 'IN_NETWORK'}}]}}]}
+    raw = json.dumps(payload).encode()
+    identity = {'status': 'matched', 'binding': 'synthetic-person', 'match_version': 2}
+    old_plan = {'names': ['Humana TotalComplete']}
+    benefits = commercial.normalize_stedi_271(payload, '98', False,
+        service_date='2026-11-17', procedure_code='99203', office_visit=True,
+        place_of_service='11', provider_specialties=['Neurology'])
+    benefits.update(identity=identity, service_date_matches=True,
+        network_status='in_network', network_source='clinic_library_contract',
+        plan_details=old_plan.copy())
+    result = {'payer': 'Humana Health Plan', 'service_date': '2026-11-17',
+              'plan_details': {'stedi': old_plan.copy()}, 'identity': identity,
+              'benefits': benefits,
+              'nmct_fixed_office_copay_advance_enabled': True,
+              'codes': [{'id': 'office', 'code': '99203', 'units': 1, 'modifiers': []}],
+              'price_range': {'mode': 'services', 'lines': [{'id': 'office', 'code': '99203',
+                  'units': 1, 'rate_resolution': {'status': 'RATE_UNAVAILABLE'}}]},
+              'issues': ['The clinic contract or CPT rate changed since this saved estimate was calculated.']}
+    case = {'previsit_raw_object_key': 'synthetic-eligibility',
+            'previsit_raw_sha256': hashlib.sha256(raw).hexdigest(),
+            'previsit_context': {'inputs': {'service_date': '2026-11-17',
+                'place_of_service': '11', 'rendering_provider': {'npi': '1234567890'},
+                'visit_type': 'new', 'reason': 'synthetic office visit'},
+                'source': {'rendering_provider': {'npi': '1234567890',
+                    'first_name': 'Synthetic', 'last_name': 'Specialist',
+                    'roles': ['Neurology']}}}}
+    monkeypatch.setattr(saved._api.object_store, 'get_object_bytes', lambda _: raw)
+    monkeypatch.setattr(saved.payer_fees, 'active_schedule', lambda *_: True)
+    db = FakeDatabase([{'code': '99203', 'allowed_cents': 11362,
+        'source_reference': 'Synthetic clinic-approved Humana fee',
+        'effective_from': date(2026, 11, 13)}])
+    monkeypatch.setattr(saved.payer_fees, '_connection', lambda: db)
+    monkeypatch.setattr(saved.group_contract_support, 'eligibility_route', lambda *args: None)
+    from app.api.routers.commercial_flow import commercial_previsit_status as status
+    saved.restore_saved_humana_hmo_product(result, case)
+    status._recheck_saved_clinic_pricing(result, case, 'synthetic-practice')
+    saved.refresh_saved_network_pricing(result, case, 'synthetic-practice',
+        {'id': 'synthetic-route', 'display_name': 'Humana Health Plan'},
+        ('in_network', 'clinic_library_contract'))
+    assert result['price_range']['lines'][0]['rate_resolution']['status'] == 'RESOLVED'
+    assert result['price_range']['lines'][0]['allowed_cents'] == 11362
+    assert result['issues'] == []
+    assert collection_guidance.build(result)['amount_cents'] == 1500
+
+
+def test_saved_humana_hmo_does_not_restore_a_changed_payer_response(monkeypatch):
+    import hashlib
+    from app.api.routers.commercial_flow import commercial_previsit_saved_pricing as saved
+
+    old_plan = {'names': ['Humana TotalComplete']}
+    identity = {'status': 'matched', 'binding': 'synthetic-person', 'match_version': 2}
+    result = {'payer': 'Humana Health Plan', 'plan_details': {'stedi': old_plan.copy()},
+              'identity': identity, 'benefits': {'active': True,
+                  'service_date_matches': True, 'identity': identity,
+                  'plan_details': old_plan.copy()}}
+    case = {'previsit_raw_object_key': 'synthetic-eligibility',
+            'previsit_raw_sha256': hashlib.sha256(b'original').hexdigest(),
+            'previsit_context': {'inputs': {'service_date': '2026-11-17'}}}
+    monkeypatch.setattr(saved._api.object_store, 'get_object_bytes', lambda _: b'changed')
+    saved.restore_saved_humana_hmo_product(result, case)
+    assert result['plan_details']['stedi'] == old_plan
+    assert result['benefits']['plan_details'] == old_plan
+
+
 def test_uhc_network_only_product_prices_selected_televisit_from_database():
     line = {'id': 'office', 'code': '99213', 'units': 1, 'modifiers': []}
     benefits = {'plan_details': {'names': [], 'network_names': ['UNITEDHEALTHCARE CHOICE PLUS'],

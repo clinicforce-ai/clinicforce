@@ -22,7 +22,6 @@ from app.insurance import encounter_summary, payer_fees
 from app.insurance.insurance_product import is_medicare_advantage
 from app.insurance.published_plan_benefits import FEP_STANDARD_2026, GEHA_HIGH_PSHB_MA_16615_2026
 def emg_option(result: dict, rates: list[dict], rules: dict, payload: dict | None, service_date: str, review: dict) -> dict:
-    """Compare EMG scenarios using the same collection rules as the visit."""
     return _emg_option(result, rates, rules, payload, service_date, review, build_collection=build)
 def build(result: dict, review: dict | None = None) -> dict:
     benefits = result.get('benefits') or {}

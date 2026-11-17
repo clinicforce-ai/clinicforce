@@ -7,7 +7,6 @@ from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_reuse import (
     SAVED_RESPONSE_UNAVAILABLE, saved_benefits_for_review,
 )
-
 @_api.router.get('/cases/{case_id}/previsit')
 async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     """Read saved recovery without submitting or retrying a paid transaction.
@@ -20,7 +19,7 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     Coverage verification does not imply that a price is available.
     evidence_resolution reports each field's source findings and precise
     remaining action after the shared estimator evaluates saved evidence.
-    Saved reads project current network rules; an intact protected 2026 FEP Blue Standard response can refresh a Preferred $40 office copay and deductible waiver under current clinic policy without a payer call or write. plan_details.stedi.response_payer_name records the organization that answered the protected eligibility response; it does not identify a plan product.
+    Saved reads project current network rules; an intact protected 2026 FEP Blue Standard response can refresh a Preferred $40 office copay and deductible waiver under current clinic policy without a payer call or write. Older Humana Medicare-risk HMO saves recover the product category from the checksum-verified response before current database CPT repricing and collection. plan_details.stedi.response_payer_name records the organization that answered the protected eligibility response; it does not identify a plan product.
     benefits.reported_secondary_payer names one dated, patient-bound medical
     271 secondary payer; it does not verify Medicare entitlement or claim order.
     An uncoded saved Cigna BTX visit can rebind its selected policy from the hash-verified protected 271 without a new payer call. Fresh saved Cigna responses are reparsed without treating an exact
@@ -239,7 +238,6 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
         await _api._reconcile_saved_discovery(case, session)
     return _api._previsit_result(case, session['practice_id'])
 
-
 @_api.router.get('/cases/{case_id}/payer-response')
 async def saved_payer_response(case_id: str, request: _api.Request):
     """Return protected payer evidence, including linked service replies when present."""
@@ -256,7 +254,6 @@ async def saved_payer_response(case_id: str, request: _api.Request):
     except Exception as exc:
         raise _api.HTTPException(502, 'The saved payer response could not be loaded.') from exc
     return _api._response({'source': 'Stedi', 'response': payload})
-
 
 @_api.router.get('/cases/{case_id}/historical-replay-bundle')
 async def historical_replay_bundle(case_id: str, request: _api.Request) -> dict:
@@ -325,7 +322,6 @@ async def historical_replay_bundle(case_id: str, request: _api.Request) -> dict:
             'selection': {'origin': 'documented', 'lines': selected_lines} if documented else None,
             'selection_status': 'documented' if documented else 'requires_historical_cpt_evidence'}
 
-
 @_api.router.post('/cases/{case_id}/payer-route')
 async def select_payer_route(case_id: str, value: _api.PayerRouteInput, request: _api.Request,
                             background_tasks: _api.BackgroundTasks) -> dict:
@@ -359,7 +355,6 @@ async def select_payer_route(case_id: str, value: _api.PayerRouteInput, request:
     _api._recovery_event(case, session, 'payer_routing', 'selected', reason=payer.get('match_basis', 'name_or_alias'))
     background_tasks.add_task(_api._recheck_discovery_candidate, case, session, provider, selected_route=payer)
     return _api._previsit_result(case, session['practice_id'])
-
 
 @_api.router.post('/cases/{case_id}/coverage-candidate')
 async def select_coverage_candidate(case_id: str, value: _api.CoverageCandidateInput, request: _api.Request,

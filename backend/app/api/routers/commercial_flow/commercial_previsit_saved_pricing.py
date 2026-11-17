@@ -326,8 +326,31 @@ def _reprice_saved_new_network(result: dict, case: dict, practice_id: str, payer
                                     'single enabled clinic connection' in str(issue).lower())]
 
 
+def restore_saved_humana_hmo_product(result: dict, case: dict) -> None:
+    """Recover an older saved product category from its intact payer response."""
+    plan = ((result.get('plan_details') or {}).get('stedi') or {})
+    benefits = result.get('benefits') or {}
+    service_date = str(((case.get('previsit_context') or {}).get('inputs') or {}).get('service_date') or '')
+    if (payer_fees.payer_key(str(result.get('payer') or '')) == 'humana'
+            and plan.get('names') and not plan.get('medicare_hmo_evidence')
+            and benefits.get('active') is True
+            and patient_plan_applies(benefits, result.get('identity') or benefits.get('identity') or {}, service_date)
+            and case.get('previsit_raw_object_key') and case.get('previsit_raw_sha256')):
+        try:
+            raw = _api.object_store.get_object_bytes(case['previsit_raw_object_key'])
+            if _api.hashlib.sha256(raw).hexdigest() == case['previsit_raw_sha256']:
+                current = _api.commercial.plan_details(_api.json.loads(raw))
+                if current.get('names') == plan['names'] and current.get('medicare_hmo_evidence'):
+                    plan['medicare_hmo_evidence'] = current['medicare_hmo_evidence']
+                    if (benefits.get('plan_details') or {}).get('names') == plan['names']:
+                        benefits['plan_details']['medicare_hmo_evidence'] = current['medicare_hmo_evidence']
+        except Exception:
+            pass  # Retain the saved estimate when protected payer evidence is unavailable.
+
+
 def refresh_saved_network_pricing(result: dict, case: dict, practice_id: str,
                                   route_payer: dict | None, prior_network: tuple) -> None:
+    restore_saved_humana_hmo_product(result, case)
     benefits = result.get('benefits') or {}
     current_network = (benefits.get('network_status'), benefits.get('network_source'))
     network_changed = (prior_network != current_network and current_network[1] in {
