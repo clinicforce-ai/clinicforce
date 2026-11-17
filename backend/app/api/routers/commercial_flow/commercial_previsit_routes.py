@@ -33,8 +33,7 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     A matched UHC HealthSelect MA PPO group 13546 virtual visit or exact POS 11
     office 99213 plus punch biopsy 11104 proposal can show a $0 arrival amount
     from matched zero payer copay/coinsurance and the published no-deductible rule.
-    Office biopsy requires separate office and surgical payer benefit rows;
-    billed codes, biopsy authorization, payer order, and final claim stay open.
+    Office biopsy requires separate office and surgical payer benefit rows; billed codes, biopsy authorization, payer order, and final claim stay open.
     Flat Stedi 271 ZZ industry codes are interpreted as benefit places of
     service; appointment_context.place_of_service reports the planned setting.
     Older saved NMCT Cigna office checks with no copay are read-only reprojected
