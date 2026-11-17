@@ -30,6 +30,21 @@ export function commercialAllowedTotalRow(
     botoxPreview,
   } = options
   const price = result.price_range
+  if (result.collection_guidance?.collection_rule?.mode === 'aetna_televisit_oop_deferral') {
+    const fee =
+      price?.allowed_min_cents === price?.allowed_max_cents
+        ? price?.allowed_min_cents
+        : lineAllowedTotal
+    return {
+      label: 'Total payer allowed',
+      value:
+        fee != null
+          ? `Not confirmed for telehealth · ${money(fee)} clinic Aetna fee reference`
+          : 'Not confirmed for telehealth',
+      detail:
+        'The clinic fee row prices the proposed CPT; telehealth coding and the final Aetna allowance follow the claim.',
+    }
+  }
   const clinicQuote =
     result.fee_proxy_estimate?.basis === 'cigna_clinic_fee_quote' ? result.fee_proxy_estimate : null
   if (result.collection_guidance?.basis === 'healthselect_ma_zero_office_biopsy')
@@ -352,6 +367,8 @@ export function commercialPricedCptRows({
 }): CostBreakdownRow[] {
   if (!lines.length) return [fallback]
   return lines.map((line) => {
+    const aetnaVideoDeferral =
+      result.collection_guidance?.collection_rule?.mode === 'aetna_televisit_oop_deferral'
     const clinicQuoteLine =
       result.fee_proxy_estimate?.basis === 'cigna_clinic_fee_quote'
         ? result.fee_proxy_estimate.lines?.find(
@@ -389,7 +406,9 @@ export function commercialPricedCptRows({
         : resolved && line.allowed_cents != null
           ? trsDeposit
             ? `${money(result.collection_guidance!.reference_total_cents!)} clinic fee reference`
-            : money(line.allowed_cents)
+            : aetnaVideoDeferral
+              ? `${money(line.allowed_cents)} clinic Aetna fee reference`
+              : money(line.allowed_cents)
           : proxyRate
             ? `${money(proxyRate.unit_reference_cents * (Number(line.units) || 1))} ${bluecardDeductible ? 'Blue Choice PPO fee reference' : aetnaRateReference ? 'Aetna fee reference' : 'BCBS Texas reference'}`
             : 'Allowed amount unavailable',
@@ -398,7 +417,7 @@ export function commercialPricedCptRows({
         : trsDeposit
           ? `${money(result.collection_guidance!.reference_total_cents!)} per unit × 1; insured allowed amount unknown`
           : resolved && line.unit_allowed_cents != null
-            ? `${money(line.unit_allowed_cents)} per unit × ${line.units || 1}${line.allowed_basis === 'payer_fee_schedule' ? '; clinic fee reference, not a payer-confirmed allowance' : ''}`
+            ? `${money(line.unit_allowed_cents)} per unit × ${line.units || 1}${aetnaVideoDeferral ? '; telehealth allowance follows the claim' : line.allowed_basis === 'payer_fee_schedule' ? '; clinic fee reference, not a payer-confirmed allowance' : ''}`
             : proxyRate
               ? `${money(proxyRate.unit_reference_cents)} per unit × ${line.units || 1}; ${result.payer || 'payer'} allowed amount unknown`
               : line.description || undefined,

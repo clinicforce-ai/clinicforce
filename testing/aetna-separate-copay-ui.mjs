@@ -207,8 +207,11 @@ assert.equal(unknownNetworkView.coverageTone, 'is-review')
 const videoDeferral = { ...unknownNetworkPriorDay, service_date: '2026-11-17',
   reason: 'Televisit', telehealth: { place_of_service: '10', modality: 'audio_video' },
   benefits: { ...unknownNetworkPriorDay.benefits, oop_remaining_cents: 0 },
-  price_range: { complete: false, mode: 'services', lines: [{
+  price_range: { complete: false, mode: 'services', allowed_min_cents: 7553,
+    allowed_max_cents: 7553, lines: [{
     id: 'office', code: '99213', units: 1, modifiers: [],
+    allowed_cents: 7553, unit_allowed_cents: 7553, allowed_basis: 'aetna_fee_schedule',
+    rate_resolution: { status: 'RESOLVED' },
     benefits: { active: true, service_date_matches: false },
   }] },
   collection_guidance: { amount_cents: 0, status: 'zero_advance',
@@ -223,6 +226,7 @@ assert.equal(videoView.supportedAmount, true)
 const videoTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
   { model: videoView, result: videoDeferral }))
 assert.match(videoTable, /Amount to collect at visit.*\$0\.00/)
+assert.match(videoTable, /Not confirmed for telehealth.*\$75\.53 clinic Aetna fee reference/)
 
 const sharedOfficeMedicare = {
   ...unknownNetworkPriorDay,
