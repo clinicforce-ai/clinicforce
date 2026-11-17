@@ -4,6 +4,7 @@ from datetime import date, timedelta
 
 from app.insurance.network_participation import verified_in_network
 from app.insurance.identity import patient_benefits_bound
+from app.insurance import aetna_fees
 
 
 def uhc_choice_plus_zero_candidate(result: dict) -> bool:
@@ -178,6 +179,66 @@ def apply_family_oop_deferrals(result: dict, guidance: dict, *, member_bound: bo
         source_errors=source_errors, adverse=adverse, same_policy_conflict=same_policy_conflict)
     apply_uhc_choice_plus_family_oop_deferral(result, guidance, adverse=adverse,
         same_policy_conflict=same_policy_conflict, source_errors=source_errors)
+
+
+def apply_aetna_televisit_oop_deferral(result: dict, guidance: dict, *, member_bound: bool,
+                                      source_errors: list, adverse: bool,
+                                      same_policy_conflict: bool) -> None:
+    """Defer a single Aetna video follow-up when the dated medical OOP reference is zero."""
+    benefits = result.get('benefits') or {}
+    price = result.get('price_range') or {}
+    lines = price.get('lines') or []
+    codes = result.get('codes') or []
+    setting = result.get('telehealth') or {}
+    names = ((result.get('plan_details') or {}).get('stedi') or {}).get('names') or []
+    oop_id = benefits.get('oop_id')
+    line_terms = (lines[0].get('benefits') or {}) if len(lines) == 1 else {}
+    medical_oop = bool(oop_id) and any(row.get('id') == oop_id and row.get('kind') == 'out_of_pocket'
+                      and row.get('amount_cents') == 0
+                      and row.get('coverage_level') in {'INDIVIDUAL', 'IND'}
+                      and row.get('time_period') in {'REMAINING', '29'}
+                      and row.get('network') in {'IN_NETWORK', 'Y'}
+                      and row.get('plan_association') == 'medical'
+                      for row in benefits.get('reported_options') or [])
+    if (guidance.get('amount_cents') is not None or result.get('payment_mode') == 'cash'
+            or not member_bound or not result.get('checked_at') or source_errors or adverse
+            or same_policy_conflict or aetna_fees.category(str(result.get('payer') or ''), names) != 'commercial'
+            or benefits.get('active') is not True or benefits.get('has_secondary')
+            or not patient_benefits_bound(benefits.get('identity'))
+            or not benefits['identity'].get('binding')
+            or benefits['identity'].get('binding') != (result.get('identity') or {}).get('binding')
+            or (benefits.get('plan_details') or {}).get('names') != names
+            or benefits.get('network_status') == 'out_of_network' or benefits.get('network_conflict')
+            or benefits.get('coverage_status_conflict') or benefits.get('coverage_dates_invalid')
+            or benefits.get('historical_only') or benefits.get('oop_remaining_cents') != 0
+            or benefits.get('oop_remaining_conflict_ids') or not medical_oop
+            or (result.get('card_check') or {}).get('status') in {'conflict', 'mismatch'}
+            or (result.get('recovery') or {}).get('reason_code') in {'multiple_active_policies', 'same_policy_evidence_conflict'}
+            or result.get('refresh_requires_selection') is True
+            or setting.get('place_of_service') not in {'10', '02'}
+            or setting.get('modality') != 'audio_video'
+            or (result.get('appointment_context') or {}).get('place_of_service') != setting['place_of_service']
+            or price.get('mode') != 'services' or price.get('service_issues')
+            or len(codes) != 1 or len(lines) != 1
+            or codes[0].get('id') != lines[0].get('id')
+            or codes[0].get('code') != lines[0].get('code') or lines[0].get('code') != '99213'
+            or lines[0].get('units') != 1 or lines[0].get('modifiers')
+            or line_terms.get('active') is not True or line_terms.get('has_secondary')
+            or line_terms.get('coverage_status_conflict') or line_terms.get('network_conflict')
+            or line_terms.get('historical_only')
+            or (line_terms.get('identity') and
+                (not patient_benefits_bound(line_terms['identity'])
+                 or line_terms['identity'].get('binding') != benefits['identity'].get('binding')))):
+        return
+    guidance.update(amount_cents=0, status='zero_advance', basis='claim_after_service',
+        reason=('Collect $0 at check-in for the proposed CPT 99213 video visit. Aetna reported $0 remaining '
+                'on an individual in-network medical out-of-pocket limit in the saved response. '
+                'This is a clinic deferral, not a confirmed patient share: provider tier, telehealth billing '
+                'and final liability follow the processed claim.'),
+        patient_message='No payment is requested at arrival. Final responsibility follows the processed Aetna claim.',
+        collection_rule={'mode': 'aetna_televisit_oop_deferral',
+                         'reference': 'Patient-bound Aetna medical out-of-pocket reference; claim-after-service deferral'})
+    guidance.pop('policy_setup_required', None)
 
 
 def apply_trs_hd_office_refundable_deposit(result: dict, guidance: dict, *,

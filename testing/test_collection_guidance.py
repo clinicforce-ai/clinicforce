@@ -21,6 +21,39 @@ def scenario(amount=3800):
                     'requirements': {kind: {'required': 'unknown', 'cleared': False} for kind in ('referral', 'authorization')}}}]}}
 
 
+def test_aetna_prior_date_televisit_with_met_individual_oop_defers_check_in():
+    result = scenario()
+    result.pop('collection_policy')
+    result.update(payer='Aetna', service_date='2026-11-17', checked_at='2026-11-16T12:00:00Z',
+                  plan_details={'stedi': {'names': ['Synthetic Low Deductible']}},
+                  telehealth={'place_of_service': '10', 'modality': 'audio_video'},
+                  appointment_context={'place_of_service': '10'},
+                  codes=[{'id': 'office', 'code': '99213', 'units': 1, 'modifiers': []}])
+    result['benefits'].update(identity=result['identity'], network_status='unknown',
+        plan_details={'names': ['Synthetic Low Deductible']},
+        network_source=None, service_date_matches=False, oop_remaining_cents=0,
+        oop_id='medical-oop', reported_options=[{
+            'id': 'medical-oop', 'kind': 'out_of_pocket', 'amount_cents': 0,
+            'coverage_level': 'INDIVIDUAL', 'time_period': 'REMAINING',
+            'network': 'IN_NETWORK', 'plan_association': 'medical'}])
+    result['price_range'].update(complete=False, patient_min_cents=None,
+                                 patient_max_cents=None, service_issues=[])
+    line = result['price_range']['lines'][0]
+    line.update(code='99213', modifiers=[], calculation=None, allowed_cents=None)
+    line['benefits'].update(service_date_matches=False, active=True)
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 0
+    assert guidance['basis'] == 'claim_after_service'
+    assert guidance['collection_rule']['mode'] == 'aetna_televisit_oop_deferral'
+    assert 'Collect $0' in amount_explanation.build(result, guidance)['sentence']
+    for change in ({'active': False}, {'oop_remaining_cents': 100},
+                   {'oop_id': None}, {'plan_details': {'names': ['Other product']}},
+                   {'network_status': 'out_of_network'}, {'has_secondary': True}):
+        altered = deepcopy(result)
+        altered['benefits'].update(change)
+        assert collection_guidance.build(altered)['amount_cents'] is None
+
+
 def test_humana_medicare_ppo_withholds_copay_until_qmb_check():
     result = scenario(4000)
     result.update(payer='Humana Health Plan', plan_details={'stedi': {

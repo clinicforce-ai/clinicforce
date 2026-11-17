@@ -116,6 +116,11 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     and one medical product identify the category. The rate is an allowed fee,
     not a patient share or permission to collect. temporary_rate_reference
     remains a separate planning source for other supported payers.
+    A prior-date payer echo does not block that visit-date clinic fee lookup.
+    A patient-bound Aetna Commercial video follow-up with one proposed CPT
+    99213 and a linked zero individual medical in-network out-of-pocket balance
+    can show a zero claim-after-service check-in deferral without claiming a
+    verified network tier or final patient share.
     The NMCT Cigna PPO single-CPT 99203 refundable office quote may equal the matched clinic fee less prior payments when same-plan deductible and out-of-pocket balances exceed the fee and the 20% office benefit has no copay; it is not a Cigna allowance or final liability.
     For a Cigna office E/M visit, temporary_rate_reference.alternatives lists matching BCBSTX fee rows
     for available, unselected levels in the same E/M family. These are separate

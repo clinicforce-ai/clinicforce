@@ -5,6 +5,7 @@ import re
 from datetime import date
 
 from app.core.patient_store import _connection
+from app.insurance.identity import patient_benefits_bound
 
 
 def is_aetna_payer(payer_name: str) -> bool:
@@ -64,7 +65,14 @@ def visit_rates(payer_name: str, medical_names: list[str], source: dict,
                 benefits: dict, inputs: dict, selected: list[dict], rules: dict) -> tuple[str | None, list[dict], list[str]]:
     """Resolve one patient's Aetna category and applicable clinic-wide rates."""
     plan_category = category(payer_name, medical_names)
-    if not plan_category or source.get('payer_plan_bound') is not True:
+    payer_plan = benefits.get('plan_details') or {}
+    returned_names = ([payer_plan['identified_product']] if payer_plan.get('identified_product')
+                      else payer_plan.get('names') or [])
+    product_bound = (source.get('payer_plan_bound') is True or
+                     benefits.get('active') is True
+                     and patient_benefits_bound(benefits.get('identity'))
+                     and returned_names == medical_names)
+    if not plan_category or not product_bound:
         return plan_category, [], ['Identify one patient-bound Aetna Advantage or Commercial medical product before applying its fee schedule.']
     if benefits.get('network_status') == 'out_of_network':
         return plan_category, [], ['Obtain the payer out-of-network allowed amount for each selected CPT; the Aetna in-network schedule does not apply.']

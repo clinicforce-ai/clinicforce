@@ -204,6 +204,26 @@ const unknownNetworkView = deriveCommercialEstimateView({ result: {
   recovering: false })
 assert.equal(unknownNetworkView.coverageTone, 'is-review')
 
+const videoDeferral = { ...unknownNetworkPriorDay, service_date: '2026-11-17',
+  reason: 'Televisit', telehealth: { place_of_service: '10', modality: 'audio_video' },
+  benefits: { ...unknownNetworkPriorDay.benefits, oop_remaining_cents: 0 },
+  price_range: { complete: false, mode: 'services', lines: [{
+    id: 'office', code: '99213', units: 1, modifiers: [],
+    benefits: { active: true, service_date_matches: false },
+  }] },
+  collection_guidance: { amount_cents: 0, status: 'zero_advance',
+    basis: 'claim_after_service', reason: 'Collect $0 at check-in; submit the claim.',
+    collection_rule: { mode: 'aetna_televisit_oop_deferral' }, services: [] },
+  encounter_summary: { collect_today_cents: 0, payments_verified_cents: 0 },
+}
+const videoView = deriveCommercialEstimateView({ result: videoDeferral,
+  appointments: [], selectedVisit: null, busy: null, error: null, readOnly: true,
+  recovering: false })
+assert.equal(videoView.supportedAmount, true)
+const videoTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+  { model: videoView, result: videoDeferral }))
+assert.match(videoTable, /Amount to collect at visit.*\$0\.00/)
+
 const sharedOfficeMedicare = {
   ...unknownNetworkPriorDay,
   benefits: { ...unknownNetworkPriorDay.benefits, has_secondary: true,

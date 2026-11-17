@@ -114,6 +114,26 @@ def test_unbound_aetna_product_has_no_allowed_fee():
     assert price.call_args.args[1] == []
 
 
+def test_prior_date_patient_bound_aetna_product_still_reads_visit_date_fee():
+    line = {'id': 'office', 'code': '99213', 'units': 1, 'modifiers': []}
+    benefits = {'active': True, 'service_date_matches': False,
+                'plan_details': {'names': ['Synthetic Low Deductible']},
+                'identity': {'status': 'matched', 'match_version': 2,
+                             'binding': 'synthetic-person'}}
+    source = {'payer_plan_bound': False}
+    inputs = {'service_date': '2026-11-17'}
+    rules = {'place_of_service': '10', 'provider_npi': '1234567890',
+             'patient_binding': 'synthetic-person',
+             'product_binding': 'Synthetic Low Deductible'}
+    with patch.object(aetna_fees, 'matching_rates', return_value=[{
+        'line_id': 'office', 'code': '99213', 'allowed_cents': 4321,
+        'basis': 'aetna_fee_schedule'}]) as lookup:
+        category, rates, issues = aetna_fees.visit_rates(
+            'Aetna', ['Synthetic Low Deductible'], source, benefits, inputs, [line], rules)
+    assert category == 'commercial' and len(rates) == 1 and issues == []
+    assert lookup.call_args.args[1] == '2026-11-17'
+
+
 def test_enabled_aetna_connection_still_uses_database_schedule():
     connection = {'id': 'aetna-connection', 'stedi_payer_id': 'aetna-route',
                   'display_name': 'Aetna', 'status': 'staff_guidance_enabled'}
