@@ -215,13 +215,14 @@ def build(result: dict, review: dict | None = None) -> dict:
         amount = 0
         guidance.update(status='zero_advance', basis='published_geha_pshb_zero_office',
             reason='The matched 2026 G.E.H.A High PSHB Medicare Advantage plan publishes a $0 in-network specialist office visit, $0 medical deductible and $0 in-network medical out-of-pocket maximum. No payment is due for this planned covered office visit; final coding and claim adjudication still control.')
-    healthselect_zero_televisit = healthselect_zero_applies(result, member_bound=member_bound, source_errors=source_errors,
+    healthselect_zero_basis = healthselect_zero_applies(result, member_bound=member_bound, source_errors=source_errors,
         adverse=adverse, note=note, line_blocker=line_blocker,
         same_policy_conflict=same_policy_conflict)
-    if healthselect_zero_televisit:
+    if healthselect_zero_basis:
         amount = 0
-        guidance.update(status='zero_advance', basis='healthselect_ma_zero_televisit',
-            reason='The matched HealthSelect Medicare Advantage PPO plan reports a $0 virtual or specialist visit copay and 0% coinsurance, and ERS publishes no annual medical deductible. Collect $0 upfront for this one proposed covered telehealth E/M visit; code selection, payer order and final claim liability remain open.')
+        guidance.update(status='zero_advance', basis=healthselect_zero_basis,
+            reason='The matched HealthSelect Medicare Advantage PPO plan reports $0 office and surgical copays and 0% coinsurance, and ERS publishes no annual medical deductible. Collect $0 upfront for the proposed covered office visit and biopsy; authorization, payer order and final claim liability remain open.' if healthselect_zero_basis.endswith('office_biopsy') else
+                   'The matched HealthSelect Medicare Advantage PPO plan reports a $0 virtual or specialist visit copay and 0% coinsurance, and ERS publishes no annual medical deductible. Collect $0 upfront for this one proposed covered telehealth E/M visit; code selection, payer order and final claim liability remain open.')
     policy = result.get('collection_policy') if isinstance(result.get('collection_policy'), dict) else {}
     policy_approved = bool(policy.get('approved_by') and policy.get('approved_at') and policy.get('reference'))
     policy_mode = policy.get('mode') if policy_approved else None
@@ -335,8 +336,8 @@ def build(result: dict, review: dict | None = None) -> dict:
         guidance['patient_message'] = advance_patient_message(guidance)
         if guidance['basis'] == 'claim_after_service' and 'cigna' in str(result.get('payer') or '').casefold():
             guidance['patient_message'] = 'No payment is requested at arrival without a Cigna Explanation of Estimate. Final responsibility follows the processed claim.'
-        if guidance['basis'] == 'healthselect_ma_zero_televisit':
-            guidance['patient_message'] = 'No payment is requested at arrival for the proposed covered virtual visit. Final coding, payer order and the processed claim determine any later responsibility.'
+        if guidance['basis'].startswith('healthselect_ma_zero_'):
+            guidance['patient_message'] = 'No payment is requested at arrival for the proposed covered office visit and biopsy. Final coding, authorization, payer order and the processed claim determine any later responsibility.' if guidance['basis'].endswith('office_biopsy') else 'No payment is requested at arrival for the proposed covered virtual visit. Final coding, payer order and the processed claim determine any later responsibility.'
         if amount > 0 and not payments.get('reference') and strict.get('payments_received_cents') is None:
             assumptions.append('No prior payments or credits were deducted because the clinic ledger is unavailable. Tell us if you already paid for this visit and show your receipt to avoid paying twice.')
         elif payments.get('reference') or strict.get('payments_received_cents') is not None:

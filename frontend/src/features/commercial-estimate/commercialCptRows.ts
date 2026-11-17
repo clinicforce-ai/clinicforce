@@ -32,6 +32,15 @@ export function commercialAllowedTotalRow(
   const price = result.price_range
   const clinicQuote =
     result.fee_proxy_estimate?.basis === 'cigna_clinic_fee_quote' ? result.fee_proxy_estimate : null
+  if (result.collection_guidance?.basis === 'healthselect_ma_zero_office_biopsy')
+    return {
+      label: 'Total payer allowed',
+      value:
+        lineAllowedTotal != null &&
+        price?.lines?.every((line) => line.allowed_basis === 'medicare_fee_schedule')
+          ? `Not confirmed by UHC · ${money(lineAllowedTotal)} clinic Medicare fee reference`
+          : 'Not confirmed by UHC · clinic fee reference unavailable',
+    }
   if (clinicQuote && lineAllowedTotal == null) {
     const allCigna = clinicQuote.lines?.every((line) => line.source === 'Cigna clinic contract')
     return {

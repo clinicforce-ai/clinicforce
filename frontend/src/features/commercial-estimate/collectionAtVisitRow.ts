@@ -5,6 +5,7 @@ import { feeProxyFormula } from './coinsuranceFormula'
 import { money } from './format'
 import type { bluecardOfficeDeductibleScenario } from './bluecardOfficeDeductibleScenario'
 import { cignaBtxOfficeScenario } from './cignaBtxOfficeScenario'
+import { healthselectOfficeBiopsy, healthselectZero } from './healthselectRows'
 
 export { pendingBluecardOfficeCopay, pendingCignaOfficeCopay } from './pendingOfficeCopays'
 import { pendingCignaOfficeCopay } from './pendingOfficeCopays'
@@ -253,8 +254,7 @@ export function collectionAtVisitRow(
           ? `${money(0)} at check-in · ${money(feeProxy!.patient_share_cents)} pre-Medicaid planning share`
           : combinedPlan
             ? `${money(combinedPlan.amount_cents)} planning estimate`
-            : result.collection_guidance?.basis === 'healthselect_ma_zero_televisit' &&
-                result.collection_guidance.amount_cents === 0
+            : healthselectZero(result)
               ? money(0)
               : result.collection_guidance?.basis === 'published_geha_pshb_zero_office' &&
                   result.collection_guidance.amount_cents === 0
@@ -321,8 +321,10 @@ export function collectionAtVisitRow(
           ? `${proxyFormula?.total} ${feeProxy!.message}`
           : combinedPlan
             ? `${money(combinedPlan.office_copay_cents)} + ${combinedPlan.coinsurance_percent}% × ${money(combinedPlan.diagnostic_allowed_cents)} = ${money(combinedPlan.patient_share_cents)}${combinedPlan.payments_cents ? `; less ${money(combinedPlan.payments_cents)} already paid` : ''}. Separate follow-up E/M is planned; deductible and out-of-pocket adjustments remain assumptions until payer balances are returned.`
-            : result.collection_guidance?.basis === 'healthselect_ma_zero_televisit'
-              ? '$0.00 at check-in from the payer’s $0 virtual-visit copay, ERS no-deductible rule and 0% coinsurance. Final billed code, payer order and claim liability remain open.'
+            : healthselectZero(result)
+              ? healthselectOfficeBiopsy(result)
+                ? '$0.00 at check-in from UHC’s $0 office and surgical copays, ERS no-deductible rule and 0% coinsurance. Biopsy authorization, payer order and final claim liability remain open.'
+                : '$0.00 at check-in from the payer’s $0 virtual-visit copay, ERS no-deductible rule and 0% coinsurance. Final billed code, payer order and claim liability remain open.'
               : result.collection_guidance?.basis === 'published_geha_pshb_zero_office'
                 ? result.collection_guidance.reason
                 : result.collection_guidance?.basis === 'qmb_protection'
