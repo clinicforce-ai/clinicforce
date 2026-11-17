@@ -628,6 +628,72 @@ def test_trs_hd_office_missing_accumulators_uses_refundable_fee_deposit():
     assert collection_guidance.build(result)['amount_cents'] is None
 
 
+def test_blue_advantage_hmo_office_collects_capped_refundable_advance():
+    result = scenario()
+    result.pop('collection_policy')
+    result.update(payer='Blue Cross Blue Shield Tx', stedi_payer={'id': 'QDTRP'},
+        service_date='2026-11-18', checked_at='2026-11-17T12:00:00Z',
+        nmct_bcbstx_refundable_advance_enabled=True,
+        plan_details={'stedi': {'names': ['Blue Advantage HMO']}},
+        appointment_context={'place_of_service': '11'},
+        codes=[{'id': 'office', 'code': '99203', 'units': 1, 'modifiers': []}],
+        selected_ids=['office'],
+        temporary_rate_reference={'complete': True, 'source': 'BCBS Texas clinic schedule',
+            'lines': [{'id': 'office', 'code': '99203', 'units': 1, 'modifiers': [],
+                       'unit_reference_cents': 10117, 'source_reference': 'library:synthetic-blue'}]})
+    result['benefits'].update(identity=result['identity'], network_source='clinic_group_agreement',
+        service_date_matches=True, deductible_remaining_cents=0, oop_remaining_cents=2348,
+        deductible_id='deductible-30', oop_id='oop-30', reported_options=[
+            {'id': 'deductible-30', 'kind': 'deductible', 'service_type_code': '30',
+             'coverage_level': 'INDIVIDUAL', 'network': 'IN_NETWORK',
+             'time_period': 'REMAINING', 'amount_cents': 0, 'plan_association': 'medical', 'plan_index': 0},
+            {'id': 'oop-30', 'kind': 'out_of_pocket', 'service_type_code': '30',
+             'coverage_level': 'INDIVIDUAL', 'network': 'IN_NETWORK',
+             'time_period': 'REMAINING', 'amount_cents': 2348, 'plan_association': 'medical', 'plan_index': 0},
+            {'id': 'office-98', 'kind': 'coinsurance', 'service_type_code': '98',
+             'coverage_level': 'INDIVIDUAL', 'network': 'IN_NETWORK',
+             'percent': '50', 'plan_association': 'medical', 'plan_index': 0}])
+    result['price_range'].update(complete=False, patient_min_cents=None, patient_max_cents=None)
+    result['price_range']['lines'][0].update(calculation=None, modifiers=[], allowed_cents=None,
+        rate_resolution={'status': 'RATE_UNAVAILABLE'})
+    result['price_range']['lines'][0]['benefits'].update(network_status='in_network',
+        service_date_matches=True, copay_cents=None, coinsurance_percent='50',
+        coinsurance_id='office-98', deductible_remaining_cents=0, oop_remaining_cents=2348)
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 2348
+    assert guidance['collection_rule']['mode'] == 'blue_advantage_hmo_oop_deposit'
+    assert guidance['reference_total_cents'] == 2348
+    assert encounter_summary.build({**result, 'collection_guidance': guidance})['collect_today_cents'] == 2348
+    assert 'refundable Blue Advantage HMO office advance' in amount_explanation.build(result, guidance)['sentence']
+    assert collection_guidance.build(result, {'payments': {'reference': 'synthetic-receipt',
+        'amount_cents': 500}})['amount_cents'] == 1848
+    raw = {'plans': [{'name': 'Blue Advantage HMO', 'benefits': {
+        'statuses': [{'status': 'ACTIVE', 'service': {'system': 'STC', 'value': '30'}}],
+        'deductible': [{'amount': '0', 'timePeriod': 'REMAINING', 'coverageLevel': 'INDIVIDUAL',
+            'network': {'indicator': 'IN_NETWORK'}, 'service': {'system': 'STC', 'value': '30'}}],
+        'outOfPocket': [{'amount': '23.48', 'timePeriod': 'REMAINING', 'coverageLevel': 'INDIVIDUAL',
+            'network': {'indicator': 'IN_NETWORK'}, 'service': {'system': 'STC', 'value': '30'}}],
+        'coInsurance': [{'percent': '0.5', 'coverageLevel': 'INDIVIDUAL',
+            'network': {'indicator': 'IN_NETWORK'}, 'service': {'system': 'STC', 'value': '98'}}]}}]}
+    normalized = commercial.normalize_stedi_271(raw, '98', True)
+    from_stedi = deepcopy(result)
+    from_stedi['benefits'].update(normalized, identity=result['identity'],
+        network_source='clinic_group_agreement')
+    from_stedi['price_range']['lines'][0]['benefits'].update(normalized)
+    assert collection_guidance.build(from_stedi)['amount_cents'] == 2348
+    for mutation in (
+        lambda value: value['plan_details']['stedi'].update(names=['Blue Choice PPO']),
+        lambda value: value['benefits'].update(oop_remaining_cents=None),
+        lambda value: value['benefits'].update(oop_remaining_conflict_ids=['other-oop']),
+        lambda value: value['benefits'].update(network_status='unknown'),
+        lambda value: value['price_range']['lines'][0]['benefits'].update(coinsurance_percent='40'),
+        lambda value: value['temporary_rate_reference']['lines'][0].update(unit_reference_cents=4000),
+    ):
+        blocked = deepcopy(result)
+        mutation(blocked)
+        assert collection_guidance.build(blocked)['amount_cents'] is None
+
+
 def test_cigna_no_financial_terms_uses_refundable_bcbstx_reference_advance():
     result = scenario()
     result.pop('collection_policy')

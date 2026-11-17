@@ -293,6 +293,7 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
         elif basis in {'cigna_clinic_fee_quote', 'cigna_fee_proxy_advance'}: sentence, code = (f'Collect {_money(amount)} as a clinic-directed refundable advance using Cigna rates where available and BCBS Texas fees for other selected CPTs; apply deductible, coinsurance, out-of-pocket cap and prior payments. This is not a Cigna Cost of Care Estimator result; reconcile after the claim' if basis == 'cigna_clinic_fee_quote' else f'Collect {_money(amount)} for the planned diagnostic services using Cigna exact-CPT benefits and the clinic BCBS Texas fee schedule', basis)
         elif basis in {'bcbstx_proxy_advance', 'bcbstx_refundable_advance'}:
             sentence, code = (f'Collect {_money(amount)} as the clinic-approved BCBS Texas fee proxy advance for the planned diagnostic services; the UHC allowed amount and final claim share remain unknown' if basis == 'bcbstx_proxy_advance' else
+                f'Collect {_money(amount)} as a refundable Blue Advantage HMO office advance capped by the payer-reported remaining individual out-of-pocket balance; the HMO allowance and final share follow the claim' if (guidance.get('collection_rule') or {}).get('mode') == 'blue_advantage_hmo_oop_deposit' else
                 f'Collect {_money(amount)} as a refundable deposit using the clinic BCBS Texas CPT 99203 fee reference; remaining balances were not returned and final patient liability follows the processed claim' if (guidance.get('collection_rule') or {}).get('mode') == 'trs_hd_office_refundable_deposit' else
                 f'Collect {_money(amount)} as a refundable Blue PPO quote for the selected services using matched clinic fees and reported family benefits; reconcile and refund any excess after the processed claim' if (guidance.get('collection_rule') or {}).get('mode') == 'blue_ppo_family_deductible_quote' else
                 f'Collect {_money(amount)} as a refundable Cigna PPO office quote using the clinic BCBS Texas fee reference; Cigna allowance remains unknown, {"the clinic reports this provider in network without payer confirmation" if (result.get("benefits") or {}).get("network_source") == "clinic_attested_cigna_ppo" else "provider tier remains unconfirmed"}, and any excess is refunded after the claim' if (guidance.get('collection_rule') or {}).get('mode') == 'cigna_ppo_deductible_quote' else
@@ -477,8 +478,7 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
         sentence = f'{plan_label} is treated as {tier} for this visit: {sentence[:1].lower()}{sentence[1:]}'
     summary = result.get('encounter_summary') or {}
     return {'sentence': sentence + '.', 'reason_code': code, 'network_tier': network,
-            'pricing_basis': basis, 'unpriced_codes': unpriced,
-            'plan_name': identified_product or (medical_names[0] if len(medical_names) == 1 else None),
+            'pricing_basis': basis, 'unpriced_codes': unpriced, 'plan_name': identified_product or (medical_names[0] if len(medical_names) == 1 else None),
             'network_decision': inventory.get('decision'),
             'network_source': benefits.get('network_source'),
             'contract_evidence': {key: inventory.get(key) for key in

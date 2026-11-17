@@ -102,6 +102,7 @@ jobs:
           node ../testing/cigna-office-collection-ui.mjs
           node ../testing/cigna-clinic-quote-ui.mjs
           node ../testing/bluecard-office-ui.mjs
+          node ../testing/blue-advantage-hmo-ui.mjs
           node ../testing/fep-standard-office-ui.mjs
           node testing/bluecard-office-collection-ui.mjs
           node testing/bcbstx-epo-unmatched-ui.mjs

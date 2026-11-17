@@ -373,7 +373,9 @@ export function deriveCommercialEstimateView({
               ? 'Provisional patient estimate · do not collect'
               : estimatedShare
                 ? 'Estimated patient share · do not collect'
-                : !amount && !cash
+                : guidance?.collection_rule?.mode === 'blue_advantage_hmo_oop_deposit' && amount
+                  ? 'Amount to collect at visit'
+                  : !amount && !cash
                   ? 'Collection decision needed'
                   : ['bcbstx_refundable_advance', 'cigna_refundable_office_copay'].includes(
                         guidance?.basis || '',

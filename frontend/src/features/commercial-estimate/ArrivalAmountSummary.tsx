@@ -473,6 +473,9 @@ export default function ArrivalAmountSummary({
           One covered in-network office visit has a $0 published plan share. The UHC allowed amount
           remains unknown; final coding and claim adjudication control.
         </p>
+      ) : model.guidance?.collection_rule?.mode === 'blue_advantage_hmo_oop_deposit' &&
+        model.amount ? (
+        <p>{model.guidance.reason}</p>
       ) : model.previousEstimate ? (
         <p>Recheck this saved visit before collecting.</p>
       ) : model.provisionalAmount != null || model.estimatedShare ? (
