@@ -25,6 +25,8 @@ export default function PatientPolicy({
 }) {
   const {
     intakeId,
+    cardIntakeId,
+    onCardDeleted: refreshPatientCards,
     readOnly,
     patient,
     payerSubscriber,
@@ -192,10 +194,10 @@ export default function PatientPolicy({
                 : ''}
           </p>
         )}
-        {intakeId && (
+        {(cardIntakeId || intakeId) && (
           <InsuranceCards
-            key={intakeId}
-            intakeId={intakeId}
+            key={cardIntakeId || intakeId}
+            intakeId={(cardIntakeId || intakeId)!}
             background
             inline
             historicalEstimate={readOnly}
@@ -205,6 +207,7 @@ export default function PatientPolicy({
                   ? 'Card removed from this record. Stored file cleanup is pending; retry it from Clinical patients.'
                   : 'Card deleted. This saved estimate may still reflect it; recheck the visit before relying on the result.',
               )
+              await refreshPatientCards?.()
             }}
           />
         )}

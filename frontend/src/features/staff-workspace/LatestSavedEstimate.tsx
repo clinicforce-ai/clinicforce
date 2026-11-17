@@ -6,6 +6,7 @@ import {
   type InsuranceCheckSnapshot,
 } from '../../services/api/staff-history'
 import CommercialEstimator from '../commercial-estimate/CommercialEstimator'
+import InsuranceCards from '../insurance-card/InsuranceCards'
 import { visitDate, visitTime } from '../commercial-estimate/format'
 
 type FeaturedEstimate = {
@@ -17,10 +18,14 @@ type FeaturedEstimate = {
 
 export default function LatestSavedEstimate({
   patientId,
+  cardIntakeId,
   onRecheck,
+  onCardDeleted,
 }: {
   patientId: string
+  cardIntakeId?: string | null
   onRecheck: (intakeId: string, appointmentId: string) => void
+  onCardDeleted: () => Promise<void>
 }) {
   const [featured, setFeatured] = useState<FeaturedEstimate | null>(null)
   const [loading, setLoading] = useState(true)
@@ -86,10 +91,24 @@ export default function LatestSavedEstimate({
       </div>
       {loading ? (
         <p role="status">Loading latest saved estimate…</p>
-      ) : error ? (
-        <p role="alert">The latest saved estimate could not be loaded. Select Refresh to retry.</p>
-      ) : !featured ? (
-        <p>No saved estimate is available for this patient.</p>
+      ) : error || !featured ? (
+        <>
+          {error ? (
+            <p role="alert">
+              The latest saved estimate could not be loaded. Select Refresh to retry.
+            </p>
+          ) : (
+            <p>No saved estimate is available for this patient.</p>
+          )}
+          {cardIntakeId && (
+            <InsuranceCards
+              intakeId={cardIntakeId}
+              background
+              inline
+              onCardDeleted={onCardDeleted}
+            />
+          )}
+        </>
       ) : (
         <>
           <p className="staff-small staff-muted">
@@ -114,8 +133,10 @@ export default function LatestSavedEstimate({
           <CommercialEstimator
             saved={featured.snapshot}
             intakeId={featured.intakeId}
+            cardIntakeId={cardIntakeId || featured.intakeId}
             currentAccountNumber={featured.accountNumber}
             featured
+            onCardDeleted={onCardDeleted}
           />
         </>
       )}

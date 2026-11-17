@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict'
 
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright')
+const cardPreviewCase = process.env.CARD_PREVIEW_CASE === '1'
 const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_PATH })
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
 const errors = []
@@ -38,6 +39,7 @@ let appointmentReads = 0
 let todayReads = 0
 let exactDateReads = 0
 const visitRequestOrder = []
+const cardReads = []
 let useCache = false
 let releaseAppointments
 const appointmentsHeld = new Promise((resolve) => { releaseAppointments = resolve })
@@ -48,12 +50,12 @@ const patients = Array.from({ length: process.env.LARGE_DIRECTORY ? 10_000 : 6 }
   family_name: String(index + 1).padStart(2, '0'),
   birth_date: '2000-01-01',
   account_status: 'portal',
-  card_status: index % 2 ? 'missing' : 'received',
+  card_status: (cardPreviewCase && index === 5) || index % 2 === 0 ? 'received' : 'missing',
   identity_status: 'confirmed',
   ecw_linked: index !== 3,
   intakes: [],
   intake_ids: [],
-  latest_intake_id: index === 5 ? 'synthetic-intake' : null,
+  latest_intake_id: index === 5 ? (cardPreviewCase ? 'current-card-intake' : 'synthetic-intake') : null,
 }))
 
 await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
@@ -73,6 +75,8 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
     body = { intakes: [], has_more: false }
   } else if (path === '/api/staff/intakes/synthetic-intake') {
     body = { id: 'synthetic-intake', patient: { ...patients[5], ecw_patient_id: 'ecw-6' }, fields: {}, status: 'reviewed' }
+  } else if (path === '/api/staff/intakes/current-card-intake') {
+    body = { id: 'current-card-intake', patient: { ...patients[5], ecw_patient_id: 'ecw-6' }, fields: {}, status: 'reviewed' }
   } else if (path === '/api/doctor/insurance/commercial/appointments') {
     body = { appointments: [] }
   } else if (path === '/api/staff/patients/today-appointments') {
@@ -162,8 +166,17 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
       collection_guidance: { ...savedResult.collection_guidance, amount_cents: projectedAmount },
       encounter_summary: { collect_today_cents: projectedAmount },
     }
+  } else if (path === '/api/staff/intakes/current-card-intake/cards') {
+    cardReads.push(path)
+    body = { cards: [{ id: 'synthetic-card', intake_id: 'current-card-intake', title: 'synthetic-card.pdf', content_type: 'application/pdf', source: 'clinicforce_upload', url: '/api/staff/intakes/current-card-intake/documents/synthetic-card' }], message: '' }
   } else if (path === '/api/staff/intakes/synthetic-intake/cards') {
+    if (cardPreviewCase) {
+      cardReads.push(path)
+      return route.fulfill({ status: 502, json: { detail: 'Older card lookup failed' } })
+    }
     body = { cards: [], message: 'No synthetic card preview.' }
+  } else if (path === '/api/staff/intakes/current-card-intake/documents/synthetic-card') {
+    return route.fulfill({ status: 200, body: '%PDF-1.4\n%%EOF', headers: { 'Content-Type': 'application/pdf' } })
   } else {
     throw new Error(`Unexpected API ${path}`)
   }
@@ -305,6 +318,17 @@ try {
   await summary.getByText('Visit cost and collection').waitFor()
   assert.match(await summary.innerText(), /In network/)
   assert.equal(await summary.getByText('Detailed benefits, insurance & card').locator('..').getAttribute('open'), '')
+  if (cardPreviewCase) {
+    const cardPanel = summary.getByText('Detailed benefits, insurance & card').locator('..')
+    await cardPanel.locator('iframe[src="/api/staff/intakes/current-card-intake/documents/synthetic-card"]').waitFor()
+    assert.equal(await cardPanel.getByRole('link', { name: 'Open card' }).count(), 1)
+    assert.equal(await cardPanel.getByRole('button', { name: 'Delete insurance card' }).count(), 1)
+    assert.equal(await cardPanel.getByRole('button', { name: 'Retry' }).count(), 0)
+    assert.equal(await page.locator('.staff-narrow > .insurance-card-preview').count(), 0)
+    assert(cardReads.length > 0 && cardReads.every((path) => path === '/api/staff/intakes/current-card-intake/cards'))
+    assert.deepEqual(errors, [])
+    console.log('PASS: current patient card previews inside detailed benefits without an older intake lookup')
+  } else {
   assert.equal(await summary.getByText('Saved service plan').locator('..').getAttribute('open'), '')
   assert.match(await summary.getByText('Saved service plan').locator('..').innerText(), /CPT 99204 × 1/)
   assert.equal(await summary.locator('select').count(), 0)
@@ -356,6 +380,7 @@ try {
   assert.equal(await page.getByRole('button', { name: 'Visit date page 2' }).getAttribute('aria-current'), 'page')
   assert.deepEqual(errors, [])
   console.log('PASS: all visit dates, one profile, return navigation, warm cache, responsive layout')
+  }
   }
 } finally {
   await browser.close()

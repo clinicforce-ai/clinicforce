@@ -38,7 +38,6 @@ export default function ClinicalPatientDetail({
   onCardDeleted,
 }: Props) {
   const [estimateRefresh, setEstimateRefresh] = useState(0)
-  const [cardNotice, setCardNotice] = useState('')
   return (
     <div className="staff-narrow">
       <button className="staff-text-button" disabled={deleting} onClick={onBack}>
@@ -95,32 +94,18 @@ export default function ClinicalPatientDetail({
           {error}
         </p>
       )}
-      {(notice || cardNotice) && (
+      {notice && (
         <p className="staff-alert staff-success" role="status">
-          {notice || cardNotice}
+          {notice}
         </p>
-      )}
-      {selected.card_status === 'received' && selected.latest_intake_id && (
-        <InsuranceCards
-          key={selected.latest_intake_id}
-          intakeId={selected.latest_intake_id}
-          background
-          inline
-          onCardDeleted={async (pending) => {
-            setCardNotice(
-              pending
-                ? 'Card removed; S3 cleanup is pending. Retry file cleanup from the patient list.'
-                : 'Uploaded card deleted. Use Request insurance card to request a replacement.',
-            )
-            await onCardDeleted()
-          }}
-        />
       )}
       {selected.clinic_patient_id && selected.identity_status === 'confirmed' && (
         <LatestSavedEstimate
           key={`${selected.clinic_patient_id}:${estimateRefresh}`}
           patientId={selected.clinic_patient_id}
+          cardIntakeId={selected.latest_intake_id}
           onRecheck={onRecheckEstimate}
+          onCardDeleted={onCardDeleted}
         />
       )}
       <>
@@ -169,6 +154,17 @@ export default function ClinicalPatientDetail({
           )}
         </details>
       </>
+      {(!selected.clinic_patient_id || selected.identity_status !== 'confirmed') &&
+        selected.card_status === 'received' &&
+        selected.latest_intake_id && (
+          <InsuranceCards
+            key={selected.latest_intake_id}
+            intakeId={selected.latest_intake_id}
+            background
+            inline
+            onCardDeleted={onCardDeleted}
+          />
+        )}
       {selected.account_status === 'automatic' && (
         <p className="staff-small staff-muted">
           This clinic record was created from submitted insurance details.{' '}
