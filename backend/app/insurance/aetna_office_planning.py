@@ -1,4 +1,4 @@
-"""A prior-date Aetna office estimate for display, never a collection decision."""
+"""Aetna office fee and source-scoped cost-share reference."""
 from __future__ import annotations
 
 from datetime import date
@@ -56,6 +56,22 @@ def estimate(result: dict, inputs: dict) -> dict | None:
               and re.search(r'\bSpecialist Visit or Evaluation\b', str(row.get('payer_note') or ''), re.I)
               and not re.search(r'\btelemedicine|telehealth\b', str(row.get('payer_note') or ''), re.I)]
     percentages = {str(row.get('percent')) for row in office if row.get('percent') is not None}
+    coinsurance_scope = 'in_person_office'
+    if not percentages and names == ['Aetna Choice POS II'] and benefits.get('oop_remaining_cents') == 0:
+        lines = (result.get('price_range') or {}).get('lines') or []
+        line = lines[0] if len(lines) == 1 and lines[0].get('code') == codes[0].get('code') else {}
+        terms = line.get('benefits') or {}
+        linked = [row for row in options if row.get('id') == terms.get('coinsurance_id')
+                  and row.get('kind') == 'coinsurance' and row.get('network') == 'IN_NETWORK'
+                  and row.get('service_type_code') == '98'
+                  and re.search(r'\bSpecialist Visit or Evaluation\b',
+                                str(row.get('payer_note') or ''), re.I)
+                  and re.search(r'\btelemedicine|telehealth\b',
+                                str(row.get('payer_note') or ''), re.I)]
+        if (len(linked) == 1 and terms.get('active') is True
+                and str(terms.get('coinsurance_percent')) == str(linked[0].get('percent'))):
+            percentages = {str(linked[0]['percent'])}
+            coinsurance_scope = 'telemedicine_reference'
     deductible = benefits.get('deductible_remaining_cents')
     oop = benefits.get('oop_remaining_cents')
     if (len(percentages) != 1 or type(deductible) is not int or deductible < 0
@@ -85,6 +101,7 @@ def estimate(result: dict, inputs: dict) -> dict | None:
     return {'status': 'planning_only', 'code': codes[0]['code'], 'allowed_cents': allowed,
             'deductible_remaining_cents': deductible, 'oop_remaining_cents': oop,
             'coinsurance_percent': str(percent), 'deductible_applies_cents': applies,
+            'coinsurance_scope': coinsurance_scope,
             'deductible_waived_cents': waived, 'gross_coinsurance_cents': gross_coinsurance,
             'payer_response_date': response_day.isoformat(),
             'service_date': visit_day, 'rate_source': rates[0].get('source_reference'),

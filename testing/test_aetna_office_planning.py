@@ -106,6 +106,20 @@ def test_choice_pos_ii_published_office_requirements_keep_member_check():
         assert decision['sources'][0]['url'].startswith('https://www.aetna.com/')
 
 
+def test_choice_pos_ii_established_followup_published_requirements():
+    result, inputs = _case()
+    result['benefits'] = result.pop('reference_benefits')
+    result['codes'][0]['code'] = '99213'
+    result['benefit_source'] = 'Stedi'
+    context = {'service_date': inputs['service_date'], 'payer_names': {'aetna'},
+               'pos': '11', 'member_id': 'synthetic-member'}
+    for kind in ('referral', 'authorization'):
+        decision = _published_rule(kind, result, context, ['Aetna Choice POS II'], {'99213'})
+        assert decision is not None
+        assert decision['status'] == 'Not required'
+        assert decision['member_specific_check'] is True
+
+
 def test_prior_day_aetna_medicare_copay_is_patient_share_not_plan_share():
     result, inputs = _case()
     result['plan_details']['stedi'] = {

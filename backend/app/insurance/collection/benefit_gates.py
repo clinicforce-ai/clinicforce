@@ -269,8 +269,9 @@ def apply_aetna_office_individual_oop_deferral(result: dict, guidance: dict, *,
               and row.get('network') == 'IN_NETWORK'
               and '98' in str(row.get('service_type_code') or '').split(',')
               and 'Specialist Visit or Evaluation' in str(row.get('payer_note') or '')
-              and not any(word in str(row.get('payer_note') or '').casefold()
-                          for word in ('telemedicine', 'telehealth'))
+              and (plan.get('coinsurance_scope') == 'telemedicine_reference'
+                   or not any(word in str(row.get('payer_note') or '').casefold()
+                              for word in ('telemedicine', 'telehealth')))
               and not row.get('procedure_code') and not row.get('diagnosis_scoped')]
     try:
         prior_day = date.fromisoformat(str(result.get('service_date'))) - date.fromisoformat(
@@ -330,10 +331,13 @@ def apply_aetna_office_individual_oop_deferral(result: dict, guidance: dict, *,
         return
     fee = plan['allowed_cents'] / 100
     gross = plan['gross_coinsurance_cents'] / 100
+    scope_note = (' The 20% row is marked telemedicine by Aetna, so the gross figure is an '
+                  'illustration, not a confirmed in-person office rate; the $0 medical cap '
+                  'drives the check-in decision.' if plan.get('coinsurance_scope') == 'telemedicine_reference' else '')
     guidance.update(amount_cents=0, status='zero_advance', basis='claim_after_service',
         reason=(f'Collect $0 at check-in for proposed CPT {plan["code"]}. The clinic Aetna fee '
                 f'reference is ${fee:,.2f}; {plan["coinsurance_percent"]}% × ${fee:,.2f} '
-                f'= ${gross:,.2f} gross coinsurance. Aetna reports $0 remaining on the '
+                f'= ${gross:,.2f} gross reference coinsurance.{scope_note} Aetna reports $0 remaining on the '
                 'individual in-network medical out-of-pocket maximum, so '
                 f'min(${gross:,.2f}, $0.00) = $0.00 for covered in-network care. '
                 'The fee is a clinic reference; the claim determines Aetna’s final allowance.'),

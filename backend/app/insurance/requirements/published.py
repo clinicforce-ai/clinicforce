@@ -16,7 +16,7 @@ from app.insurance.requirements.fep_sources import FEP_PSHB_2026_SOURCE, FEP_STA
 from app.insurance.requirements import bcbstx_ppo
 BCBSTX_PAYER_NAMES = bcbstx_ppo.PAYER_NAMES
 # Saved estimates re-evaluate requirement decisions when a published rule changes.
-PUBLISHED_RULESET_VERSION = '2026-11-17-bcbstx-ppo-99214-v21'
+PUBLISHED_RULESET_VERSION = '2026-11-17-aetna-choice-office-99213-v22'
 
 BLUECARD_PPO_REFERRAL_SOURCE = {
     'label': 'BCBSTX BlueCard provider manual, PPO definition',
@@ -250,7 +250,8 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
     if prior_date_aetna_choice:
         if kind == 'referral':
             return rule('Not required', 'Choice POS II permits direct specialist office visits under the published product rule. Confirm the member terms and visit-date coverage.', AETNA_CHOICE_POS_II_SOURCE, check=True)
-        return rule('Not required', 'Routine office CPT 99203 is absent from Aetna’s November 2026 participating-provider precertification list. Confirm member or delegated exceptions.', AETNA_2026_OFFICE_PRECERT_SOURCE, check=True)
+        code = next(iter(codes))
+        return rule('Not required', f'Routine office CPT {code} is absent from Aetna’s November 2026 participating-provider precertification list. Confirm member or delegated exceptions.', AETNA_2026_OFFICE_PRECERT_SOURCE, check=True)
     if value_plus_office:
         if kind == 'referral':
             return rule('Not required', 'Aetna Medicare PPO specialist office visits do not require a referral' + (' in the covered in-network scenario; provider tier remains unresolved.' if not in_network else '.'), AETNA_MEDICARE_PPO_REFERRAL_SOURCE, check=not in_network)

@@ -234,6 +234,8 @@ const cappedView = deriveCommercialEstimateView({ result: cappedOffice,
 assert.equal(cappedView.supportedAmount, true)
 assert.match(cappedView.networkLabel, /In network/)
 assert.equal(cappedView.policyStatus, 'Aetna office benefits · $0 check-in')
+assert.equal(cappedView.networkTone, 'is-confirmed')
+assert.equal(cappedView.coverageTone, 'is-confirmed')
 const cappedArrival = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
   { model: cappedView, result: cappedOffice, partialCopay: null, visibleAmount: true }))
 const cappedTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
@@ -248,6 +250,34 @@ assert.match(cappedTable, /Conditional patient share.*\$0\.00/)
 assert.match(cappedTable, /Gross coinsurance.*\$15\.11/)
 assert.match(cappedTable, /Estimated Aetna share.*\$75\.53/)
 assert.match(cappedTable, /Amount to collect at visit.*\$0\.00/)
+assert.doesNotMatch(cappedTable, /verification pending|do not collect yet/i)
+const teleCapped = {
+  ...cappedOffice,
+  aetna_office_planning: { ...cappedOffice.aetna_office_planning,
+    coinsurance_scope: 'telemedicine_reference' },
+  benefits: { ...cappedOffice.benefits, reported_options:
+    cappedOffice.benefits.reported_options.map((row) =>
+      ['copay', 'coinsurance'].includes(row.kind)
+        ? { ...row, id: `tele-${row.kind}`, payer_note: 'Telemedicine Specialist Visit or Evaluation' }
+        : row) },
+  price_range: { ...cappedOffice.price_range, lines: [
+    { ...cappedOffice.price_range.lines[0], benefits: {
+      ...cappedOffice.price_range.lines[0].benefits,
+      copay_id: 'tele-copay', coinsurance_id: 'tele-coinsurance' } }] },
+}
+const teleView = deriveCommercialEstimateView({ result: teleCapped,
+  appointments: [], selectedVisit: null, busy: null, error: null, readOnly: true,
+  recovering: false })
+const teleTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+  { model: teleView, result: teleCapped }))
+const teleFigures = renderToStaticMarkup(React.createElement(PayerReportedPlanFigures,
+  { result: teleCapped }))
+assert.match(teleFigures, /Telemedicine specialist copay/)
+assert.doesNotMatch(teleFigures, /Match this plan and rendering provider/i)
+assert.match(teleTable, /20(?:\.0)?% telemedicine reference; in-person rate not returned/)
+assert.match(teleTable, /Illustrative coinsurance before cap.*\$15\.11/)
+assert.match(teleTable, /Amount to collect at visit.*\$0\.00/)
+assert.doesNotMatch(teleTable, /verification pending|do not collect yet|Match this plan and rendering provider/i)
 assert.equal(aetnaPriorDateReferenceCopay({ ...unknownNetworkPriorDay, benefits: {
   ...unknownNetworkPriorDay.benefits, reported_options: [{
     ...priorDay.benefits.reported_options[0], amount_cents: 6500 }] } }, model), null)

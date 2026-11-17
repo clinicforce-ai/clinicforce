@@ -73,6 +73,16 @@ export function collectionAtVisitRow(
   },
 ): CostBreakdownRow {
   const officePlanning = result.aetna_office_planning
+  if (
+    result.collection_guidance?.collection_rule?.mode === 'aetna_office_individual_oop_deferral' &&
+    result.collection_guidance.amount_cents === 0
+  )
+    return {
+      label: 'Amount to collect at visit',
+      value: money(0),
+      detail: result.collection_guidance.reason,
+      emphasis: true,
+    }
   if (officePlanning?.status === 'planning_only' && officePlanning.collectable === false) {
     const balance = Math.max(
       0,

@@ -130,7 +130,7 @@ export function deriveCommercialEstimateView({
       : null
   const cash = result?.payment_mode === 'cash'
   let coverageTone =
-    policyStatus === 'Coverage active'
+    policyStatus === 'Coverage active' || policyStatus === 'Aetna office benefits · $0 check-in'
       ? 'is-confirmed'
       : policyStatus === 'Coverage dates differ from visit'
         ? 'is-review'

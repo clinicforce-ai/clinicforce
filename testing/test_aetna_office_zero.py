@@ -96,3 +96,38 @@ def test_exact_date_followup_uses_same_exhausted_individual_limit():
     guidance = collection_guidance.build(result)
     assert guidance['amount_cents'] == 0
     assert guidance['collection_rule']['mode'] == 'aetna_office_individual_oop_deferral'
+
+
+def test_prior_day_followup_with_telemedicine_only_percentage_still_caps_checkin():
+    result, inputs = _office_case()
+    result['benefits']['reported_options'][2]['payer_note'] = 'Specialist Visit or Evaluation - Telemedicine'
+    result['benefits']['reported_options'][3]['payer_note'] = 'Specialist Visit or Evaluation - Telemedicine'
+    result['price_range']['lines'][0]['benefits'].update(coinsurance_percent='20.0',
+                                                        coinsurance_id='synthetic-coinsurance', copay_cents=0,
+                                                        deductible_remaining_cents=0,
+                                                        oop_remaining_cents=0)
+    with patch.object(aetna_office_planning.aetna_fees, 'matching_rates',
+                      return_value=[{'allowed_cents': 7553}]):
+        aetna_office_planning.attach(result, inputs)
+    planning = result['aetna_office_planning']
+    assert planning['gross_coinsurance_cents'] == 1511
+    assert planning['coinsurance_scope'] == 'telemedicine_reference'
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 0
+    assert guidance['collection_rule']['mode'] == 'aetna_office_individual_oop_deferral'
+
+
+def test_telemedicine_reference_requires_matching_linked_cpt_percentage():
+    result, inputs = _office_case()
+    result['benefits']['reported_options'][3]['payer_note'] = 'Telemedicine Specialist Visit or Evaluation'
+    result['price_range']['lines'][0]['benefits'].update(active=True,
+        coinsurance_id='synthetic-coinsurance', coinsurance_percent='20.0')
+    with patch.object(aetna_office_planning.aetna_fees, 'matching_rates',
+                      return_value=[{'allowed_cents': 7553}]):
+        for key, value in [('coinsurance_id', None), ('coinsurance_percent', '30.0')]:
+            changed = deepcopy(result)
+            changed['price_range']['lines'][0]['benefits'][key] = value
+            assert aetna_office_planning.estimate(changed, inputs) is None
+        changed = deepcopy(result)
+        changed['benefits']['oop_remaining_cents'] = 100
+        assert aetna_office_planning.estimate(changed, inputs) is None

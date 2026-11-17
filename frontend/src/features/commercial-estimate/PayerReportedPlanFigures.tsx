@@ -4,7 +4,11 @@ import { ambiguousCombinedZeroOop } from './commercialOopRows'
 
 export default function PayerReportedPlanFigures({ result }: { result: PrevisitEstimate }) {
   const benefits = result.benefits!
-  const oopRows = (benefits.reported_options || []).filter((row) => row.kind === 'out_of_pocket')
+  const reported = benefits.reported_options || []
+  const oopRows = reported.filter((row) => row.kind === 'out_of_pocket')
+  const telemedicineRow = (id?: string | null) =>
+    !!id &&
+    reported.some((row) => row.id === id && /telemedicine|telehealth/i.test(row.payer_note || ''))
   const combinedZeroNeedsReview = ambiguousCombinedZeroOop(result)
   const lines = result.price_range?.mode === 'services' ? result.price_range.lines || [] : []
   const officeLines = lines.filter((line) => /^992(?:0[2-5]|1[2-5])$/.test(line.code))
@@ -15,11 +19,13 @@ export default function PayerReportedPlanFigures({ result }: { result: PrevisitE
     officeLines.length && officeCopays.every((value) => value != null && value === officeCopays[0])
       ? officeCopays[0]
       : null
+  const officeCopayTelemedicine =
+    officeLines.length > 0 && officeLines.every((line) => telemedicineRow(line.benefits?.copay_id))
   const coinsuranceGroups = new Map<string, string[]>()
   for (const line of lines) {
     const percent = line.benefits?.coinsurance_percent
     if (percent == null || !Number.isFinite(Number(percent))) continue
-    const label = `${Number(percent).toLocaleString()}%`
+    const label = `${Number(percent).toLocaleString()}%${telemedicineRow(line.benefits?.coinsurance_id) ? ' · telemedicine source' : ''}`
     coinsuranceGroups.set(label, [...(coinsuranceGroups.get(label) || []), line.code])
   }
   const deductibleGroups = new Map<string, string[]>()
@@ -42,6 +48,7 @@ export default function PayerReportedPlanFigures({ result }: { result: PrevisitE
         'payer_participation_message',
         'clinic_attested_cigna_tpa',
         'clinic_attested_cigna_ppo',
+        'clinic_attested_aetna_office',
       ].includes(benefits.network_source || '')) ||
     (benefits.network_status === 'out_of_network' &&
       [
@@ -61,7 +68,13 @@ export default function PayerReportedPlanFigures({ result }: { result: PrevisitE
       <dl className="arrival-money-picture" aria-label="Payer-reported benefit terms">
         {(officeLines.length ? officeCopay != null : benefits.copay_cents != null) && (
           <div>
-            <dt>{officeLines.length ? 'Office visit copay' : 'Copay'}</dt>
+            <dt>
+              {officeCopayTelemedicine
+                ? 'Telemedicine specialist copay'
+                : officeLines.length
+                  ? 'Office visit copay'
+                  : 'Copay'}
+            </dt>
             <dd>{money(officeLines.length ? officeCopay! : benefits.copay_cents!)}</dd>
           </div>
         )}

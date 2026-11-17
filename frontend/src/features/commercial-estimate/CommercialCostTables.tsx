@@ -61,6 +61,7 @@ export default function CommercialCostTables({
       )
     : rows
   const planning = result.aetna_office_planning
+  const telemedicineReference = planning?.coinsurance_scope === 'telemedicine_reference'
   const cappedOffice =
     result.collection_guidance?.collection_rule?.mode === 'aetna_office_individual_oop_deferral' &&
     !!planning
@@ -76,15 +77,23 @@ export default function CommercialCostTables({
           detail:
             'Approved clinic schedule for the proposed office CPT; final payer allowance follows the claim.',
         }
+      if (row.label === 'Copay' && cappedOffice && telemedicineReference)
+        return {
+          ...row,
+          detail:
+            'The $0 specialist copay row is marked telemedicine. The in-person office copay was not returned; the medical out-of-pocket cap drives the $0 check-in decision.',
+        }
       if (row.label === 'Coinsurance')
         return {
           ...row,
-          value:
-            planning.coinsurance_percent == null
+          value: telemedicineReference
+            ? `${planning.coinsurance_percent}% telemedicine reference; in-person rate not returned`
+            : planning.coinsurance_percent == null
               ? 'Not returned for the in-person specialist visit'
               : `${planning.coinsurance_percent}% in-network specialist office visit`,
-          detail:
-            planning.copay_cents != null
+          detail: telemedicineReference
+            ? 'Aetna marked this specialist percentage as telemedicine. It illustrates the fee calculation but does not establish the in-person office rate.'
+            : planning.copay_cents != null
               ? planning.coinsurance_percent == null
                 ? 'The payer returned a telemedicine coinsurance row, which does not establish an in-person office rate. The displayed split assumes the fixed copay is the only cost share.'
                 : 'The reported specialist office copay sets the conditional patient share; zero coinsurance adds nothing.'
@@ -103,7 +112,9 @@ export default function CommercialCostTables({
               ? money(planning.copay_cents)
               : `${money(planning.deductible_applies_cents)} if deductible applies; ${money(planning.deductible_waived_cents)} if waived`,
           detail: cappedOffice
-            ? `${planning.coinsurance_percent}% × ${money(planning.allowed_cents)} = ${money(planning.gross_coinsurance_cents || 0)} before the out-of-pocket cap; min(${money(planning.gross_coinsurance_cents || 0)}, ${money(0)} individual in-network remaining) = ${money(0)} for covered care.`
+            ? telemedicineReference
+              ? `The telemedicine reference gives ${planning.coinsurance_percent}% × ${money(planning.allowed_cents)} = ${money(planning.gross_coinsurance_cents || 0)} illustratively. The individual in-network medical maximum has ${money(0)} remaining, so covered office cost-sharing is capped at ${money(0)} regardless of the in-person rate.`
+              : `${planning.coinsurance_percent}% × ${money(planning.allowed_cents)} = ${money(planning.gross_coinsurance_cents || 0)} before the out-of-pocket cap; min(${money(planning.gross_coinsurance_cents || 0)}, ${money(0)} individual in-network remaining) = ${money(0)} for covered care.`
             : planning.copay_cents != null
               ? `${money(planning.copay_cents)} reported copay + $0.00 remaining deductible${planning.coinsurance_percent == null ? '; in-person coinsurance was not returned. Copay-only scenario.' : ' + 0% office coinsurance.'} Prior-date planning only.`
               : 'The office-visit row does not establish whether the plan-wide deductible applies to this CPT.',
@@ -117,12 +128,16 @@ export default function CommercialCostTables({
       insertAt < 0 ? visibleRows.length : insertAt,
       0,
       {
-        label: 'Gross coinsurance before cap',
+        label: telemedicineReference
+          ? 'Illustrative coinsurance before cap'
+          : 'Gross coinsurance before cap',
         value: money(gross),
-        detail: `${planning!.coinsurance_percent}% × ${money(planning!.allowed_cents)} clinic fee reference.`,
+        detail: `${planning!.coinsurance_percent}% × ${money(planning!.allowed_cents)} clinic fee reference${telemedicineReference ? '; the source row is telemedicine and does not establish the in-person rate' : ''}.`,
       },
       {
-        label: 'Out-of-pocket adjustment',
+        label: telemedicineReference
+          ? 'Illustrative out-of-pocket adjustment'
+          : 'Out-of-pocket adjustment',
         value: `−${money(gross)}`,
         detail: 'The individual in-network medical out-of-pocket remainder is $0 for covered care.',
       },

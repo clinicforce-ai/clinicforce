@@ -13,6 +13,7 @@ export type AetnaOfficePlanning = {
   deductible_applies_cents: number
   deductible_waived_cents: number
   gross_coinsurance_cents?: number
+  coinsurance_scope?: 'in_person_office' | 'telemedicine_reference'
   payer_response_date: string
   service_date: string
   rate_source?: string | null
