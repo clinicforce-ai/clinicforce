@@ -13,11 +13,10 @@ from app.insurance.requirements.aetna_value_plus import office_99213 as aetna_va
 from app.insurance.requirements.uhc_choice_plus import UHC_TEXAS_CHOICE_PLUS_SOURCE, _uhc_choice_plus_referral
 from app.insurance.requirements.uhc_texas import decision as uhc_tx_qmb_office_decision, UHC_TX_MA_REFERRAL_SOURCE
 from app.insurance.requirements.fep_sources import FEP_PSHB_2026_SOURCE, FEP_STANDARD_2026_SOURCE
-BCBSTX_PAYER_NAMES = {'bcbstx', 'bcbstexas', 'bluecrossblueshieldoftexas',
-                      'bluecrossandblueshieldoftexas', 'bluecrossblueshieldtx',
-                      'bluecrossblueshieldtexas'}
+from app.insurance.requirements import bcbstx_ppo
+BCBSTX_PAYER_NAMES = bcbstx_ppo.PAYER_NAMES
 # Saved estimates re-evaluate requirement decisions when a published rule changes.
-PUBLISHED_RULESET_VERSION = '2026-11-17-uhc-tx-qmb-office-v20'
+PUBLISHED_RULESET_VERSION = '2026-11-17-bcbstx-ppo-99214-v21'
 
 BLUECARD_PPO_REFERRAL_SOURCE = {
     'label': 'BCBSTX BlueCard provider manual, PPO definition',
@@ -200,17 +199,11 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
     identity = result.get('identity') or benefits.get('identity') or {}
     day = str(context.get('service_date') or '')
     payer_names = context.get('payer_names') or set()
+    bcbstx_plus_surname_warning = bcbstx_ppo.bound_plus_surname_warning(
+        identity, benefits, context, plans, codes, payer_names)
     prior_date_aetna_choice = prior_date_office(result, context, plans, codes)
     value_plus_office = aetna_value_plus_office(result, context, plans, codes)
-    same_day_bcbstx_visit = (
-        (kind == 'referral' or kind == 'authorization' and codes == {'99213'}
-         and str(context.get('pos') or '') == '11')
-        and benefits.get('service_date_matches') is None
-        and benefits.get('network_status') == 'in_network'
-        and (str(result.get('checked_at') or '')[:10] == day
-             or stedi_cpt_authorization.visit_coverage_bound(benefits, day))
-        and bool(payer_names & BCBSTX_PAYER_NAMES)
-    )
+    same_day_bcbstx_visit = bcbstx_ppo.same_day_visit(kind, result, benefits, context, codes, payer_names)
     same_day_uhc_lppo_office = (
         benefits.get('service_date_matches') is None
         and benefits.get('network_status') == 'in_network'
@@ -224,7 +217,8 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
             or benefits.get('active') is not True
             or not (stedi_cpt_authorization.visit_coverage_bound(benefits, day)
                     or same_day_bcbstx_visit or same_day_uhc_lppo_office or prior_date_aetna_choice or value_plus_office)
-            or not payer_identity_verified(identity) or not result.get('benefit_source')
+            or not (payer_identity_verified(identity) or bcbstx_plus_surname_warning)
+            or not result.get('benefit_source')
             or not context.get('member_id')):
         return None
     exact = {_key(plan).removeprefix('unitedhealthcare').removeprefix('uhc')
@@ -351,13 +345,9 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
             return rule('Not required', 'UnitedHealthcare Group Medicare Advantage PPO does not require a PCP specialist referral for this visit.', UHC_MA_PPO_REFERRAL_SOURCE)
         if kind == 'authorization' and day >= '2026-10-01':
             return rule('Verification required', 'CPT 11104/11105 is absent from the central October 2026 participating-provider list; confirm the member and any delegated authorization rule.', UHC_MA_2026_AUTH_SOURCE, check=True)
-    bcbstx_ppo_follow_up = (exact <= {'bluechoiceppo'} and in_network and office and day >= '2026-10-26'
-            and names & BCBSTX_PAYER_NAMES
-            and ('preferredprovideroptionmedical' in {_key(plan) for plan in plans}
-                 or exact == {'bluechoiceppo'})
-            and all(generic_plan_label(plan) or _key(plan) == 'bluechoiceppo' for plan in plans))
+    bcbstx_ppo_follow_up = bcbstx_ppo.office_follow_up(exact, in_network, office, day, names, plans)
     if bcbstx_ppo_follow_up and not exact and kind == 'referral' and codes <= {'99212', '99213', '99214', '99215'}:
-        product = 'preferredprovideroptionmedical'
+        product = bcbstx_ppo.member_product_key(plans, exact)
         return rule('Not required', 'BCBSTX PPO plans do not require a referral for an in-network specialist office visit.', BCBSTX_PPO_REFERRAL_SOURCE)
     aetna_plan = benefits.get('plan_details') or {}
     aetna_signature_diagnostics = (
@@ -375,11 +365,13 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
         if kind == 'referral':
             return rule('Not required', 'Aetna PPO guidance permits direct specialist office visits without a PCP referral.', AETNA_PPO_REFERRAL_SOURCE)
         return rule('Not required', 'Routine office CPT 99204 is absent from Aetna’s 2026 participating-provider precertification list.', AETNA_2026_OFFICE_PRECERT_SOURCE)
-    if (bcbstx_ppo_follow_up and kind == 'authorization' and codes == {'99213'}
+    if (bcbstx_ppo_follow_up and kind == 'authorization' and codes in ({'99213'}, {'99214'})
             and str(context.get('pos') or '') == '11'):
-        product = next(iter(exact), 'preferredprovideroptionmedical')
-        return rule('Not required', 'Clinic-confirmed BCBSTX PPO rule: CPT 99213 alone does not require prior authorization for an in-network physician-office visit.',
-                    BCBSTX_PPO_99213_AUTH_SOURCE, source_type='clinic_confirmation')
+        code = next(iter(codes))
+        product = bcbstx_ppo.member_product_key(plans, exact)
+        source = BCBSTX_PPO_99213_AUTH_SOURCE if code == '99213' else bcbstx_ppo.AUTH_SOURCE_99214
+        return rule('Not required', f'Clinic-confirmed BCBSTX PPO rule: CPT {code} alone does not require prior authorization for an in-network physician-office visit.',
+                    source, source_type='clinic_confirmation')
     if len(exact) != 1:
         return None
     if product == 'humanavaluechoiceppoh7617057' and 'humana' in names:
