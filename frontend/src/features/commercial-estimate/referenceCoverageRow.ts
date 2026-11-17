@@ -121,6 +121,23 @@ export function payerOrderRow(
       detail:
         'Match the payer-reported roles to this patient and the other active policies before collection.',
     }
+  const ordered = (result.coverage_records || [])
+    .filter((row) => row.status === 'active' && (row.order === 1 || row.order === 2))
+    .sort((a, b) => (a.order || 0) - (b.order || 0))
+  if (
+    result.collection_guidance?.basis === 'healthselect_ma_zero_office_biopsy' &&
+    ordered.length === 2 &&
+    ordered[0].order === 1 &&
+    ordered[1].order === 2 &&
+    /united\s*health/i.test(ordered[0].payer?.join(' ') || '') &&
+    /tricare\s+for\s+life/i.test(ordered[1].payer?.join(' ') || '')
+  )
+    return {
+      label: 'Payer order',
+      value: 'UHC first · TRICARE For Life second (eCW order; payer COB not verified)',
+      detail:
+        'The eCW policy sequence and general TRICARE coordination rule agree; confirm this member’s claim order before billing. The $0 check-in decision is separate from final liability.',
+    }
   return benefits?.has_secondary || result.recovery?.reason_code === 'multiple_active_policies'
     ? { label: 'Payer order', value: 'Multiple active policies · order not verified' }
     : null

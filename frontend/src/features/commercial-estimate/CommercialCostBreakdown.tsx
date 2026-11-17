@@ -39,9 +39,8 @@ export default function CommercialCostBreakdown({
   const reportedResult = result.reference_benefits ? { ...result, benefits } : result
   const { price_range: price, fee_proxy_estimate: feeProxy } = result
   const gehaZero = costState.publishedGehaZero(result)
-  const healthselectZero =
-    result.collection_guidance?.basis === 'healthselect_ma_zero_televisit' &&
-    result.collection_guidance.amount_cents === 0
+  const healthselectZero = healthselectHelpers.healthselectZero(result)
+  const healthselectOfficeBiopsy = healthselectHelpers.healthselectOfficeBiopsy(result)
   const planEnabled = !model.cash && !model.previousEstimate
   const botoxPreview = planEnabled ? result.botox_preview : null
   const combinedPlan = planEnabled ? result.combined_emg_plan : null
@@ -297,7 +296,7 @@ export default function CommercialCostBreakdown({
         : bluecardDeductible
           ? `20% reported · ${money(bluecardDeductible.coinsurance)} in this estimate`
           : gehaZero || healthselectZero
-            ? '0% reported · $0.00 for this covered office visit'
+            ? `0% reported · $0.00 for this covered ${healthselectOfficeBiopsy ? 'office visit and biopsy' : 'office visit'}`
             : combinedPlan
               ? `${combinedPlan.coinsurance_percent}% · ${money(combinedPlan.diagnostic_coinsurance_cents)}`
               : botoxPreview
@@ -357,7 +356,7 @@ export default function CommercialCostBreakdown({
       result,
       aetnaRateReference,
       !!cignaCard?.specialist_referral_note,
-      healthselectZero,
+      healthselectZero && !healthselectOfficeBiopsy,
     ),
     commercialCashAlternativeRow(price, model.cashPrice, automaticCashFallback, pricedCashLines),
   ]
@@ -378,6 +377,7 @@ export default function CommercialCostBreakdown({
                 'out_of_pocket_limit',
                 'published_geha_pshb_zero_office',
                 'healthselect_ma_zero_televisit',
+                'healthselect_ma_zero_office_biopsy',
               ].includes(result.collection_guidance?.basis || '') &&
               result.collection_guidance?.amount_cents === 0
             ? money(0)
@@ -444,7 +444,7 @@ export default function CommercialCostBreakdown({
                   : combinedPlan
                     ? `${money(combinedPlan.office_copay_cents)} office copay + ${combinedPlan.coinsurance_percent}% × ${money(combinedPlan.diagnostic_allowed_cents)} diagnostic allowance. No additional deductible or out-of-pocket reduction was applied where remaining balances were not returned.`
                     : healthselectZero
-                      ? '$0.00 copay + $0.00 deductible + 0% × UHC allowed amount = $0.00 for one covered virtual E/M visit. Final code, payer order and claim are unresolved.'
+                      ? healthselectHelpers.healthselectShareDetail(result, lineAllowedTotal)
                       : gehaZero
                         ? 'Published 2026 G.E.H.A High PSHB Medicare Advantage benefit for one covered in-network office visit. Stedi omitted member deductible and out-of-pocket rows; the UHC allowed amount remains unknown.'
                         : cignaTelevisit != null

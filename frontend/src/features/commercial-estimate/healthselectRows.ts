@@ -1,11 +1,40 @@
 import type { PrevisitEstimate } from '../../services/api/commercial-estimator'
 import type { CostBreakdownRow } from '../insurance-estimate/CostBreakdownTable'
 import { commercialRequirementRows } from './commercialRequirementStatus'
+import { money } from './format'
+
+export function healthselectOfficeBiopsy(result: PrevisitEstimate): boolean {
+  return (
+    result.collection_guidance?.basis === 'healthselect_ma_zero_office_biopsy' &&
+    result.collection_guidance.amount_cents === 0
+  )
+}
+
+export function healthselectZero(result: PrevisitEstimate): boolean {
+  return (
+    (result.collection_guidance?.basis === 'healthselect_ma_zero_televisit' ||
+      healthselectOfficeBiopsy(result)) &&
+    result.collection_guidance?.amount_cents === 0
+  )
+}
 
 export function healthselectCopayDetail(result: PrevisitEstimate): string {
+  if (healthselectOfficeBiopsy(result))
+    return result.card_check?.independent_ecw_check
+      ? 'UHC reports $0 office and surgical copays. The saved card differs from the selected eCW policy and was not used for this payer check.'
+      : 'UHC reports $0 office and surgical copays for the proposed covered visit.'
   return result.card_check?.independent_ecw_check
     ? 'Fresh UHC virtual and specialist benefit: $0 copay. The saved card differs from the selected eCW policy and was not used for this payer check.'
     : 'Fresh UHC virtual and specialist benefit: $0 copay. The card also prints $0 for a specialist.'
+}
+
+export function healthselectShareDetail(
+  result: PrevisitEstimate,
+  clinicReference: number | null,
+): string {
+  return healthselectOfficeBiopsy(result)
+    ? `$0.00 office copay + $0.00 surgical copay + $0.00 published deductible + 0% × ${clinicReference == null ? 'UHC allowance' : money(clinicReference) + ' clinic Medicare fee reference'} = $0.00 for the proposed covered office visit and biopsy. Biopsy authorization, payer order and final claim remain open.`
+    : '$0.00 copay + $0.00 deductible + 0% × UHC allowed amount = $0.00 for one covered virtual E/M visit. Final code, payer order and claim are unresolved.'
 }
 
 export function healthselectEvidenceRows(

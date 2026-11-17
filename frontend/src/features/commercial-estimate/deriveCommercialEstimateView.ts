@@ -12,6 +12,7 @@ import {
 } from './provisionalEstimateAmounts'
 import { networkEvidenceStatus } from './networkEvidenceStatus'
 import { emgOptionPresentation } from './emgOptionPresentation'
+import { healthselectZero } from './healthselectRows'
 import type { CommercialEstimateActions } from './useCommercialEstimateActions'
 export function deriveCommercialEstimateView({
   result,
@@ -236,8 +237,8 @@ export function deriveCommercialEstimateView({
       guidance?.primary_secondary_copay === true) &&
     (networkConfirmed || outOfNetworkCollection || independentOfficeCopay || refundableAdvance)
   const healthselectZeroArrival =
-    guidance?.basis === 'healthselect_ma_zero_televisit' &&
-    guidance.amount_cents === 0 &&
+    result != null &&
+    healthselectZero(result) &&
     benefits?.active === true &&
     benefits.service_date_matches !== false &&
     patientBenefitsBound &&

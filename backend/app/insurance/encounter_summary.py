@@ -115,7 +115,8 @@ def build(result: dict, review: dict | None = None) -> dict:
     if type(collect) is not int or collect < 0:
         collect = None
     clinic_zero_instruction = (collect == 0 and guidance.get('basis') in {
-        'claim_after_service', 'ecw_billing_note', 'healthselect_ma_zero_televisit'})
+        'claim_after_service', 'ecw_billing_note', 'healthselect_ma_zero_televisit',
+        'healthselect_ma_zero_office_biopsy'})
     if (checkable and integrity_error is None and collect is not None
             and guidance.get('basis') in {'patient_obligations', 'anticipated_services'}
             and collect != max(0, total - (paid or 0))):

@@ -97,4 +97,95 @@ const savedSummary = renderToStaticMarkup(React.createElement(ArrivalAmountSumma
   { result: saved, model: savedView, partialCopay: null, visibleAmount: true }))
 assert.ok(savedSummary.includes('$0.00'))
 assert.ok(!savedSummary.includes('Confirm payer order'))
-console.log('HealthSelect MA virtual-visit table shows card, formula, conditional share and $0 arrival amount')
+const biopsy = structuredClone(independent);
+biopsy.reason = "Skin Biopsy";
+biopsy.appointment_context = { place_of_service: "11" };
+biopsy.codes = [
+  { id: "office", code: "99213", units: 1 },
+  { id: "biopsy", code: "11104", units: 1 },
+];
+biopsy.selected_ids = ["office", "biopsy"];
+biopsy.service_plan.recommended_ids = biopsy.selected_ids;
+biopsy.price_range.lines = [
+  {
+    id: "office",
+    code: "99213",
+    units: 1,
+    allowed_cents: 9633,
+    allowed_basis: "medicare_fee_schedule",
+    rate_resolution: { status: "RESOLVED" },
+    benefits: {
+      active: true,
+      copay_cents: 0,
+      coinsurance_percent: "0",
+      resolved_service_type: "98",
+      has_secondary: true,
+    },
+  },
+  {
+    id: "biopsy",
+    code: "11104",
+    units: 1,
+    allowed_cents: 12195,
+    allowed_basis: "medicare_fee_schedule",
+    rate_resolution: { status: "RESOLVED" },
+    benefits: {
+      active: true,
+      copay_cents: 0,
+      coinsurance_percent: "0",
+      resolved_service_type: "2",
+      has_secondary: true,
+    },
+  },
+];
+biopsy.price_range.allowed_min_cents = 21828;
+biopsy.price_range.allowed_max_cents = 21828;
+biopsy.collection_guidance = {
+  ...biopsy.collection_guidance,
+  basis: "healthselect_ma_zero_office_biopsy",
+  reason: "No payment for the proposed covered office visit and biopsy.",
+};
+biopsy.coverage_records = [
+  { id: "first", status: "active", order: 1, payer: ["United Healthcare"] },
+  { id: "second", status: "active", order: 2, payer: ["Tricare for Life"] },
+];
+const biopsyView = deriveCommercialEstimateView({
+  result: biopsy,
+  appointments: [],
+  selectedVisit: null,
+  busy: null,
+  error: null,
+  readOnly: true,
+  recovering: false,
+});
+assert.equal(biopsyView.amountText, "$0.00");
+const biopsyTable = renderToStaticMarkup(
+  React.createElement(CommercialCostBreakdown, {
+    result: biopsy,
+    model: biopsyView,
+  }),
+);
+for (const fragment of [
+  "$0.00",
+  "clinic Medicare fee reference",
+  "11104",
+  "office visit and biopsy",
+  "TRICARE For Life second",
+]) {
+  assert.ok(
+    biopsyTable.includes(fragment),
+    `Missing biopsy table text: ${fragment}`,
+  );
+}
+assert.ok(!biopsyTable.includes("one covered virtual E/M visit"));
+const biopsyArrival = renderToStaticMarkup(
+  React.createElement(ArrivalAmountSummary, {
+    result: biopsy,
+    model: biopsyView,
+    partialCopay: null,
+    visibleAmount: true,
+  }),
+);
+assert.ok(biopsyArrival.includes("$0.00"));
+assert.ok(!biopsyArrival.includes("Confirm payer order"));
+console.log('HealthSelect MA virtual and office-biopsy table shows $0 arrival amount')
