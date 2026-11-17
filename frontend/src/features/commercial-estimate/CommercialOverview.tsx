@@ -15,6 +15,8 @@ import { pendingBluecardOfficeCopay } from './collectionAtVisitRow'
 import PublishedPlanBenefit from './PublishedPlanBenefit'
 import UhcMedicarePpoBenefitTable from './UhcMedicarePpoBenefitTable'
 import CommercialCostBreakdown from './CommercialCostBreakdown'
+import { PaidClaimAmount, PaidClaimTable } from './PaidClaimCollection'
+import type { PaidClaimFinancialState } from './usePaidClaimFinancials'
 import CommercialCashQuoteForm from './CommercialCashQuoteForm'
 import { AvailityArrivalAmount, AvailityVisitTable } from './AvailityVisitPlanning'
 import { availityVisitPlanning } from './availityVisitPlanning'
@@ -27,11 +29,14 @@ export default function CommercialOverview({
   model,
   result,
   featured = false,
+  financials,
 }: {
   model: CommercialEstimateModel
   result: NonNullable<CommercialEstimateModel['result']>
   featured?: boolean
+  financials?: PaidClaimFinancialState
 }) {
+  const paidClaim = financials?.data?.claim_collection
   const {
     readOnly,
     busy,
@@ -184,9 +189,11 @@ export default function CommercialOverview({
       )}
       <div className="overview-amounts">
         <div
-          className={`arrival-total${!availity && !visibleAmount && !calculating && !tooEarly ? ' is-blocked' : ''}`}
+          className={`arrival-total${!paidClaim && !availity && !visibleAmount && !calculating && !tooEarly ? ' is-blocked' : ''}`}
         >
-          {availity ? (
+          {paidClaim ? (
+            <PaidClaimAmount claim={paidClaim} />
+          ) : availity ? (
             <AvailityArrivalAmount result={result} />
           ) : (
             <ArrivalAmountSummary
@@ -222,7 +229,8 @@ export default function CommercialOverview({
             patientBenefitsBound &&
             !result.benefits.historical_only &&
             !result.benefits.source_errors?.length &&
-            payerReportedPartialCents == null && (
+            payerReportedPartialCents == null &&
+            !paidClaim && (
               <details className="financial-breakdown" open>
                 <summary>Payer response source rows</summary>
                 <PayerReportedPlanFigures result={result} />
@@ -245,7 +253,7 @@ export default function CommercialOverview({
               Retry CPT suggestion
             </button>
           )}
-          {!amount && <TemporaryRateReference result={result} />}
+          {!paidClaim && !amount && <TemporaryRateReference result={result} />}
           {cash && !amount && !!result.cash_schedule?.packages.length && !readOnly && (
             <button
               className="cash-package-shortcut"
@@ -272,7 +280,7 @@ export default function CommercialOverview({
               <blockquote>{guidance.billing_note.text}</blockquote>
             </details>
           )}
-          {!cash && !availity && showAssumptions && (
+          {!cash && !availity && !paidClaim && showAssumptions && (
             <details className="summary-assumptions">
               <summary>{amount ? 'Assumptions used' : 'Patient steps'}</summary>
               {amount && guidance?.basis === 'claim_after_service' && (
@@ -343,12 +351,14 @@ export default function CommercialOverview({
           )}
         </div>
         <div className="visit-cost-table">
-          {availity ? (
+          {paidClaim ? (
+            <PaidClaimTable claim={paidClaim} result={result} />
+          ) : availity ? (
             <AvailityVisitTable model={model} result={result} />
           ) : (
             <CommercialCostBreakdown model={model} result={result} />
           )}
-          {!availity && !cash && !calculating && model.summaryExplanation && (
+          {!paidClaim && !availity && !cash && !calculating && model.summaryExplanation && (
             <details className="financial-breakdown">
               <summary>
                 {combinedPlan
@@ -392,30 +402,42 @@ export default function CommercialOverview({
         </div>
       </div>
       <div className="visit-snapshots" aria-label="Coverage summary">
-        <div className={availity ? 'is-reported' : coverageTone}>
+        <div className={paidClaim || availity ? 'is-reported' : coverageTone}>
           <ShieldCheck size={20} aria-hidden="true" />
           <span>
-            Coverage<strong>{availity ? 'Active for visit date' : policyStatus}</strong>
+            Coverage
+            <strong>{paidClaim || availity ? 'Active for visit date' : policyStatus}</strong>
             <small>
-              {availity
-                ? 'Availity Essentials eligibility PDF · ' + visitDate(availity.service_date)
-                : result.reference_only && result.reference_benefits?.active === true
-                  ? result.reference_benefits.service_date_matches === false
-                    ? `Stedi requested ${result.service_date ? visitDate(result.service_date) : 'visit date'}; Aetna returned service date ${result.reference_benefits.returned_service_dates?.start ? visitDate(result.reference_benefits.returned_service_dates.start) : 'unavailable'} · visit coverage unverified`
-                    : 'Stedi payer reference · appointment-date applicability unverified'
-                  : result?.benefit_source
-                    ? `Checked via ${result.benefit_source}`
-                    : result?.benefits?.active
-                      ? 'Payer source not recorded'
-                      : 'Payer check needed'}
+              {paidClaim
+                ? 'Fresh Aetna eligibility matched the patient and visit date.'
+                : availity
+                  ? 'Availity Essentials eligibility PDF · ' + visitDate(availity.service_date)
+                  : result.reference_only && result.reference_benefits?.active === true
+                    ? result.reference_benefits.service_date_matches === false
+                      ? `Stedi requested ${result.service_date ? visitDate(result.service_date) : 'visit date'}; Aetna returned service date ${result.reference_benefits.returned_service_dates?.start ? visitDate(result.reference_benefits.returned_service_dates.start) : 'unavailable'} · visit coverage unverified`
+                      : 'Stedi payer reference · appointment-date applicability unverified'
+                    : result?.benefit_source
+                      ? `Checked via ${result.benefit_source}`
+                      : result?.benefits?.active
+                        ? 'Payer source not recorded'
+                        : 'Payer check needed'}
             </small>
           </span>
         </div>
-        <div className={availity ? 'is-reported' : networkTone}>
+        <div className={paidClaim || availity ? 'is-reported' : networkTone}>
           <Network size={20} aria-hidden="true" />
           <span>
-            Network<strong>{availity ? 'In network per Availity' : networkLabel}</strong>
-            {availity ? (
+            Network
+            <strong>
+              {paidClaim
+                ? 'In network per Aetna'
+                : availity
+                  ? 'In network per Availity'
+                  : networkLabel}
+            </strong>
+            {paidClaim ? (
+              <small>Aetna confirmed the rendering provider for this patient and visit date.</small>
+            ) : availity ? (
               <small>Entered requesting provider participates in this patient’s network.</small>
             ) : networkWarnings.length ? (
               <small className="network-mismatch-warning" role="note">
@@ -424,13 +446,13 @@ export default function CommercialOverview({
             ) : (
               networkExplanation && <small>{networkExplanation}</small>
             )}
-            {!availity && result?.network_evidence?.product_source && (
+            {!paidClaim && !availity && result?.network_evidence?.product_source && (
               <small>Contract plan lookup: {result.network_evidence.product_source}</small>
             )}
-            {!availity && contractCandidate && !result?.network_evidence?.reason && (
+            {!paidClaim && !availity && contractCandidate && !result?.network_evidence?.reason && (
               <small>{contractCandidate} contract could not be matched to this visit</small>
             )}
-            {!availity && contractUrl && (
+            {!paidClaim && !availity && contractUrl && (
               <small>
                 <a href={contractUrl} target="_blank" rel="noopener noreferrer">
                   {contractEvidence?.related_document_id
@@ -441,7 +463,8 @@ export default function CommercialOverview({
             )}
           </span>
         </div>
-        {!availity &&
+        {!paidClaim &&
+          !availity &&
           !showSelectedRequirements &&
           !requirementIssue &&
           !(result.reference_only && result.reference_benefits?.active === true) && (

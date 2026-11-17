@@ -169,6 +169,10 @@ async def owned_saved_check(intake_id: str, case_id: str, request: Request):
 
 @router.get('/intakes/{intake_id}/checks/{case_id}/financials')
 async def saved_insurance_check_financials(intake_id: str, case_id: str, request: Request):
+    """Read a staff-owned visit's 835 lines and guarded paid-claim estimate.
+
+    A 277-only amount is inferred; confirm the EOB and patient payments.
+    """
     from app.api.routers.commercial_estimator import saved_visit_financials
     actor, _, case = await owned_saved_check(intake_id, case_id, request)
     return JSONResponse(await saved_visit_financials(case, actor['practice_id']), headers=NO_STORE)

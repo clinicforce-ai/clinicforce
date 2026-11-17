@@ -2,15 +2,18 @@ import { Trash2 } from 'lucide-react'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { FinancialHistory } from '../insurance-history/FinancialHistory'
 import { visitDate, visitTime } from './format'
+import type { PaidClaimFinancialState } from './usePaidClaimFinancials'
 
 export default function CommercialSourcesDetail({
   model,
   result,
   featured = false,
+  financials,
 }: {
   model: CommercialEstimateModel
   result: NonNullable<CommercialEstimateModel['result']>
   featured?: boolean
+  financials?: PaidClaimFinancialState
 }) {
   const {
     intakeId,
@@ -286,7 +289,11 @@ export default function CommercialSourcesDetail({
           {!readOnly && panel === 'sources' && result.check_id && (
             <details>
               <summary>Processed claims</summary>
-              <FinancialHistory key={result.check_id} checkId={result.check_id} />
+              <FinancialHistory
+                key={result.check_id}
+                checkId={result.check_id}
+                shared={financials}
+              />
             </details>
           )}
           {!readOnly && intakeId && result.check_id && (

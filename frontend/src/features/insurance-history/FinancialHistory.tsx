@@ -3,8 +3,17 @@ import { BadgeDollarSign, RefreshCw } from 'lucide-react'
 import { getStaffCheckFinancials } from '../../services/api/staff-history'
 import { commercialFinancials, type VisitFinancials } from '../../services/api/commercial-estimator'
 import { money, visitDate, visitTime } from '../commercial-estimate/format'
+import type { PaidClaimFinancialState } from '../commercial-estimate/usePaidClaimFinancials'
 
-export function FinancialHistory({ checkId, intakeId }: { checkId: string; intakeId?: string }) {
+export function FinancialHistory({
+  checkId,
+  intakeId,
+  shared,
+}: {
+  checkId: string
+  intakeId?: string
+  shared?: PaidClaimFinancialState
+}) {
   const [data, setData] = useState<VisitFinancials | null>(null)
   const [busy, setBusy] = useState(true)
   const [error, setError] = useState('')
@@ -24,6 +33,7 @@ export function FinancialHistory({ checkId, intakeId }: { checkId: string; intak
     }
   }, [read])
   useEffect(() => {
+    if (shared) return
     let active = true
     read()
       .then((value) => {
@@ -38,7 +48,10 @@ export function FinancialHistory({ checkId, intakeId }: { checkId: string; intak
     return () => {
       active = false
     }
-  }, [read])
+  }, [read, shared])
+  const shown = shared?.data ?? (shared ? null : data)
+  const loading = shared?.busy ?? busy
+  const failure = shared?.error ?? error
   return (
     <section className="financial-history">
       <div className="visit-section-heading">
@@ -47,7 +60,11 @@ export function FinancialHistory({ checkId, intakeId }: { checkId: string; intak
             <BadgeDollarSign size={20} aria-hidden="true" /> Processed claims
           </h3>
         </div>
-        <button className="visit-text-button" disabled={busy} onClick={() => void load()}>
+        <button
+          className="visit-text-button"
+          disabled={loading}
+          onClick={() => void (shared ? shared.reload() : load())}
+        >
           <RefreshCw size={16} /> Refresh
         </button>
       </div>
@@ -55,12 +72,12 @@ export function FinancialHistory({ checkId, intakeId }: { checkId: string; intak
         Actual amounts from the insurer’s processed claims. They appear when the connected payer
         feed receives the receipt; timing varies.
       </p>
-      {busy ? (
+      {loading ? (
         <p role="status">Reading insurance receipts…</p>
       ) : (
-        <p role={error ? 'alert' : undefined}>{error || data?.message}</p>
+        <p role={failure ? 'alert' : undefined}>{failure || shown?.message}</p>
       )}
-      {!!data?.lines.length && (
+      {!!shown?.lines.length && (
         <div className="clinical-table-wrap">
           <table className="clinical-service-table">
             <thead>
@@ -72,7 +89,7 @@ export function FinancialHistory({ checkId, intakeId }: { checkId: string; intak
               </tr>
             </thead>
             <tbody>
-              {data.lines.map((row) => (
+              {shown.lines.map((row) => (
                 <tr key={`${row.transaction_id}:${row.claim_reference}:${row.line_index}`}>
                   <th scope="row">
                     CPT {row.code}
@@ -114,10 +131,10 @@ export function FinancialHistory({ checkId, intakeId }: { checkId: string; intak
           </table>
         </div>
       )}
-      {data && (
+      {shown && (
         <small>
-          {data.source} · Checked {visitDate(data.checked_at)} {visitTime(data.checked_at)}
-          {data.partial ? ' · Partial history' : ''}. These records do not show payments collected
+          {shown.source} · Checked {visitDate(shown.checked_at)} {visitTime(shown.checked_at)}
+          {shown.partial ? ' · Partial history' : ''}. These records do not show payments collected
           from the patient.
         </small>
       )}

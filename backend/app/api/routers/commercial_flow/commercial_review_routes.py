@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from app.api.routers import commercial_estimator as _api
 from app.insurance import botox_review, cpt_rules
+from app.api.routers.commercial_flow.commercial_financials import saved_visit_financials
 from app.api.routers.commercial_flow.commercial_previsit_requirements import check_cpt_authorization
 from app.api.routers.commercial_flow.commercial_previsit_service_scope import cash_preview_selection
 
@@ -388,23 +389,16 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
 
 @_api.router.get('/cases/{case_id}/financials')
 async def previsit_financials(case_id: str, request: _api.Request) -> dict:
+    """Read matching 835 lines and a guarded Aetna paid-office claim estimate.
+
+    A paid 277 without an 835 supplies an inferred amount, not adjudicated
+    patient responsibility. Confirm the EOB and recorded payments before charging.
+    """
     session = await _api._session(request)
     case = await _api.run_in_threadpool(_api.store.get_case, case_id, session['patient_id'], session['share_manifest_id'], **_api._scope(session))
     if not case or case.get('source_mode') != 'commercial_previsit' or not case.get('previsit_context'):
         raise _api.HTTPException(404, 'Saved visit estimate not found.')
     return _api._response(await _api.saved_visit_financials(case, session['practice_id']))
-
-
-async def saved_visit_financials(case: dict, practice_id: str) -> dict:
-    context = case['previsit_context']
-    inputs, source = context['inputs'], context['source']
-    billing_npi = (source.get('billing_provider') or {}).get('npi')
-    networks = await _api.run_in_threadpool(_api.commercial_store.list_networks, practice_id)
-    tins = {row['tin'] for row in networks if row.get('status') == 'verified' and row.get('billing_npi') == billing_npi}
-    identity = {**_api._coverage_snapshot(inputs, source), 'billing_npi': billing_npi,
-                'tin': next(iter(tins)) if len(tins) == 1 else None}
-    identity['claim_identifiers'] = await _api.ecw_backend.fetch_claim_identifiers(source)
-    return await _api.stedi_financial.fetch_patient_financials(practice_id, identity)
 
 
 @_api.router.get("/history")
