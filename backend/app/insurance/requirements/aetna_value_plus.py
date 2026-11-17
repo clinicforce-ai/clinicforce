@@ -1,16 +1,19 @@
 """Scope the 2026 Aetna Value Plus PPO routine office requirement rule."""
 from datetime import date
 
-from app.insurance.identity import generic_plan_label
+from app.insurance.identity import generic_plan_label, patient_benefits_bound
 from app.insurance.requirements.evidence import _key
 
 
 def office_99213(result: dict, context: dict, plans: list[str], codes: set[str]) -> bool:
     benefits = result.get('benefits') or {}
     plan = benefits.get('plan_details') or ((result.get('plan_details') or {}).get('stedi') or {})
+    stedi_plan = ((result.get('plan_details') or {}).get('stedi') or {})
+    identity = result.get('identity') or benefits.get('identity') or {}
     selected = result.get('codes') or []
-    exact_plans = {_key(plan) for plan in plans if plan and not generic_plan_label(plan)}
-    if (context.get('payer_names') != {'aetna'}
+    plan_names = (stedi_plan.get('names') or plans) if patient_benefits_bound(identity) else plans
+    exact_plans = {_key(name) for name in plan_names if name and not generic_plan_label(name)}
+    if ('aetna' not in (context.get('payer_names') or set())
             or exact_plans != {'aetnamedicarevalueplusppo'}
             or plan.get('group_number') != '000003-TX'
             or plan.get('plan_number') != '000003-TX000083'

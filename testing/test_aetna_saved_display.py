@@ -25,6 +25,7 @@ def _case():
         'rendering_provider': {'npi': '1234567890'},
     }
     source = {'_patient_id': 'synthetic-patient', 'coverage_id': 'synthetic-policy',
+              'plan': 'CI',
               'active_coverages': 1, 'subscriber_evidence': {'patient_linked': True}}
     payload = {'payerId': '60054', 'subscriber': {'memberId': 'SYN123',
         'dateOfBirth': '1950-01-19', 'name': {'person': {
@@ -58,7 +59,8 @@ def _case():
     case = {'previsit': {'request_state': 'complete'},
             'previsit_raw_object_key': 'synthetic-protected-object',
             'previsit_raw_sha256': hashlib.sha256(raw).hexdigest(),
-            'previsit_context': {'inputs': inputs, 'source': source, 'result': result}}
+            'previsit_context': {'payer_id': '60054', 'inputs': inputs,
+                                 'source': source, 'result': result}}
     return case, raw
 
 
@@ -99,11 +101,11 @@ def test_saved_value_plus_requirement_is_conditional_when_provider_tier_unknown(
     result['identity'] = {**result['identity'], 'status': 'warning',
                           'reconciliation_rule': 'aetna_payer_demographics'}
     result['benefits']['identity'] = result['identity']
-    context = {'service_date': '2026-11-17', 'payer_names': {'aetna'}, 'pos': '11',
+    context = {'service_date': '2026-11-17', 'payer_names': {'aetna', '60054'}, 'pos': '11',
                'member_id': 'SYN123'}
     for kind in ('referral', 'authorization'):
         decision = _published_rule(kind, result, context,
-                                   ['Aetna Medicare Value Plus (PPO)'], {'99213'})
+                                   ['CI', 'Aetna Legacy (PPO)', 'Aetna Medicare Value Plus (PPO)'], {'99213'})
         assert decision['status'] == 'Not required'
         assert decision['member_specific_check'] is True
 
@@ -116,7 +118,9 @@ def test_saved_previsit_read_reprojects_patient_copay_and_plan_share(monkeypatch
     result['requirement_sources'] = []
     result['published_requirements_version'] = 'stale'
     monkeypatch.setattr(api.object_store, 'get_object_bytes', lambda *_: raw)
-    monkeypatch.setattr(status._api.commercial_store, 'list_connections', lambda *_: [])
+    monkeypatch.setattr(status._api.commercial_store, 'list_connections', lambda *_: [
+        {'id': 'synthetic-aetna-route', 'display_name': 'Aetna',
+         'stedi_payer_id': '60054', 'aliases': ['Aetna Medicare'], 'rules': {}}])
     monkeypatch.setattr(status._api.commercial_store, 'list_cpt_requirements', lambda *_: [])
     monkeypatch.setattr(status._api.staff_store, 'list_library', lambda *_: [])
     for name in ('_recheck_saved_clinic_pricing', 'recheck_saved_network_evidence',
