@@ -376,12 +376,12 @@ export function deriveCommercialEstimateView({
                 : guidance?.collection_rule?.mode === 'blue_advantage_hmo_oop_deposit' && amount
                   ? 'Amount to collect at visit'
                   : !amount && !cash
-                  ? 'Collection decision needed'
-                  : ['bcbstx_refundable_advance', 'cigna_refundable_office_copay'].includes(
-                        guidance?.basis || '',
-                      )
-                    ? 'Refundable advance to collect now'
-                    : 'Amount to collect now'
+                    ? 'Collection decision needed'
+                    : ['bcbstx_refundable_advance', 'cigna_refundable_office_copay'].includes(
+                          guidance?.basis || '',
+                        )
+                      ? 'Refundable advance to collect now'
+                      : 'Amount to collect now'
   const amountParts = result?.encounter_summary?.components
   const officeDeductible = guidance?.services.find(
     (service) => service.code === officeCopayLine?.code,
