@@ -70,11 +70,27 @@ def uhc_tx_qmb_product(plan: dict, service_date: str, patient_bound: bool) -> bo
             <= UHC_TX_QMB_H4514_024_2026['effective_to'])
 
 
+def uhc_qmb_patient_applies(benefits: dict, service_date: str, patient_bound: bool) -> bool:
+    """Accept an undated active 271 for this exact QMB product when identity is bound."""
+    if patient_bound:
+        return True
+    coverage = benefits.get('coverage_evidence') or {}
+    return (bool(service_date) and patient_benefits_bound(benefits.get('identity'))
+            and benefits.get('active') is True
+            and benefits.get('service_date_matches') is None
+            and coverage.get('status') == 'ACTIVE'
+            and not coverage.get('start') and not coverage.get('end')
+            and not benefits.get('coverage_dates_invalid')
+            and not benefits.get('coverage_status_conflict')
+            and not benefits.get('source_errors'))
+
+
 def apply_uhc_tx_qmb_terms(benefits: dict, plan: dict, service_date: str,
                            patient_bound: bool) -> bool:
     if benefits.get('published_plan_rule') == UHC_TX_QMB_H4514_024_2026:
         benefits.pop('published_plan_rule')
-    if (not uhc_tx_qmb_product(plan, service_date, patient_bound)
+    if (not uhc_tx_qmb_product(plan, service_date,
+                               uhc_qmb_patient_applies(benefits, service_date, patient_bound))
             or benefits.get('active') is not True
             or benefits.get('service_date_matches') is False):
         return False

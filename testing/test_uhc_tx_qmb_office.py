@@ -69,8 +69,31 @@ def test_saved_projection_refreshes_match_and_rejects_changed_product():
     assert api._previsit_result(changed)['collection_guidance']['basis'] != 'published_uhc_tx_qmb_office'
 
 
+def test_saved_undated_active_qmb_response_collects_zero_only_for_bound_product():
+    result = case()
+    result['benefits'].update(service_date_matches=None, coverage_evidence={
+        'status': 'ACTIVE', 'start': None, 'end': None}, returned_service_dates={},
+        coverage_dates_invalid=False, coverage_status_conflict=False)
+    result['benefits'].pop('published_plan_rule')
+    saved = {'previsit_context': {'result': result, 'source': {},
+                                  'inputs': {'service_date': DAY}, 'payer_id': ''}}
+    projected = api._previsit_result(saved)
+    assert projected['collection_guidance']['amount_cents'] == 0
+    assert projected['collection_guidance']['basis'] == 'published_uhc_tx_qmb_office'
+    for changes in (
+        {'coverage_evidence': {'status': 'ACTIVE', 'start': '2026-11-19', 'end': None}},
+        {'coverage_evidence': {'status': 'UNKNOWN', 'start': None, 'end': None}},
+        {'service_date_matches': False}, {'source_errors': [{'kind': 'payer_error'}]},
+    ):
+        changed = deepcopy(saved)
+        changed['previsit_context']['result']['benefits'].update(changes)
+        assert api._previsit_result(changed)['collection_guidance']['basis'] != 'published_uhc_tx_qmb_office'
+
+
 def test_older_saved_response_restores_identifiers_only_from_its_verified_raw(monkeypatch):
     result = case()
+    result['benefits'].update(service_date_matches=None, coverage_evidence={
+        'status': 'ACTIVE', 'start': None, 'end': None})
     result['plan_details']['stedi'].pop('plan_number')
     result['plan_details']['stedi'].pop('group_number')
     result['benefits'].pop('published_plan_rule')

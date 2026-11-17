@@ -78,7 +78,8 @@ def restore_saved_uhc_qmb_product(result: dict, case: dict) -> None:
     service_date = str(result.get('service_date') or '')
     if (plan.get('names') != ['TX UHC DUAL COMPLETE HMOPOS CO QMB H4514-024-000 W']
             or (plan.get('plan_number') and plan.get('group_number'))
-            or not patient_plan_applies(benefits, result.get('identity'), service_date)
+            or not published_plan_benefits.uhc_qmb_patient_applies(
+                benefits, service_date, patient_plan_applies(benefits, result.get('identity'), service_date))
             or not case.get('previsit_raw_object_key') or not case.get('previsit_raw_sha256')):
         return
     try:
