@@ -71,6 +71,42 @@ def restore_saved_fep_standard_product(result: dict, case: dict) -> None:
         patient_plan_applies(benefits, identity, service_date))
 
 
+def restore_saved_uhc_qmb_product(result: dict, case: dict) -> None:
+    """Reparse a hash-verified saved 271 whose older parser missed status IDs."""
+    plan = ((result.get('plan_details') or {}).get('stedi') or {})
+    benefits = result.get('benefits') or {}
+    service_date = str(result.get('service_date') or '')
+    if (plan.get('names') != ['TX UHC DUAL COMPLETE HMOPOS CO QMB H4514-024-000 W']
+            or (plan.get('plan_number') and plan.get('group_number'))
+            or not patient_plan_applies(benefits, result.get('identity'), service_date)
+            or not case.get('previsit_raw_object_key') or not case.get('previsit_raw_sha256')):
+        return
+    try:
+        raw = _api.object_store.get_object_bytes(case['previsit_raw_object_key'])
+        if _api.hashlib.sha256(raw).hexdigest() != case['previsit_raw_sha256']:
+            return
+        payload = _api.json.loads(raw)
+        if str(payload.get('payerId') or '') != '87726':
+            return
+        identified = _api.commercial.plan_details(payload)
+    except Exception:
+        return
+    if not published_plan_benefits.uhc_tx_qmb_product(identified, service_date, True):
+        return
+    result['plan_details']['stedi'] = {**plan, **identified}
+    benefits['plan_details'] = {**(benefits.get('plan_details') or {}), **identified}
+
+
+def restore_saved_published_product(result: dict, case: dict) -> None:
+    restore_saved_uhc_qmb_product(result, case)
+    benefits = result.get('benefits') or {}
+    day = str(result.get('service_date') or '')
+    published_plan_benefits.apply_uhc_tx_qmb_terms(benefits,
+        ((result.get('plan_details') or {}).get('stedi') or {}), day,
+        patient_plan_applies(benefits, result.get('identity'), day))
+    restore_saved_fep_standard_product(result, case)
+
+
 def saved_fep_standard_office_needs_reprice(result: dict) -> bool:
     plan = ((result.get('plan_details') or {}).get('stedi') or {})
     if plan.get('identified_product') != 'FEP Blue Standard FEHB':

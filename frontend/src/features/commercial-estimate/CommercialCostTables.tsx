@@ -3,6 +3,7 @@ import CostBreakdownTable, { type CostBreakdownRow } from '../insurance-estimate
 import { feeProxyFormula } from './coinsuranceFormula'
 import { money } from './format'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
+import { uhcQmbOfficeRows } from './uhcQmbOfficeTable'
 
 export default function CommercialCostTables({
   result,
@@ -123,8 +124,17 @@ export default function CommercialCostTables({
           />
         )}
       <CostBreakdownTable
-        rows={visibleRows}
-        open={(model.supportedAmount || !!planning) && !cash}
+        rows={
+          !cash && !model.previousEstimate
+            ? uhcQmbOfficeRows(result, visibleRows) || visibleRows
+            : visibleRows
+        }
+        open={
+          (model.supportedAmount ||
+            !!planning ||
+            result.collection_guidance?.basis === 'published_uhc_tx_qmb_office') &&
+          !cash
+        }
       />
     </>
   )

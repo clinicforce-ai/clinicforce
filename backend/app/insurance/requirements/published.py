@@ -11,12 +11,14 @@ from app.insurance.requirements.evidence import _key
 from app.insurance.requirements.aetna_choice_pos_ii import prior_date_office
 from app.insurance.requirements.aetna_value_plus import office_99213 as aetna_value_plus_office
 from app.insurance.requirements.uhc_choice_plus import UHC_TEXAS_CHOICE_PLUS_SOURCE, _uhc_choice_plus_referral
+from app.insurance.requirements.uhc_texas import decision as uhc_tx_qmb_office_decision, UHC_TX_MA_REFERRAL_SOURCE
 from app.insurance.requirements.fep_sources import FEP_PSHB_2026_SOURCE, FEP_STANDARD_2026_SOURCE
 BCBSTX_PAYER_NAMES = {'bcbstx', 'bcbstexas', 'bluecrossblueshieldoftexas',
                       'bluecrossandblueshieldoftexas', 'bluecrossblueshieldtx',
                       'bluecrossblueshieldtexas'}
 # Saved estimates re-evaluate requirement decisions when a published rule changes.
-PUBLISHED_RULESET_VERSION = '2026-11-16-aetna-value-plus-office-v19'
+PUBLISHED_RULESET_VERSION = '2026-11-17-uhc-tx-qmb-office-v20'
+
 BLUECARD_PPO_REFERRAL_SOURCE = {
     'label': 'BCBSTX BlueCard provider manual, PPO definition',
     'url': 'https://www.bcbstx.com/content/dam/hcsc/docs/provider/tx/claims/bluecard/bluecard-program-prov-manual.pdf',
@@ -120,13 +122,6 @@ BCBSTX_PPO_99213_AUTH_SOURCE = {
 PRUDENT_BUYER_99203_SOURCE = {
     'label': 'Clinic-confirmed Prudent Buyer PPO CPT 99203 office requirement', 'source_version': 'Clinic confirmation received 2026-11-06',
     'verified_at': '2026-11-06', 'effective_from': '2026-11-06', 'effective_to': '2026-12-31'}
-UHC_TX_MA_REFERRAL_SOURCE = {
-    'label': 'UnitedHealthcare Texas Medicare Advantage PPO specialist referrals',
-    'url': 'https://www.uhcprovider.com/en/health-plans-by-state/texas-health-plans/tx-medicare-plans/tx-med-adv.html',
-    'source_version': 'Texas MA plan description, checked 2026-10-21',
-    'verified_at': '2026-10-21', 'effective_from': '2026-01-01',
-    'effective_to': '2026-12-31',
-}
 CIGNA_2026_PA_SOURCE = {
     'label': 'Cigna Master Precertification List, J0585, 64612 and 64615',
     'url': 'https://www.cigna.com/static/www-cigna-com/docs/master-precertification-list-for-providers.pdf',
@@ -255,6 +250,9 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
                                      'location_id': context.get('location_id'),
                                      'place_of_service': context.get('pos'),
                                      'service_date': day}}
+    qmb_office = uhc_tx_qmb_office_decision(kind, benefits, codes, context)
+    if qmb_office:
+        return rule(*qmb_office, check=True)
     if prior_date_aetna_choice:
         if kind == 'referral':
             return rule('Not required', 'Choice POS II permits direct specialist office visits under the published product rule. Confirm the member terms and visit-date coverage.', AETNA_CHOICE_POS_II_SOURCE, check=True)

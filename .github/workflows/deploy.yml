@@ -91,6 +91,7 @@ jobs:
           node ../testing/test_ecw_visit_dates.mjs
           node testing/member-benefits-ui.mjs
           node testing/uhc-hmopos-pending-ui.mjs
+          node testing/uhc-qmb-office-ui.mjs
           node testing/humana-specialist-headline-ui.mjs
           node testing/uhc-saved-projection-ui.mjs
           node testing/umr-choice-plus-collection-ui.mjs

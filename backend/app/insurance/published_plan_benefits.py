@@ -52,6 +52,35 @@ GEHA_HIGH_PSHB_MA_16615_2026 = {
     'in_network_oop_max_cents': 0,
 }
 
+UHC_TX_QMB_H4514_024_2026 = {
+    'label': '2026 UnitedHealthcare Dual Complete H4514-024-000 QMB Summary of Benefits',
+    'url': 'https://www.uhc.com/communityplan/alphadog/CSTX26HP0332888_000',
+    'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
+    'office_specialist_copay_cents': 0,
+    'qmb_cost_sharing_protected': True,
+}
+
+
+def uhc_tx_qmb_product(plan: dict, service_date: str, patient_bound: bool) -> bool:
+    return (patient_bound
+            and plan.get('names') == ['TX UHC DUAL COMPLETE HMOPOS CO QMB H4514-024-000 W']
+            and plan.get('plan_number') == 'TXSNPQ7W'
+            and plan.get('group_number') == 'TXDSNP'
+            and UHC_TX_QMB_H4514_024_2026['effective_from'] <= service_date
+            <= UHC_TX_QMB_H4514_024_2026['effective_to'])
+
+
+def apply_uhc_tx_qmb_terms(benefits: dict, plan: dict, service_date: str,
+                           patient_bound: bool) -> bool:
+    if benefits.get('published_plan_rule') == UHC_TX_QMB_H4514_024_2026:
+        benefits.pop('published_plan_rule')
+    if (not uhc_tx_qmb_product(plan, service_date, patient_bound)
+            or benefits.get('active') is not True
+            or benefits.get('service_date_matches') is False):
+        return False
+    benefits['published_plan_rule'] = UHC_TX_QMB_H4514_024_2026
+    return True
+
 HEALTHSELECT_MA_13546_2026 = {
     'label': 'ERS HealthSelect Medicare Advantage plan benefits',
     'url': 'https://ers.texas.gov/retirees/health-benefits/healthselect-medicare-advantage',
@@ -121,6 +150,8 @@ def apply_saved_group_ma_plan_terms(result: dict) -> None:
     benefits = result.get('benefits') or {}
     service_date = str(result.get('service_date') or '')
     plan = ((result.get('plan_details') or {}).get('stedi') or {})
+    apply_uhc_tx_qmb_terms(benefits, plan, service_date,
+                           patient_plan_applies(benefits, result.get('identity'), service_date))
     apply_geha_plan_terms(benefits, plan, service_date,
                           patient_plan_applies(benefits, result.get('identity'), service_date))
     apply_healthselect_plan_terms(benefits, plan, service_date,
@@ -174,6 +205,8 @@ def aetna_signature_diagnostic(benefits: dict, service_date: str, code: str,
 
 def apply_plan_terms(benefits: dict, plan: dict, service_date: str, patient_bound: bool) -> None:
     """Attach a dated published plan term only to an exact, patient-bound product."""
+    if apply_uhc_tx_qmb_terms(benefits, plan, service_date, patient_bound):
+        return
     if apply_geha_plan_terms(benefits, plan, service_date, patient_bound):
         return
     if apply_healthselect_plan_terms(benefits, plan, service_date, patient_bound):

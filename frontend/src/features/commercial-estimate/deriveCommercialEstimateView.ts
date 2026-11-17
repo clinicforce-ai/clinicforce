@@ -252,6 +252,7 @@ export function deriveCommercialEstimateView({
     result?.encounter_summary?.collect_today_cents === 0
   const clinicInstructionAmount =
     healthselectZeroArrival ||
+    (guidance?.basis === 'published_uhc_tx_qmb_office' && guidance.amount_cents === 0) ||
     guidance?.basis === 'claim_after_service' ||
     (guidance?.basis === 'ecw_billing_note' &&
       (guidance.amount_cents === 0 || benefits?.active !== true))
@@ -265,7 +266,9 @@ export function deriveCommercialEstimateView({
     (!requirementIssue || clinicInstructionAmount) &&
     (cash || clinicInstructionAmount || currentPayerAmount) &&
     ((result?.encounter_summary?.collect_today_cents == null &&
-      guidance?.basis === 'published_geha_pshb_zero_office' &&
+      ['published_geha_pshb_zero_office', 'published_uhc_tx_qmb_office'].includes(
+        guidance?.basis || '',
+      ) &&
       guidance.amount_cents === 0) ||
       result?.encounter_summary?.collect_today_cents === undefined ||
       result.encounter_summary.collect_today_cents === guidance.amount_cents)

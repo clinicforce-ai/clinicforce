@@ -186,6 +186,16 @@ def plan_details(payload: dict) -> dict:
                                if isinstance(plan, dict) and plan.get('name')] + [name for name in names if name]))
     supplementary = [name for name in names if coverage_kind({'planCoverage': name}, payload) == 'supplementary']
     names = [name for name in names if name not in supplementary]
+    # Some payers put product identifiers on the active STC 30 status rather
+    # than on the subscriber. Bind them to the sole named medical plan.
+    status_info = [row.get('additionalInformation') for row in rows
+        if len(names) == 1 and len(payload.get('plans') or []) == 1
+        and row.get('code') == 'status'
+        and str(row.get('status') or '').upper() in {'ACTIVE', 'ACTIVE_COVERAGE'}
+        and '30' in (row.get('serviceTypeCodes') or [])
+        and str(row.get('planCoverage') or row.get('planCoverageDescription') or '').strip() == names[0]
+        and isinstance(row.get('additionalInformation'), dict)]
+    status_info = status_info[0] if len(status_info) == 1 else {}
     # Humana can label the plan "Humana Honor" and state its Medicare PPO
     # program only in the active STC 30 status message. Keep the actual plan
     # name separate from this payer-provided product-family evidence.
@@ -211,7 +221,9 @@ def plan_details(payload: dict) -> dict:
                                         if isinstance(person, dict)
                                         for network in [((person.get('additionalInformation') or {}).get('planNetwork') or {})]
                                         if isinstance(network, dict) and network.get('name')))
-    group = subscriber.get("groupNumber") or info.get("groupNumber") or (additional.get("group") or {}).get("number")
+    group = (subscriber.get("groupNumber") or info.get("groupNumber")
+             or (additional.get("group") or {}).get("number")
+             or status_info.get('groupOrPolicyNumber'))
     # BlueCard's verification party identifies the home plan; it is separate
     # from the local route and says nothing about this provider's participation.
     verifying_parties = {}
@@ -250,7 +262,9 @@ def plan_details(payload: dict) -> dict:
             "medicare_ppo_evidence": medicare_ppo_evidence,
             "medicare_hmo_evidence": medicare_hmo_evidence,
             "response_payer_name": str(response_payer_name).strip() if response_payer_name else None,
-            "plan_number": subscriber.get("planNumber") or info.get("planNumber") or (additional.get('plan') or {}).get('number'),
+            "plan_number": (subscriber.get("planNumber") or info.get("planNumber")
+                            or (additional.get('plan') or {}).get('number')
+                            or (status_info.get('plan') or {}).get('number')),
             "group_number": group,
             "group_name": str((additional.get('group') or {}).get('name') or '').strip() or None,
             "verification_payer": ({'name': verifier[0], 'payer_id': verifier[1],

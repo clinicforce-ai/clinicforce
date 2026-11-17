@@ -14,7 +14,7 @@ from app.insurance.collection.billing_note import apply_billing_note
 from app.insurance.collection.benefit_gates import apply_aetna_televisit_oop_deferral, apply_family_oop_deferrals, apply_trs_hd_office_refundable_deposit, prepare_benefit_evidence, preview_zero_individual_oop_applies
 from app.insurance.collection.healthselect_zero import applies as healthselect_zero_applies
 from app.insurance.collection.humana_office import apply as apply_humana_office_copay
-from app.insurance.collection import secondary_order, blue_advantage_hmo_deposit
+from app.insurance.collection import secondary_order, blue_advantage_hmo_deposit, uhc_qmb_office
 from app.insurance.identity import patient_benefits_bound
 from app.insurance.benefit_review import annual_oop_conflict_with_known_remaining, selected_service_blocker, selected_service_detail
 from app.insurance.network_participation import participation_conflict, verified_in_network, verified_out_of_network
@@ -188,7 +188,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         amount = 0
         guidance.update(status='zero_advance', basis='qmb_protection',
             reason='Confirmed member-bound QMB protection prohibits collecting Medicare cost sharing at check-in.')
-    # The published zero office benefit still needs selected-service and patient/network binding.
+    amount = uhc_qmb_office.apply(result, guidance, amount, unresolved_order, same_policy_conflict, line_blocker, source_errors)
     geha_zero_office = (
         benefits.get('published_plan_rule') == GEHA_HIGH_PSHB_MA_16615_2026
         and active_payer_benefits and verified_in_network(benefits)
