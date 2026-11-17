@@ -114,7 +114,7 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     come from the clinic-wide aetna_fee_schedule database table when the payer
     and one medical product identify the category. The rate is an allowed fee,
     not a patient share or permission to collect. temporary_rate_reference
-    remains a separate planning source for other supported payers.
+    remains a separate planning source for other supported payers. A patient-bound active Aetna Commercial video CPT 99213 visit can report the appointment-date clinic fee as a reference and defer check-in collection to $0 when one linked in-network medical individual out-of-pocket remainder is zero, even if the payer echoes another date. This does not establish current benefits or the final telehealth allowance.
     The NMCT Cigna PPO single-CPT 99203 refundable office quote may equal the matched clinic fee less prior payments when same-plan deductible and out-of-pocket balances exceed the fee and the 20% office benefit has no copay; it is not a Cigna allowance or final liability.
     For a Cigna office E/M visit, temporary_rate_reference.alternatives lists matching BCBSTX fee rows
     for available, unselected levels in the same E/M family. These are separate
