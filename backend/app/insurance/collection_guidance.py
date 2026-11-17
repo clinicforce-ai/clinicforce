@@ -449,8 +449,7 @@ def build(result: dict, review: dict | None = None) -> dict:
     secondary_order.apply_original_medicare_deferral(result, guidance, source_errors, member_bound, bool(adverse))
     secondary_order.apply_part_b_deferral(result, guidance, source_errors, member_bound, ma_plan)
     apply_family_oop_deferrals(result, guidance, member_bound=member_bound, source_errors=source_errors, adverse=bool(adverse), same_policy_conflict=same_policy_conflict)
-    apply_aetna_televisit_oop_deferral(result, guidance, member_bound=member_bound,
-        source_errors=source_errors, adverse=bool(adverse), same_policy_conflict=same_policy_conflict)
+    apply_aetna_televisit_oop_deferral(result, guidance, member_bound=member_bound, source_errors=source_errors, adverse=bool(adverse), same_policy_conflict=same_policy_conflict)
     apply_trs_hd_office_refundable_deposit(result, guidance, member_bound=member_bound, source_errors=source_errors, adverse=bool(adverse), same_policy_conflict=same_policy_conflict, review=review)
     apply_bluecard_family_deposit(result, guidance, review, safe=bool(safe), qmb_protected=bool(qmb_protected), qmb_unresolved=bool(qmb_unresolved))
     apply_blue_ppo_family_quote(result, guidance, review, assumptions, safe=bool(safe))
