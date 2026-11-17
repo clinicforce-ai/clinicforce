@@ -170,6 +170,31 @@ const unknownNetworkPriorDay = {
       selected_benefit_ids: ['synthetic-stedi-office-copay'], network_status: 'unknown' } }] },
 }
 const unknownNetworkReference = aetnaPriorDateReferenceCopay(unknownNetworkPriorDay, model)
+const zeroPriorDay = {
+  ...unknownNetworkPriorDay,
+  benefits: { ...unknownNetworkPriorDay.benefits, reported_options: [{
+    ...unknownNetworkPriorDay.benefits.reported_options[0], amount_cents: 0,
+  }] },
+  price_range: { ...unknownNetworkPriorDay.price_range, lines: [{
+    ...unknownNetworkPriorDay.price_range.lines[0], benefits: {
+      ...unknownNetworkPriorDay.price_range.lines[0].benefits, copay_cents: 0,
+    },
+  }] },
+}
+assert.equal(aetnaPriorDateReferenceCopay(zeroPriorDay, model), null,
+  'Wrong-date $0 copay must not become the visit collection headline')
+const zeroPriorDayView = deriveCommercialEstimateView({ result: {
+  ...zeroPriorDay,
+  collection_guidance: { ...zeroPriorDay.collection_guidance, services: [] },
+}, appointments: [], selectedVisit: null, busy: null, error: null, readOnly: true,
+recovering: false })
+const zeroArrival = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
+  { model: zeroPriorDayView, result: zeroPriorDay }))
+const zeroTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+  { model: zeroPriorDayView, result: zeroPriorDay }))
+assert.doesNotMatch(zeroArrival, /Payer-reported office copay/)
+assert.doesNotMatch(zeroArrival, /<strong[^>]*role="status"[^>]*>US\$0\.00<\/strong>/)
+assert.doesNotMatch(zeroTable, /Amount to collect at visit[^<]*office copay reference/)
 assert.equal(aetnaPriorDateReferenceCopay({ ...unknownNetworkPriorDay, benefits: {
   ...unknownNetworkPriorDay.benefits, reported_options: [{
     ...priorDay.benefits.reported_options[0], amount_cents: 6500 }] } }, model), null)

@@ -64,7 +64,7 @@ export function aetnaPriorDateReferenceCopay(
   )
     return null
   const copay = specialistOfficeCopay({ ...result, benefits })
-  if (copay != null) return copay === line.benefits.copay_cents ? copay : null
+  if (copay != null) return copay > 0 && copay === line.benefits.copay_cents ? copay : null
   const individualOfficeRowPresent = benefits.reported_options?.some(
     (row) =>
       row.kind === 'copay' &&
@@ -80,7 +80,7 @@ export function aetnaPriorDateReferenceCopay(
     selectedId &&
     line.benefits.selected_benefit_ids?.includes(selectedId) &&
     Number.isInteger(line.benefits.copay_cents) &&
-    line.benefits.copay_cents! >= 0
+    line.benefits.copay_cents! > 0
     ? line.benefits.copay_cents!
     : null
 }
