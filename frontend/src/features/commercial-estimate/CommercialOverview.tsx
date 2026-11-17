@@ -18,6 +18,7 @@ import CommercialCostBreakdown from './CommercialCostBreakdown'
 import CommercialCashQuoteForm from './CommercialCashQuoteForm'
 import { AvailityArrivalAmount, AvailityVisitTable } from './AvailityVisitPlanning'
 import { availityVisitPlanning } from './availityVisitPlanning'
+import { cignaBtxOfficeScenario } from './cignaBtxOfficeScenario'
 import {
   pendingHumanaSpecialistCopay,
   supportedHumanaSpecialistAdvance,
@@ -77,6 +78,7 @@ export default function CommercialOverview({
   const cardPlanningCents =
     payerReportedPartialCents == null ? copay.cardOfficePlanningCopay(result, model) : null
   const combinedPlan = !cash && !previousEstimate ? result.combined_emg_plan : null
+  const cignaBtxAdvance = cignaBtxOfficeScenario(result, model)
   const showSelectedRequirements = shouldShowSelectedRequirements(
     result,
     plannedCodes,
@@ -91,6 +93,7 @@ export default function CommercialOverview({
   )
   const visibleAmount =
     Boolean(amount) ||
+    cignaBtxAdvance != null ||
     combinedPlan != null ||
     provisionalAmount != null ||
     !!model.estimatedShare ||
