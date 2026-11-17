@@ -51,6 +51,8 @@ for (const changed of [
   { benefits: { ...result.benefits, oop_remaining_cents: 0 } },
   { benefits: { ...result.benefits, deductible_remaining_cents: 5000 } },
   { benefits: { ...result.benefits, network_status: 'out_of_network' } },
+  { codes: [{ code: '64612' }] },
+  { price_range: { mode: 'services', lines: [{ code: '64612' }] } },
   { payer: 'United Healthcare' },
 ]) {
   const blocked = collectionAtVisitRow({ ...result, ...changed }, model, values)
@@ -65,4 +67,11 @@ assert.match(html, /\$40\.00/)
 assert.match(html, /Conditional office-only share/)
 assert.match(html, /\$40\.00 specialist office scenario; full BTX share unknown/)
 assert.match(html, /\$900\.00/)
+const { default: ArrivalAmountSummary } = await load('../frontend/src/features/commercial-estimate/ArrivalAmountSummary.tsx')
+const arrival = renderToStaticMarkup(React.createElement(ArrivalAmountSummary, {
+  result, model: { ...model, amountText: 'Insured amount unavailable', amountLabel: 'Collection decision needed' },
+  partialCopay: null, visibleAmount: false,
+}))
+assert.match(arrival, /Amount to collect at visit · refundable office advance/)
+assert.match(arrival, /\$40\.00/)
 console.log('Cigna BTX refundable office advance shown with office-only limits')

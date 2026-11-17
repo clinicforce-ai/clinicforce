@@ -30,7 +30,8 @@ export function cignaBtxOfficeScenario(
     benefits.source_errors?.length ||
     !patientBenefitsBound(result.identity) ||
     result.billing_protection?.status === 'qmb' ||
-    result.price_range?.lines?.some((line) => /^992(?:0[2-5]|1[2-5])$/.test(line.code)) ||
+    result.codes?.length ||
+    result.price_range?.lines?.length ||
     officeCopay == null ||
     officeCopay <= 0 ||
     officeCoinsurance == null ||

@@ -9,6 +9,8 @@ import {
 import { pendingBluecardOfficeCopay, pendingCignaOfficeCopay } from './collectionAtVisitRow'
 import { bluecardOfficeDeductibleScenario } from './bluecardOfficeDeductibleScenario'
 import { humanaApprovedCollection } from './humanaApprovedCollection'
+import { cignaBtxOfficeScenario } from './cignaBtxOfficeScenario'
+import CignaBtxArrivalAmount from './CignaBtxArrivalAmount'
 
 function nextStep(model: CommercialEstimateModel, result: PrevisitEstimate) {
   const lines = result.price_range?.mode === 'services' ? result.price_range.lines || [] : []
@@ -101,6 +103,8 @@ export default function ArrivalAmountSummary({
 }) {
   const humanaDecision = humanaApprovedCollection(result, model)
   if (humanaDecision) return humanaDecision
+  const cignaBtxAdvance = cignaBtxOfficeScenario(result, model)
+  if (cignaBtxAdvance) return <CignaBtxArrivalAmount row={cignaBtxAdvance} />
   if (
     !model.cash &&
     !model.previousEstimate &&
@@ -438,11 +442,6 @@ export default function ArrivalAmountSummary({
           The reported office copay is conditional. Confirm it with the payer for this visit and
           CPT, the clinic collection policy, and any payments or credits before charging. Cigna’s
           allowed amount and full patient share remain unknown.
-        </p>
-      ) : diagnosticCopayReference != null ? (
-        <p>
-          One payer-reported diagnostic copay per day. Approve the clinic collection policy and
-          check prior payments before charging.
         </p>
       ) : partialCopay != null ? (
         <p>
