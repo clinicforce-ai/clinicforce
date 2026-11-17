@@ -232,7 +232,9 @@ def refresh_saved_requirements(api: ModuleType, result: dict, case: dict, practi
         (result.get('benefits') or {}).get(field) != (saved_result.get('benefits') or {}).get(field)
         for field in ('network_status', 'network_source')
     ) or (result.get('network_evidence') or {}).get('network_name') != (saved_result.get('network_evidence') or {}).get('network_name')
-    if (result.get('requirement_sources') == requirement_sources(documents) and not network_changed
+    identity_changed = (result.get('identity') or {}).get('binding') != (saved_result.get('identity') or {}).get('binding') or (
+        (result.get('identity') or {}).get('status') != (saved_result.get('identity') or {}).get('status'))
+    if (result.get('requirement_sources') == requirement_sources(documents) and not network_changed and not identity_changed
             and result.get('public_source_checked_day') == date.today().isoformat()
             and saved_result.get('published_requirements_version') == rules_version):
         return

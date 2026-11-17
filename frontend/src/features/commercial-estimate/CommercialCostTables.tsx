@@ -75,10 +75,15 @@ export default function CommercialCostTables({
       if (row.label === 'Coinsurance')
         return {
           ...row,
-          value: `${planning.coinsurance_percent}% in-network specialist office visit · prior-date payer response`,
+          value:
+            planning.coinsurance_percent == null
+              ? 'Not returned for the in-person specialist visit'
+              : `${planning.coinsurance_percent}% in-network specialist office visit · prior-date payer response`,
           detail:
             planning.copay_cents != null
-              ? 'The reported specialist office copay sets the conditional patient share; zero coinsurance adds nothing.'
+              ? planning.coinsurance_percent == null
+                ? 'The payer returned a telemedicine coinsurance row, which does not establish an in-person office rate. The displayed split assumes the fixed copay is the only cost share.'
+                : 'The reported specialist office copay sets the conditional patient share; zero coinsurance adds nothing.'
               : 'The payer also returned a separate telemedicine rate; the planned visit is in person.',
         }
       if (
@@ -94,7 +99,7 @@ export default function CommercialCostTables({
               : `${money(planning.deductible_applies_cents)} if deductible applies; ${money(planning.deductible_waived_cents)} if waived`,
           detail:
             planning.copay_cents != null
-              ? `${money(planning.copay_cents)} reported copay + $0.00 deductible + 0% coinsurance. Prior-date planning only.`
+              ? `${money(planning.copay_cents)} reported copay + $0.00 remaining deductible${planning.coinsurance_percent == null ? '; in-person coinsurance was not returned. Copay-only scenario.' : ' + 0% office coinsurance.'} Prior-date planning only.`
               : 'The office-visit row does not establish whether the plan-wide deductible applies to this CPT.',
         }
       return row
@@ -103,7 +108,7 @@ export default function CommercialCostTables({
     visibleRows.push({
       label: 'Estimated Aetna share',
       value: money(planning.plan_share_cents),
-      detail: `${money(planning.allowed_cents)} clinic Aetna fee reference less ${money(planning.copay_cents!)} patient copay, if covered in-network. This is paid by Aetna after an eligible claim, not collected from the patient.`,
+      detail: `${money(planning.allowed_cents)} clinic Aetna fee reference less ${money(planning.copay_cents!)} patient copay, if covered in-network${planning.coinsurance_percent == null ? ' and the fixed copay is the only office cost share' : ''}. This is paid by Aetna after an eligible claim, not collected from the patient.`,
     })
   return (
     <>

@@ -4,9 +4,44 @@ from __future__ import annotations
 from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_rate_reference import refresh_saved_temporary_rates
-from app.insurance import aetna_fees, blue_cross_proxy, choice_plus_emg_proxy, cigna_clinic_quote, group_contract_support, payer_fees, published_plan_benefits, uhc_dsnp_office_proxy
+from app.insurance import aetna_fees, blue_cross_proxy, choice_plus_emg_proxy, cigna_clinic_quote, group_contract_support, identity as insurance_identity, payer_fees, published_plan_benefits, uhc_dsnp_office_proxy
 from app.insurance.identity import patient_plan_applies
 from app.insurance.stedi_benefits.normalize import ambiguous_combined_zero_oop
+
+
+def refresh_saved_aetna_identity(result: dict, case: dict) -> None:
+    """Rebind a narrow legacy review from the hash-verified saved Aetna 271."""
+    context = case.get('previsit_context') or {}
+    inputs = context.get('inputs') or {}
+    benefits = result.get('benefits') or {}
+    old = result.get('identity') or benefits.get('identity') or {}
+    plan = ((result.get('plan_details') or {}).get('stedi') or {})
+    if (not aetna_fees.is_aetna_payer(str(result.get('payer') or ''))
+            or plan.get('names') != ['Aetna Medicare Value Plus (PPO)']
+            or plan.get('group_number') != '000003-TX'
+            or plan.get('plan_number') != '000003-TX000083'
+            or old.get('status') != 'review' or not old.get('binding')
+            or benefits.get('active') is not True or benefits.get('source_errors')
+            or benefits.get('coverage_status_conflict')
+            or case.get('previsit', {}).get('request_state') != 'complete'
+            or result.get('service_date') != inputs.get('service_date')
+            or not case.get('previsit_raw_object_key') or not case.get('previsit_raw_sha256')):
+        return
+    try:
+        raw = _api.object_store.get_object_bytes(case['previsit_raw_object_key'])
+        if _api.hashlib.sha256(raw).hexdigest() != case['previsit_raw_sha256']:
+            return
+        payload = _api.json.loads(raw)
+        if str(payload.get('payerId') or '').upper() not in {'60054', 'HPQRS'}:
+            return
+        fresh = insurance_identity.compare(payload, _api._coverage_snapshot(inputs, context.get('source') or {}))
+    except Exception:
+        return
+    if (fresh.get('status') != 'warning' or fresh.get('reconciliation_rule') != 'aetna_payer_demographics'
+            or fresh.get('binding') != old['binding']):
+        return
+    result['identity'] = fresh
+    benefits['identity'] = fresh
 
 
 def restore_saved_fep_standard_product(result: dict, case: dict) -> None:

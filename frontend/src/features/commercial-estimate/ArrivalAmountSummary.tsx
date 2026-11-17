@@ -142,10 +142,12 @@ export default function ArrivalAmountSummary({
           <p>
             {money(aetnaOffice.allowed_cents)} clinic Aetna fee reference ={' '}
             {money(aetnaOffice.copay_cents)} estimated patient copay +{' '}
-            {money(aetnaOffice.plan_share_cents!)} estimated Aetna share if covered in-network. The
-            Aetna share is paid by the plan, not collected from the patient. The payer returned
-            benefits for an earlier date; provider tier, Medicare billing protection and prior
-            payments still control collection.
+            {money(aetnaOffice.plan_share_cents!)} estimated Aetna share if covered in-network
+            {aetnaOffice.coinsurance_percent == null &&
+              ' and the fixed copay is the only cost share'}
+            . The Aetna share is paid by the plan, not collected from the patient. The payer
+            returned benefits for an earlier date; provider tier, Medicare billing protection and
+            prior payments still control collection.
           </p>
         ) : (
           <p>

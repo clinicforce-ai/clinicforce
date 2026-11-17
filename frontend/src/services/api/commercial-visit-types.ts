@@ -9,7 +9,7 @@ export type AetnaOfficePlanning = {
   plan_share_cents?: number
   deductible_remaining_cents: number
   oop_remaining_cents: number
-  coinsurance_percent: string
+  coinsurance_percent: string | null
   deductible_applies_cents: number
   deductible_waived_cents: number
   payer_response_date: string

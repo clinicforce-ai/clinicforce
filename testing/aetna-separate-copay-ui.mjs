@@ -340,4 +340,16 @@ assert.match(medicareTable, /Conditional patient share.*\$50\.00/)
 assert.match(medicareTable, /Estimated Aetna share.*\$46\.33/)
 assert.match(medicareTable, /Amount to collect at visit.*\$50\.00 conditional planning amount/)
 assert.doesNotMatch(medicareTable, /\$46\.33 conditional planning amount/)
+const savedMedicare = { ...medicareOffice,
+  aetna_office_planning: { ...medicareOffice.aetna_office_planning, coinsurance_percent: null } }
+const savedMedicareTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+  { model: medicareModel, result: savedMedicare }))
+const savedMedicareSummary = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
+  { model: medicareModel, result: savedMedicare, partialCopay: null, visibleAmount: true }))
+assert.match(savedMedicareSummary, /\$50\.00/)
+assert.match(savedMedicareSummary, /\$46\.33 estimated Aetna share/)
+assert.match(savedMedicareTable, /Clinic Aetna fee reference.*\$96\.33/)
+assert.match(savedMedicareTable, /Conditional patient share.*\$50\.00/)
+assert.match(savedMedicareTable, /Estimated Aetna share.*\$46\.33/)
+assert.match(savedMedicareTable, /Not returned for the in-person specialist visit/)
 console.log('Aetna separate copay: $40 office reference; $0 general OOP does not erase the separate cap')

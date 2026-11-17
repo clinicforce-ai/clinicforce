@@ -16,7 +16,7 @@ BCBSTX_PAYER_NAMES = {'bcbstx', 'bcbstexas', 'bluecrossblueshieldoftexas',
                       'bluecrossandblueshieldoftexas', 'bluecrossblueshieldtx',
                       'bluecrossblueshieldtexas'}
 # Saved estimates re-evaluate requirement decisions when a published rule changes.
-PUBLISHED_RULESET_VERSION = '2026-11-16-aetna-value-plus-office-v18'
+PUBLISHED_RULESET_VERSION = '2026-11-16-aetna-value-plus-office-v19'
 BLUECARD_PPO_REFERRAL_SOURCE = {
     'label': 'BCBSTX BlueCard provider manual, PPO definition',
     'url': 'https://www.bcbstx.com/content/dam/hcsc/docs/provider/tx/claims/bluecard/bluecard-program-prov-manual.pdf',
@@ -261,8 +261,8 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
         return rule('Not required', 'Routine office CPT 99203 is absent from Aetna’s November 2026 participating-provider precertification list. Confirm member or delegated exceptions.', AETNA_2026_OFFICE_PRECERT_SOURCE, check=True)
     if value_plus_office:
         if kind == 'referral':
-            return rule('Not required', 'Aetna Medicare PPO specialist office visits do not require a referral.', AETNA_MEDICARE_PPO_REFERRAL_SOURCE)
-        return rule('Not required', 'Routine CPT 99213 is absent from Aetna’s November 2026 participating-provider precertification list.', AETNA_2026_OFFICE_PRECERT_SOURCE)
+            return rule('Not required', 'Aetna Medicare PPO specialist office visits do not require a referral' + (' in the covered in-network scenario; provider tier remains unresolved.' if not in_network else '.'), AETNA_MEDICARE_PPO_REFERRAL_SOURCE, check=not in_network)
+        return rule('Not required', 'Routine CPT 99213 is absent from Aetna’s November 2026 participating-provider precertification list' + ('; this in-network planning decision remains conditional on the unresolved provider tier.' if not in_network else '.'), AETNA_2026_OFFICE_PRECERT_SOURCE, check=not in_network)
     bluecard_ppo_office = (kind in {'referral', 'authorization'} and in_network and office
         and str(context.get('pos') or '') == '11' and names & BCBSTX_PAYER_NAMES
         and len(exact) == 1 and len(plans) == 1

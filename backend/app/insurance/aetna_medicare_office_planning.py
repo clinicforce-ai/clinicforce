@@ -48,8 +48,8 @@ def estimate(result: dict, inputs: dict) -> dict | None:
                 if row.get('kind') == 'coinsurance' and office(row) and row.get('percent') is not None}
     deductible = benefits.get('deductible_remaining_cents')
     oop = benefits.get('oop_remaining_cents')
-    if (len(copays) != 1 or len(percents) != 1 or type(next(iter(copays))) is not int
-            or float(next(iter(percents))) != 0 or deductible != 0
+    if (len(copays) != 1 or len(percents) > 1 or type(next(iter(copays))) is not int
+            or percents and float(next(iter(percents))) != 0 or deductible != 0
             or type(oop) is not int or oop < 0
             or benefits.get('deductible_remaining_conflict_ids')
             or benefits.get('oop_remaining_conflict_ids')):
@@ -68,7 +68,7 @@ def estimate(result: dict, inputs: dict) -> dict | None:
     return {'status': 'planning_only', 'code': '99213', 'allowed_cents': allowed,
             'copay_cents': copay, 'plan_share_cents': allowed - copay,
             'deductible_remaining_cents': 0, 'oop_remaining_cents': oop,
-            'coinsurance_percent': '0', 'deductible_applies_cents': copay,
+            'coinsurance_percent': '0' if percents else None, 'deductible_applies_cents': copay,
             'deductible_waived_cents': copay, 'payer_response_date': returned.isoformat(),
             'service_date': visit.isoformat(), 'rate_source': rates[0].get('source_reference'),
             'collectable': False}
