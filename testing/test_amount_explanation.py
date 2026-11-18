@@ -28,9 +28,10 @@ def test_identity_reconciliation_names_the_actual_payer():
     assert 'UHC' not in action
 
 
-def test_bound_payer_with_prior_day_echo_explains_date_instead_of_identity():
+@pytest.mark.parametrize('reason', ['identity_or_coverage_review', 'provider_network_unverified'])
+def test_bound_payer_with_prior_day_echo_explains_date_instead_of_identity(reason):
     result = {'payer': 'Aetna', 'service_date': '2026-11-17',
-              'recovery': {'reason_code': 'identity_or_coverage_review'},
+              'recovery': {'reason_code': reason},
               'identity': {'status': 'warning', 'match_version': 2,
                            'binding': 'synthetic-binding',
                            'reconciliation_rule': 'aetna_payer_demographics'},
