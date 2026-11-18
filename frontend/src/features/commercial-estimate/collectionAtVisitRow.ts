@@ -6,6 +6,7 @@ import { money } from './format'
 import type { bluecardOfficeDeductibleScenario } from './bluecardOfficeDeductibleScenario'
 import { cignaBtxOfficeScenario } from './cignaBtxOfficeScenario'
 import { healthselectOfficeBiopsy, healthselectZero } from './healthselectRows'
+import { officeOnlyCollectionRow } from './officeOnlyAmount'
 
 export { pendingBluecardOfficeCopay, pendingCignaOfficeCopay } from './pendingOfficeCopays'
 import { pendingCignaOfficeCopay } from './pendingOfficeCopays'
@@ -73,8 +74,12 @@ export function collectionAtVisitRow(
   },
 ): CostBreakdownRow {
   const officePlanning = result.aetna_office_planning
+  const officeOnly = officeOnlyCollectionRow(result, model.supportedAmount)
+  if (officeOnly) return officeOnly
   if (
-    result.collection_guidance?.collection_rule?.mode === 'aetna_office_individual_oop_deferral' &&
+    (result.collection_guidance?.collection_rule?.mode === 'aetna_office_individual_oop_deferral' ||
+      (model.supportedAmount &&
+        result.collection_guidance?.collection_rule?.mode === 'individual_oop_zero_deferral')) &&
     result.collection_guidance.amount_cents === 0
   )
     return {

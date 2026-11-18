@@ -1,6 +1,6 @@
 """Derive advance collection from visit evidence and approved clinic policy."""
 from __future__ import annotations
-from app.insurance.collection.cash import build as cash_guidance
+from app.insurance.collection import cash, office_only, zero_oop
 from app.insurance.collection.options import emg_option as _emg_option
 from app.insurance.collection.requirements import summarize_requirements
 from app.insurance.collection.refundable_advance import apply as apply_refundable_advance, advance_patient_message
@@ -75,12 +75,13 @@ def build(result: dict, review: dict | None = None) -> dict:
             network_source='', requirements={kind: 'Check closer to visit' for kind in ('referral', 'authorization')})
         return guidance
     if result.get('payment_mode') == 'cash':
-        return cash_guidance(result, review, guidance, price, lines)
+        return cash.build(result, review, guidance, price, lines)
+    identity = result.get('identity') or benefits.get('identity') or {}
+    if zero_oop.apply(result, guidance, lines, planning): return guidance
     if guidance['network'] == 'Not reported' and lines and all(line.get('benefits', {}).get('network_independent') for line in lines):
         guidance['network'] = 'Same benefits in / out of network'
         guidance['network_source'] = 'Payer benefit schedule. Provider participation not reported.'
     adverse = summarize_requirements(result, lines, guidance, actions)
-    identity = result.get('identity') or benefits.get('identity') or {}
     line_blocker = selected_service_blocker(benefits.get('network_status') or 'unknown', identity, lines)
     unresolved_order, same_policy_conflict, primary_secondary_copay, medicare_secondary = secondary_order.state(result)
     payer_plan = ((result.get('plan_details') or {}).get('stedi') or benefits.get('plan_details') or {})
@@ -495,6 +496,5 @@ def build(result: dict, review: dict | None = None) -> dict:
     if (guidance['basis'] == 'office_copay' and guidance['amount_cents'] is not None
             and len(lines) == len([line for line in lines if str(line.get('code') or '').isdigit()
                  and (99202 <= int(line['code']) <= 99205 or 99212 <= int(line['code']) <= 99215)])):
-        guidance['office_visit_copay_advance'] = {'amount_cents': guidance['amount_cents'],
-                                                    'source': 'selected_office_benefit'}
-    return guidance
+        guidance['office_visit_copay_advance'] = {'amount_cents': guidance['amount_cents'], 'source': 'selected_office_benefit'}
+    return guidance if result.get('_office_only_eval') else office_only.apply(result, review, guidance, build)

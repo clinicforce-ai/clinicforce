@@ -95,7 +95,7 @@ def test_exact_date_followup_uses_same_exhausted_individual_limit():
         aetna_office_planning.attach(result, inputs)
     guidance = collection_guidance.build(result)
     assert guidance['amount_cents'] == 0
-    assert guidance['collection_rule']['mode'] == 'aetna_office_individual_oop_deferral'
+    assert guidance['collection_rule']['mode'] == 'individual_oop_zero_deferral'
 
 
 def test_prior_day_followup_with_telemedicine_only_percentage_still_caps_checkin():

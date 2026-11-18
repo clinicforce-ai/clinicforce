@@ -20,8 +20,12 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
     included care is priced once and source CPT examples are never auto-selected.
     A verified payment is deducted once from the displayed cash or insured
     amount. The returned and saved payment_explanation describes only the
-    known amount; unpriced CPTs stay unresolved. An administrator can record
-    or remove a payer-supplied out-of-network allowance for one selected CPT.
+    known amount; unpriced CPTs stay unresolved.
+    A selected, separately billable office E/M with a verified fixed copay can
+    return an office_only arrival advance even when another procedure remains
+    unpriced; its errors and incomplete full patient total remain visible.
+    An administrator can record or remove a payer-supplied out-of-network
+    allowance for one selected CPT.
     The quote needs its payer channel, reference and validity date, and is
     bound to this visit's patient, payer product, rendering NPI, place and units.
     Product mappings for local or regional Medicare Advantage PPO products

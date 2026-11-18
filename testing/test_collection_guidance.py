@@ -21,6 +21,29 @@ def scenario(amount=3800):
                     'requirements': {kind: {'required': 'unknown', 'cleared': False} for kind in ('referral', 'authorization')}}}]}}
 
 
+@pytest.mark.parametrize('code,payer', [('99203', 'Aetna'), ('99213', 'Cigna'), ('99214', 'Humana')])
+def test_confirmed_individual_oop_zero_collects_zero_before_patient_type_rules(code, payer):
+    result = scenario(4000)
+    result.update(payer=payer, codes=[{'id': 'office', 'code': code, 'units': 1}])
+    result['price_range']['lines'][0]['code'] = code
+    result['price_range']['service_issues'] = ['Another planned service is not priced.']
+    result['benefits'].update(identity=result['identity'], oop_remaining_cents=0,
+                              oop_id='synthetic-individual-oop')
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 0
+    assert guidance['basis'] == 'claim_after_service'
+    assert [service['code'] for service in guidance['services']] == [code]
+    assert 'Collect $0' in amount_explanation.build(result, guidance)['sentence']
+    assert encounter_summary.build({**result, 'collection_guidance': guidance})['collect_today_cents'] == 0
+
+    for change in ({'active': False}, {'oop_remaining_cents': 100},
+                   {'oop_id': None}, {'service_date_matches': False},
+                   {'oop_remaining_conflict_ids': ['other-balance']}):
+        altered = deepcopy(result)
+        altered['benefits'].update(change)
+        assert collection_guidance.build(altered)['amount_cents'] is None
+
+
 def test_aetna_prior_date_televisit_with_met_individual_oop_defers_check_in():
     result = scenario()
     result.pop('collection_policy')
@@ -148,6 +171,64 @@ def test_nmct_collects_matched_stedi_office_copay_without_cpt_rate():
             **line['benefits'], 'deductible_applies': True}}]}},
     ):
         assert collection_guidance.build({**result, **changed})['amount_cents'] in {None, 0}
+
+
+def test_selected_office_copay_survives_unpriced_separate_procedure():
+    result = scenario(4000)
+    result.update(payer='Cigna', service_selection_status='approved',
+                  separate_em_planned=True, selected_ids=['office', 'procedure'],
+                  codes=[{'id': 'office', 'code': '99203', 'units': 1},
+                         {'id': 'procedure', 'code': '64615', 'units': 1}])
+    office = result['price_range']['lines'][0]
+    office.update(calculation=None, allowed_cents=None,
+                  rate_resolution={'status': 'RATE_UNAVAILABLE'})
+    office['benefits'].update(copay_cents=4000, copay_period='VISIT',
+                              coinsurance_percent='0', deductible_applies=False,
+                              oop_remaining_cents=10000)
+    procedure = {'id': 'procedure', 'code': '64615', 'units': 1, 'calculation': None,
+                 'issues': ['Procedure rate is unavailable'], 'benefits': {'active': True}}
+    result['price_range'].update(complete=False, patient_min_cents=None,
+                                 patient_max_cents=None, service_issues=['Procedure units need review'],
+                                 lines=[office, procedure])
+    result['requirement_evidence'] = {'procedures': [
+        {'id': 'procedure', 'code': '64615',
+         'authorization': {'status': 'Required', 'pa_approval': 'DENIED'}}]}
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 4000
+    assert guidance['scope'] == 'office_only'
+    assert guidance['office_only_line_id'] == 'office'
+    assert any('Procedure rate' in issue for issue in guidance['unresolved_service_issues'])
+    assert any('authorization denied' in issue for issue in guidance['unresolved_service_issues'])
+    summary = encounter_summary.build({**result, 'collection_guidance': guidance})
+    assert summary['collect_today_cents'] == 4000
+    assert summary['complete'] is False
+    assert '64615' in summary['unpriced_codes']
+    assert summary['conditional'] is True
+    paid = collection_guidance.build(result, {'payments': {'reference': 'receipt', 'amount_cents': 1000}})
+    assert paid['amount_cents'] == 3000
+    other_source_error = deepcopy(result)
+    other_source_error['price_range']['lines'][1]['benefits']['source_errors'] = [{'kind': 'rate_error'}]
+    other_guidance = collection_guidance.build(other_source_error)
+    assert other_guidance['amount_cents'] == 4000
+    assert encounter_summary.build({**other_source_error,
+                                    'collection_guidance': other_guidance})['collect_today_cents'] == 4000
+    for change in ({'separate_em_planned': False}, {'identity': {'status': 'review'}},
+                   {'benefits': {**result['benefits'], 'active': False}},
+                   {'benefits': {**result['benefits'], 'service_date_matches': False}},
+                   {'benefits': {**result['benefits'], 'has_secondary': True}},
+                   {'codes': result['codes'][1:]},
+                   {'price_range': {**result['price_range'], 'lines': [procedure]}}):
+        assert collection_guidance.build({**result, **change})['amount_cents'] is None
+    deferral = {**result, 'collection_policy': {'mode': 'defer_to_claim',
+        'approved_by': 'clinic', 'approved_at': '2026-11-01', 'reference': 'synthetic deferral'}}
+    assert collection_guidance.build(deferral)['amount_cents'] == 0
+    denied_office = deepcopy(result)
+    denied_office['price_range']['lines'][0]['benefits']['requirements'] = {
+        'authorization': {'status': 'denied'}}
+    assert collection_guidance.build(denied_office)['amount_cents'] is None
+    invalid_office = deepcopy(result)
+    invalid_office['price_range']['lines'][0]['benefits']['source_errors'] = [{'kind': 'invalid'}]
+    assert collection_guidance.build(invalid_office)['amount_cents'] is None
 
 
 def test_patient_share_and_collection_policy_are_independent():

@@ -136,7 +136,23 @@ def build(result: dict, review: dict | None = None) -> dict:
     if (integrity_error and guidance.get('basis') in {'patient_obligations', 'anticipated_services', 'bcbstx_proxy_advance', 'cigna_fee_proxy_advance',
                                                       'bcbstx_refundable_advance', 'cigna_refundable_office_copay', 'calculation_conflict'} and not clinic_zero_instruction):
         collect = None
-    if (unsupported_insurance or requirement_blocker(result) is not None) and collect is not None and not clinic_zero_instruction:
+    office_line = next((line for line in lines if line.get('id') == guidance.get('office_only_line_id')), None)
+    office_only_collection = (guidance.get('scope') == 'office_only'
+        and guidance.get('basis') == 'office_copay' and office_line is not None
+        and integrity_error is None
+        and office_line.get('code') in {str(n) for n in (*range(99202, 99206), *range(99212, 99216))}
+        and (guidance.get('office_visit_copay_advance') or {}).get('amount_cents') == collect
+        and bool(guidance.get('collection_rule'))
+        and (len(lines) == 1 or result.get('separate_em_planned') is True)
+        and patient_benefits_bound(identity)
+        and benefits.get('active') is True and benefits.get('service_date_matches') is not False
+        and not benefits.get('has_secondary') and not benefits.get('coverage_status_conflict')
+        and not benefits.get('coverage_dates_invalid') and not benefits.get('historical_only')
+        and not benefits.get('network_conflict')
+        and not benefits.get('source_errors') and not (office_line.get('benefits') or {}).get('source_errors')
+        and selected_service_blocker(benefits.get('network_status') or 'unknown', identity, [office_line]) is None
+        and not participation_conflict(benefits))
+    if (unsupported_insurance or requirement_blocker(result) is not None) and collect is not None and not clinic_zero_instruction and not office_only_collection:
         collect = None
     office = [line for line in lines if str(line.get('code') or '').isdigit() and
               (99202 <= int(line['code']) <= 99205 or 99212 <= int(line['code']) <= 99215)]

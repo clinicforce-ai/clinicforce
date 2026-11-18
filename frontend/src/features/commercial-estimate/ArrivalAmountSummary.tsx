@@ -29,6 +29,31 @@ export default function ArrivalAmountSummary({
   referenceOnly?: boolean
   visibleAmount: boolean
 }) {
+  if (model.supportedAmount && result.collection_guidance?.scope === 'office_only')
+    return (
+      <>
+        <span>Amount to collect at visit · office only</span>
+        <strong role="status">{money(result.collection_guidance.amount_cents!)}</strong>
+        <p>{result.collection_guidance.reason}</p>
+        {result.collection_guidance.unresolved_service_issues?.length ? (
+          <p>
+            Other services still need review:{' '}
+            {result.collection_guidance.unresolved_service_issues.join('; ')}
+          </p>
+        ) : null}
+      </>
+    )
+  if (
+    model.supportedAmount &&
+    result.collection_guidance?.collection_rule?.mode === 'individual_oop_zero_deferral'
+  )
+    return (
+      <>
+        <span>Amount to collect at visit</span>
+        <strong role="status">{money(0)}</strong>
+        <p>{result.collection_guidance.reason}</p>
+      </>
+    )
   const humanaDecision = humanaApprovedCollection(result, model)
   if (humanaDecision) return humanaDecision
   if (

@@ -14,6 +14,7 @@ import { networkEvidenceStatus } from './networkEvidenceStatus'
 import { networkSourceLabel } from './networkSourceLabel'
 import { emgOptionPresentation } from './emgOptionPresentation'
 import { healthselectZero } from './healthselectRows'
+import { officeOnlyAmount } from './officeOnlyAmount'
 import type { CommercialEstimateActions } from './useCommercialEstimateActions'
 export function deriveCommercialEstimateView({
   result,
@@ -249,14 +250,21 @@ export function deriveCommercialEstimateView({
     (guidance?.basis === 'ecw_billing_note' &&
       (guidance.amount_cents === 0 || benefits?.active !== true))
   const requirementIssue = !cash ? selectedRequirementIssue(result) : null
+  const scopedOfficeAmount = officeOnlyAmount(
+    result,
+    topCoverageIssue,
+    patientBenefitsBound &&
+      !participationConflict &&
+      (networkConfirmed || outOfNetworkCollection || independentOfficeCopay),
+  )
   const supportedAmount =
     !previousEstimate &&
     !['deferred_billing', 'action_required'].includes(guidance?.status || '') &&
     guidance?.amount_cents != null &&
     Number.isFinite(guidance.amount_cents) &&
     guidance.amount_cents >= 0 &&
-    (!requirementIssue || clinicInstructionAmount) &&
-    (cash || clinicInstructionAmount || currentPayerAmount) &&
+    (!requirementIssue || clinicInstructionAmount || scopedOfficeAmount) &&
+    (cash || clinicInstructionAmount || currentPayerAmount || scopedOfficeAmount) &&
     ((result?.encounter_summary?.collect_today_cents == null &&
       ['published_geha_pshb_zero_office', 'published_uhc_tx_qmb_office'].includes(
         guidance?.basis || '',

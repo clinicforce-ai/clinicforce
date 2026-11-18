@@ -53,16 +53,15 @@ def replay(raw, *, confirmed_network=True, place_of_service=None):
     return collection_guidance.build(result), price['lines'][0]['benefits']
 
 
-def test_employee_only_specialist_copay_uses_separate_cap_without_contract_allowance():
+def test_met_individual_oop_defers_collection_even_with_separate_copay_cap():
     guidance, terms = replay(aetna())
-    assert guidance['amount_cents'] == 2500 and guidance['basis'] == 'office_copay'
+    assert guidance['amount_cents'] == 0 and guidance['basis'] == 'claim_after_service'
     assert terms['oop_remaining_cents'] == 0 and terms['copay_remaining_cents'] == 458500
     assert terms['deductible_applies'] is False
-    assert 'plans[0].benefits.limitations[2]' in guidance['services'][0]['selected_benefit_ids']
-    assert any('separate remaining copay maximum' in note for note in guidance['assumptions'])
+    assert guidance['collection_rule']['mode'] == 'individual_oop_zero_deferral'
     raw = aetna()
     raw['plans'][0]['benefits']['limitations'][2]['amount'] = '10'
-    assert replay(raw)[0]['amount_cents'] == 1000
+    assert replay(raw)[0]['amount_cents'] == 0
     raw['plans'][0]['benefits']['limitations'][2]['amount'] = '0'
     assert replay(raw)[0]['amount_cents'] == 0
 
@@ -77,7 +76,7 @@ def test_invalid_separate_cap_cannot_turn_met_general_oop_into_free_care(amount)
 def test_employee_terms_cannot_be_applied_to_a_dependent_or_unrelated_services():
     raw = aetna()
     raw['dependent'] = {'firstName': 'Dependent'}
-    assert replay(raw)[0]['amount_cents'] is None
+    assert replay(raw)[0]['amount_cents'] == 0  # No check-in collection; dependent claim share remains unresolved.
     terms = commercial.normalize_stedi_271(aetna(), '73', False, procedure_code='95886', service_date=DAY)
     assert terms['copay_cents'] is None
 
@@ -123,12 +122,12 @@ def test_historical_in_network_copay_waits_for_product_participation():
 def test_unknown_service_limit_or_conflicting_specialist_term_still_blocks_advance():
     raw = aetna()
     raw['plans'][0]['benefits']['limitations'].append(row(messages=['First three visits only']))
-    assert replay(raw)[0]['amount_cents'] is None
+    assert replay(raw)[0]['amount_cents'] == 0
     raw = aetna()
     conflicting = deepcopy(raw['plans'][0]['benefits']['coPayment'][0])
     conflicting['amount'] = '50'
     raw['plans'][0]['benefits']['coPayment'].append(conflicting)
-    assert replay(raw)[0]['amount_cents'] is None
+    assert replay(raw)[0]['amount_cents'] == 0
 
 
 @pytest.mark.parametrize('other_office_label', ['Office Visit', 'Primary Care Visit or Evaluation'])

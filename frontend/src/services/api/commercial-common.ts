@@ -125,6 +125,9 @@ export type RequirementEvidence = {
 export type CollectionGuidance = {
   billing_note?: BillingNote
   amount_cents: number | null
+  scope?: 'office_only'
+  office_only_line_id?: string
+  unresolved_service_issues?: string[]
   office_visit_copay_advance?: { amount_cents: number; source: 'selected_office_benefit' } | null
   payer_reported_office_copay_cents?: number
   reference_total_cents?: number

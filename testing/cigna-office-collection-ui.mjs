@@ -82,6 +82,52 @@ assert.match(summary, /Amount to collect now/)
 assert.match(summary, /\$60\.00/)
 assert.doesNotMatch(summary, /Cigna planning estimate|collection pending/)
 
+const officeOnly = { ...result,
+  price_range: { mode: 'services', complete: false, service_issues: ['Procedure units need review'],
+    lines: [result.price_range.lines[0], { id: 'procedure', code: '64615', units: 1,
+      calculation: null, issues: ['Procedure rate is unavailable'], benefits: { active: true } }] },
+  collection_guidance: { ...result.collection_guidance, scope: 'office_only',
+    services: [],
+    office_only_line_id: 'office', office_visit_copay_advance: { amount_cents: 6000,
+      source: 'selected_office_benefit' },
+    unresolved_service_issues: ['Procedure rate is unavailable'] },
+}
+const officeView = deriveCommercialEstimateView({ result: officeOnly, appointments: [],
+  selectedVisit: null, busy: false, error: null, readOnly: false, recovering: false })
+assert.equal(officeView.supportedAmount, true)
+const officeRow = collectionAtVisitRow(officeOnly, { ...model, supportedAmount: officeView.supportedAmount }, values)
+assert.equal(officeRow.value, '$60.00')
+assert.match(officeRow.detail, /Procedure rate is unavailable/)
+const officeSummary = renderToStaticMarkup(React.createElement(ArrivalAmountSummary, {
+  model: { ...model, supportedAmount: officeView.supportedAmount }, result: officeOnly,
+  partialCopay: null, visibleAmount: true,
+}))
+assert.match(officeSummary, /office only/)
+assert.match(officeSummary, /Procedure rate is unavailable/)
+assert.equal(deriveCommercialEstimateView({ result: { ...officeOnly,
+  encounter_summary: { collect_today_cents: null } }, appointments: [], selectedVisit: null,
+  busy: false, error: null, readOnly: false, recovering: false }).supportedAmount, false)
+
+const metIndividualOop = { ...result,
+  benefits: { ...result.benefits, oop_remaining_cents: 0, oop_id: 'synthetic-oop' },
+  collection_guidance: { amount_cents: 0, status: 'zero_advance', basis: 'claim_after_service',
+    reason: 'Collect $0 at this visit; final responsibility follows the processed claim.',
+    services: [],
+    collection_rule: { mode: 'individual_oop_zero_deferral', reference: 'synthetic-oop' } },
+  encounter_summary: { collect_today_cents: 0, payments_verified_cents: 0 },
+  provisional_collection_target: { amount_cents: 6000, pending_codes: [] },
+}
+const zeroView = deriveCommercialEstimateView({ result: metIndividualOop, appointments: [],
+  selectedVisit: null, busy: false, error: null, readOnly: false, recovering: false })
+assert.equal(zeroView.supportedAmount, true)
+assert.equal(collectionAtVisitRow(metIndividualOop, zeroView, values).value, '$0.00')
+const zeroSummary = renderToStaticMarkup(React.createElement(ArrivalAmountSummary, {
+  model: zeroView, result: metIndividualOop, partialCopay: null, visibleAmount: true,
+}))
+assert.match(zeroSummary, /Amount to collect at visit/)
+assert.match(zeroSummary, /\$0\.00/)
+assert.doesNotMatch(zeroSummary, /\$60\.00/)
+
 const pending = collectionAtVisitRow({ ...result,
   collection_guidance: { amount_cents: null, status: 'action_required', basis: 'missing_collection_inputs' },
 }, { ...model, supportedAmount: false, amount: null }, values)
