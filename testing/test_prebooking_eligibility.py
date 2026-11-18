@@ -204,6 +204,33 @@ def test_raw_office_271_copay_reaches_arrival_collection_without_a_clinic_rate()
     assert no_amount["amount_cents"] is None
     assert staff_prebooking._deferred_collection(network_participation.NMCT_PRACTICE_ID)["amount_cents"] == 0
 
+    from app.api.routers import commercial_estimator
+
+    def price_office_only(result, practice_id, inputs, source, payer_id, payer_benefits, **kwargs):
+        payer_benefits.update(network_status="in_network", network_source="clinic_library_contract")
+        result["network_evidence"] = {"decision": "confirmed_participating",
+                                      "source": "clinic_library_contract"}
+        result["price_range"] = visit_estimate.price_lines(result["codes"], [], payer_benefits,
+            {"cost_share": "payer_returned", "place_of_service": "11", "provider_npi": PROVIDER["npi"]},
+            payload=payload, service_date="2026-10-27")
+
+    context = {"billing_npi": PROVIDER["npi"], "rendering_npi": PROVIDER["npi"],
+               "location_id": "office-1", "place_of_service": "11"}
+    details = {**PERSON, "reason": "Office visit", "visit_type": "new"}
+    with patch.object(commercial_estimator, "_attach_previsit_pricing", side_effect=price_office_only), \
+         patch.object(staff_prebooking.commercial_store, "list_connections", return_value=[]):
+        quote = staff_prebooking._estimate_from_payer(network_participation.NMCT_PRACTICE_ID,
+            details, context, PAYER, PROVIDER, payload, "2026-10-27", selected)
+    assert quote["collection"]["amount_cents"] == 0
+    assert "does not say whether the office visit is subject to the deductible" in quote["collection"]["reason"]
+
+    rows["deductible"] = [{**office, "amount": "0", "timePeriod": "CALENDAR_YEAR"}]
+    with patch.object(commercial_estimator, "_attach_previsit_pricing", side_effect=price_office_only), \
+         patch.object(staff_prebooking.commercial_store, "list_connections", return_value=[]):
+        waived = staff_prebooking._estimate_from_payer(network_participation.NMCT_PRACTICE_ID,
+            details, context, PAYER, PROVIDER, payload, "2026-10-27", selected)
+    assert "does not say whether the office visit is subject to the deductible" not in waived["collection"]["reason"]
+
 
 def test_prebooking_pdf_pattern_gives_zero_arrival_and_names_missing_clinic_rates():
     from app.api.routers import commercial_estimator

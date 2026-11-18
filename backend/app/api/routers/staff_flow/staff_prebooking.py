@@ -303,6 +303,12 @@ def _estimate_from_payer(practice_id: str, details: dict, context: dict | None, 
         *(reason for row in priced_lines for reason in row["issues"])]))
     if collection["basis"] == "clinic_deferred_prebooking" and not issues:
         collection["reason"] += " " + collection_gap
+    office = priced_lines[0]["benefits"] if len(priced_lines) == 1 and priced_lines[0]["role"] == "visit" else {}
+    if (collection["basis"] == "clinic_deferred_prebooking" and verified and network == "in_network"
+            and office.get("copay_cents") is None and office.get("coinsurance_percent") in {"0", "0.0", "0.00"}
+            and office.get("deductible_applicability") == "UNKNOWN"
+            and office.get("deductible_remaining_cents") != 0 and office.get("deductible_annual_cents") != 0):
+        collection["reason"] += " The insurer reports 0% office coinsurance but does not say whether the office visit is subject to the deductible."
     displayed_terms = _terms(benefits)
     if (verified and network == "in_network" and identity.patient_benefits_bound(comparison)
             and len(priced_lines) == 1 and priced_lines[0]["role"] == "visit"):
