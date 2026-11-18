@@ -89,6 +89,33 @@ def cost_share_rows_present(payload: dict, service_types: list[str]) -> bool:
         for source in sources if isinstance(source, dict) for row in _stedi_entries(source))
 
 
+def out_of_network_office_rows(price: dict) -> str | None:
+    """Name payer office terms without treating a benefit tier as provider participation."""
+    from app.insurance import visit_estimate
+
+    lines = price.get("lines") or []
+    if len(lines) != 1 or visit_estimate.clinical_group(str(lines[0].get("code") or "")) != "visit":
+        return None
+    options = (lines[0].get("benefits") or {}).get("reported_options") or []
+    office = [row for row in options if row.get("service_type_code") == "98"
+              and row.get("coverage_level") in {"INDIVIDUAL", "IND"}
+              and row.get("plan_association") in {None, "medical", "medical_candidate", "unassigned"}
+              and (not row.get("places_of_service") or "11" in row["places_of_service"])]
+    if not any(row.get("network") in {"OUT_OF_NETWORK", "N"} for row in office) or any(
+            row.get("network") in {"IN_NETWORK", "Y"} for row in office):
+        return None
+    out = [row for row in office if row.get("network") in {"OUT_OF_NETWORK", "N"}]
+    remaining = {row.get("amount_cents") for row in out if row.get("kind") == "deductible"
+                 and row.get("time_period") in {"REMAINING", "29"}
+                 and type(row.get("amount_cents")) is int and row["amount_cents"] > 0}
+    zero_coin = any(row.get("kind") == "coinsurance" and str(row.get("percent")) in {"0", "0.0", "0.00"}
+                    for row in out)
+    terms = (f" They show 0% coinsurance and ${next(iter(remaining)) / 100:,.2f} remaining individual deductible."
+             if zero_coin and len(remaining) == 1 else "")
+    return ("The insurer returned only out-of-network office cost-sharing rows."
+            + terms + " It did not confirm whether this NMCT provider is out of network for this member. These rows do not give a dollar price for the visit.")
+
+
 def infer(kind: str, evidence: dict) -> str:
     """Ask the model for a bounded hypothesis; never send identity or raw payer text."""
     if kind not in _FALLBACK:

@@ -48,15 +48,13 @@ export default function StaffPrebookingScreen({
   const [result, setResult] = useState<PrebookingEstimate | null>(null)
   const today = new Date().toLocaleDateString('en-CA')
   const nmct = ['primary', 'f378bc13-af1d-4ea5-bfbd-8cd102e42ddc'].includes(practiceId)
-  const selectedContext = contexts.find((context) => context.id === contextId)
   const payerNotListed =
     optionsState === 'ready' && payers.length === 0 && insurer.trim().length >= 2
-
   useEffect(() => {
     getPrebookingContexts()
       .then(({ contexts: choices }) => {
         setContexts(choices)
-        if (choices.length) setContextId(choices[0].id)
+        setContextId(choices.length === 1 ? choices[0].id : '')
       })
       .catch(() => setContexts([]))
   }, [])
@@ -120,6 +118,10 @@ export default function StaffPrebookingScreen({
     setPayerCheckUnavailable(false)
     if (!form.payer_id) {
       setError('Choose the insurer from the search results.')
+      return
+    }
+    if (contexts.length > 1 && !contextId) {
+      setError('Choose the clinic provider and office where this visit would take place.')
       return
     }
     if (!form.member_id.trim()) {
@@ -357,8 +359,33 @@ export default function StaffPrebookingScreen({
             placeholder="Example: Headache consultation, or hand numbness with EMG planned"
           />
         </label>
+        {contexts.length > 1 && (
+          <label className="staff-field">
+            <span>Clinic provider and office *</span>
+            <select
+              value={contextId}
+              required
+              disabled={Boolean(busy)}
+              onChange={(event) => {
+                setContextId(event.target.value)
+                setResult(null)
+                setError('')
+              }}
+            >
+              <option value="">Choose the provider and office for this visit</option>
+              {contexts.map((context) => (
+                <option key={context.id} value={context.id}>
+                  {context.label}
+                </option>
+              ))}
+            </select>
+            <small>
+              Benefits can differ by provider. Use the office where the visit would occur.
+            </small>
+          </label>
+        )}
         <details className="prebooking-more-options">
-          <summary>Other details: dependent, visit date, provider</summary>
+          <summary>Other details: dependent and visit date</summary>
           <div className="staff-two-columns">
             <label className="staff-field">
               <span>Insurance belongs to</span>
@@ -433,34 +460,11 @@ export default function StaffPrebookingScreen({
               />
               <small>Blank checks today. Some payers reject future dates.</small>
             </label>
-            <label className="staff-field">
-              <span>Clinic provider and location</span>
-              <select
-                value={contextId}
-                disabled={Boolean(busy)}
-                onChange={(event) => {
-                  setContextId(event.target.value)
-                  setResult(null)
-                }}
-              >
-                <option value="">No configured provider selected</option>
-                {contexts.map((context) => (
-                  <option key={context.id} value={context.id}>
-                    {context.label}
-                  </option>
-                ))}
-              </select>
-              <small>
-                {contexts.length
-                  ? 'The first configured NMCT context is selected automatically.'
-                  : 'No configured provider/location found; a contract price may be unavailable.'}
-              </small>
-            </label>
           </div>
         </details>
-        {contexts.length > 0 && (
+        {contexts.length === 1 && (
           <p className="staff-small staff-muted">
-            {`Clinic provider and office used for pricing: ${selectedContext?.label || 'None selected'}. Change it under Other details.`}
+            {`Clinic provider and office used for pricing: ${contexts[0]?.label || 'None selected'}.`}
           </p>
         )}
         {plan && (

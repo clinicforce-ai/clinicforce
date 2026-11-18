@@ -264,6 +264,51 @@ def test_prebooking_pdf_pattern_gives_zero_arrival_and_names_missing_clinic_rate
     assert any("no exact NMCT contract rate" in issue for issue in result["issues"])
 
 
+def test_out_of_network_office_pdf_pattern_names_returned_deductible():
+    from app.api.routers import commercial_estimator
+
+    office = {"service": {"system": "STC", "value": "98"},
+              "coverageLevel": "INDIVIDUAL", "network": {"indicator": "OUT_OF_NETWORK"},
+              "messages": ["OFFICE VISIT - PROFESSIONAL"]}
+    payload = {"subscriber": {"memberId": "SYNTHETIC123", "name": {"person": {
+        "firstName": "Sam", "lastName": "Example"}}, "dateOfBirth": "1970-01-01"},
+        "dependent": {"name": {"person": {"firstName": "Pat", "lastName": "Example"}},
+                      "dateOfBirth": "2000-01-01", "relationToSubscriber": "Child"},
+        "plans": [{"name": "Synthetic PPO", "benefits": {
+            "statuses": [{"status": "ACTIVE_COVERAGE", "service": {"system": "STC", "value": "30"}}],
+            "coInsurance": [{**office, "percent": "0", "timePeriod": "VISIT"}],
+            "deductible": [{**office, "amount": "4200", "timePeriod": "CALENDAR_YEAR"},
+                           {**office, "amount": "4200", "timePeriod": "REMAINING"}]}}]}
+    details = {"payer_id": "EXAMPLE", "given_name": "Pat", "family_name": "Example",
+               "birth_date": "2000-01-01", "member_id": "SYNTHETIC123",
+               "reason": "Office visit", "visit_type": "new", "relationship": "self"}
+    selected = prebooking.validate_services([{"code": "99203", "units": 1}], "new", "Office visit")
+    context = {"billing_npi": PROVIDER["npi"], "rendering_npi": PROVIDER["npi"],
+               "location_id": "office-1", "place_of_service": "11"}
+
+    def price_office_only(result, practice_id, inputs, source, payer_id, benefits, **kwargs):
+        result["price_range"] = visit_estimate.price_lines(result["codes"], [], benefits,
+            {"cost_share": "payer_returned", "place_of_service": "11", "provider_npi": PROVIDER["npi"]},
+            payload=payload, service_date="2026-11-18")
+
+    with patch.object(commercial_estimator, "_attach_previsit_pricing", side_effect=price_office_only), \
+         patch.object(staff_prebooking.commercial_store, "list_connections", return_value=[]):
+        quote = staff_prebooking._estimate_from_payer(network_participation.NMCT_PRACTICE_ID,
+            details, context, PAYER, PROVIDER, payload, "2026-11-18", selected)
+    assert quote["collection"]["amount_cents"] == 0
+    assert quote["network_status"] == "unknown"
+    assert "out-of-network office cost-sharing rows" in quote["issues"][0]
+    assert "$4,200.00 remaining individual deductible" in quote["issues"][0]
+    assert "did not confirm whether this NMCT provider is out of network" in quote["issues"][0]
+
+    office["network"]["indicator"] = "IN_NETWORK"
+    with patch.object(commercial_estimator, "_attach_previsit_pricing", side_effect=price_office_only), \
+         patch.object(staff_prebooking.commercial_store, "list_connections", return_value=[]):
+        in_network_rows = staff_prebooking._estimate_from_payer(network_participation.NMCT_PRACTICE_ID,
+            details, context, PAYER, PROVIDER, payload, "2026-11-18", selected)
+    assert not any("out-of-network office cost-sharing rows" in reason for reason in in_network_rows["issues"])
+
+
 def test_payer_suggestions_keep_stedi_ranked_medical_matches():
     def respond(request):
         assert request.url.params["query"] == "Example Health"

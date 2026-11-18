@@ -10,6 +10,7 @@ let partial = false
 let unexplained = false
 let copayOnly = false
 let plans = 0
+let multipleContexts = false
 
 await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
   const url = new URL(route.request().url())
@@ -23,7 +24,10 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
   } else if (url.pathname === '/api/staff/prebooking-eligibility/options') {
     body = { payers: url.searchParams.get('query')?.includes('Unlisted') ? [] : [{ id: 'EXAMPLE', name: 'Example Health' }] }
   } else if (url.pathname === '/api/staff/prebooking-estimate/contexts') {
-    body = { contexts: [{ id: 'context-1', label: 'Example Clinic · location 1 · provider 1234567893 · POS 11' }] }
+    body = { contexts: [
+      { id: 'context-1', label: 'Example Clinic · location 1 · provider 1234567893 · POS 11' },
+      ...(multipleContexts ? [{ id: 'context-2', label: 'Example Clinic · location 2 · provider 1720615453 · POS 11' }] : []),
+    ] }
   } else if (url.pathname === '/api/staff/prebooking-estimate/plan') {
     plans++
     const isEmg = route.request().postDataJSON().reason.includes('EMG')
@@ -36,7 +40,7 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
     checks++
     const inquiry = route.request().postDataJSON()
     assert.equal(inquiry.member_id.startsWith('SYNTHETIC'), true)
-    assert.equal(inquiry.network_context_id, 'context-1')
+    assert.equal(inquiry.network_context_id, multipleContexts ? 'context-2' : 'context-1')
     const officeCode = inquiry.visit_type === 'established' ? '99213' : '99203'
     assert.equal(inquiry.selected_services.some((service) => service.code === officeCode && service.units === 1), true)
     const addedEmg = inquiry.selected_services.some((service) => service.code === '95909')
@@ -184,6 +188,25 @@ try {
   await page.getByLabel('Insurance company').fill('Unlisted Insurer')
   await page.getByText(/Stedi did not list an insurer matching this search/).waitFor()
   assert.match(await page.getByText('Collect on arrival').locator('..').innerText(), /\$0\.00/)
+  multipleContexts = true
+  await page.reload()
+  await page.getByRole('button', { name: 'Check before booking' }).click()
+  await page.getByLabel('Clinic provider and office').waitFor()
+  await page.getByLabel("Patient's first name").fill('Pat')
+  await page.getByLabel("Patient's last name").fill('Example')
+  await page.getByLabel("Patient's birth date").fill('1980-01-01')
+  await page.getByLabel('Insurance company').fill('Example')
+  await page.getByRole('option', { name: 'Example Health (EXAMPLE)' }).click()
+  await page.getByLabel('Member ID from insurance card').fill('SYNTHETIC-MULTI')
+  await page.getByLabel('Reason for visit').fill('office consultation')
+  const beforeProviderChoice = checks
+  await page.getByRole('button', { name: 'Check insurance and estimate visit' }).click()
+  assert.equal(checks, beforeProviderChoice)
+  assert.equal(await page.getByLabel('Clinic provider and office').evaluate((input) => input.validity.valueMissing), true)
+  await page.getByLabel('Clinic provider and office').selectOption('context-2')
+  await page.getByRole('button', { name: 'Check insurance and estimate visit' }).click()
+  await page.getByText('Estimate ready').waitFor()
+  assert.equal(checks, beforeProviderChoice + 1)
   console.log('PASS: prebooking review and priced totals reconcile in responsive staff UI')
 } finally {
   await browser.close()
