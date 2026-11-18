@@ -135,7 +135,7 @@ def _prospective_collection(practice_id: str, payer_id: str, benefits: dict, com
                             price: dict, lines: list[dict], network_evidence: dict | None,
                             ready: bool) -> dict:
     missing = {"amount_cents": None, "basis": "needs_review", "reason":
-               "A collection amount needs a priced service, matched member and plan, clinic network and rate evidence, and an approved collection rule.",
+               "ClinicForce did not calculate one patient share for these services or find an applicable fixed office copay in the insurer's reply.",
                "components": None}
     office_copay_candidate = (network_participation.is_nmct_practice(practice_id)
         and benefits.get("active") is True and identity.patient_benefits_bound(comparison)
@@ -152,7 +152,8 @@ def _prospective_collection(practice_id: str, payer_id: str, benefits: dict, com
     if not (isinstance(policy, dict) and policy.get("mode") in {
             "defer_to_claim", "collect_verified_copay", "collect_supported_advance"}
             and all(policy.get(key) for key in ("approved_by", "approved_at", "reference"))):
-        return missing
+        return {**missing, "reason":
+                "NMCT has no approved check-in collection rule for this insurer."}
     evidence = {"benefits": benefits, "identity": comparison, "price_range": price,
                 "codes": lines, "selected_ids": [row["id"] for row in lines],
                 "network_evidence": network_evidence, "payment_mode": "insurance",
@@ -263,6 +264,7 @@ def _estimate_from_payer(practice_id: str, details: dict, context: dict | None, 
     allowed_total = sum(row["allowed_cents"] for row in priced_rows.values()) if contract_ready else None
     collection = _prospective_collection(practice_id, payer["stediId"], benefits, comparison,
                                          price, lines, result.get("network_evidence"), ready)
+    collection_gap = collection["reason"] if collection["amount_cents"] is None else ""
     if collection["amount_cents"] is None:
         collection = _deferred_collection(practice_id)
     priced_lines = []
@@ -299,6 +301,8 @@ def _estimate_from_payer(practice_id: str, details: dict, context: dict | None, 
         blockers.append("ClinicForce did not complete the selected service price calculation, so no patient share was shown.")
     issues = list(dict.fromkeys([*blockers, *result["issues"], *(price.get("service_issues") or []),
         *(reason for row in priced_lines for reason in row["issues"])]))
+    if collection["basis"] == "clinic_deferred_prebooking" and not issues:
+        collection["reason"] += " " + collection_gap
     displayed_terms = _terms(benefits)
     if (verified and network == "in_network" and identity.patient_benefits_bound(comparison)
             and len(priced_lines) == 1 and priced_lines[0]["role"] == "visit"):

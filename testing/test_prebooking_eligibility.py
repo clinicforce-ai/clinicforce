@@ -125,6 +125,12 @@ def test_prebooking_uses_verified_office_copay_when_rate_is_missing():
     assert result["basis"] == "office_copay"
     assert result["components"] is None
 
+    with patch.object(staff_prebooking.commercial_store, "list_connections", return_value=[]):
+        no_rule = staff_prebooking._prospective_collection(network_participation.NMCT_PRACTICE_ID,
+            "EXAMPLE", case["benefits"], comparison, case["price_range"], selected, None, False)
+    assert no_rule["amount_cents"] is None
+    assert no_rule["reason"] == "NMCT has no approved check-in collection rule for this insurer."
+
     details = {**PERSON, "reason": "New patient office consultation", "visit_type": "new"}
     selected = prebooking.validate_services([{"code": "99203", "units": 1}], "new", details["reason"])
     payload = response()
