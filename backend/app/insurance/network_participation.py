@@ -74,7 +74,7 @@ def verified_in_network(benefits: dict) -> bool:
             and benefits.get('network_source') in {'clinic_library_contract', 'clinic_group_agreement',
                                                    'payer_participation_message', 'clinic_attested_phcs_roster',
                                                    'clinic_attested_cigna_tpa', 'clinic_attested_cigna_ppo',
-                                                   'clinic_attested_aetna_office'}
+                                                   'clinic_attested_aetna_office', 'clinic_product_roster'}
             and not participation_conflict(benefits))
 
 

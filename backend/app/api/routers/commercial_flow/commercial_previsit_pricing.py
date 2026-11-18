@@ -3,7 +3,7 @@ from __future__ import annotations
 from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_catalog import requirement_candidates as _requirement_candidates
 from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_uhc_rates, _attach_temporary_blue_cross_rates, attach_prudent_buyer_office_reference, attach_blue_cross_reference_if_unpriced, prudent_buyer_office_reference
-from app.api.routers.commercial_flow.commercial_previsit_network_guard import apply_admin_nonparticipation, apply_nmct_cigna_administrator_attestation, apply_nmct_cigna_ppo_attestation, apply_nmct_library_contract, apply_nmct_contract_absence, scoped_admin_nonparticipation, record_confirmed_out_of_network, resolve_unlinked_blue_route, bluecard_pricing_route
+from app.api.routers.commercial_flow.commercial_previsit_network_guard import apply_admin_nonparticipation, apply_nmct_cigna_administrator_attestation, apply_nmct_product_attestation, apply_nmct_library_contract, apply_nmct_contract_absence, scoped_admin_nonparticipation, record_confirmed_out_of_network, resolve_unlinked_blue_route, bluecard_pricing_route
 from app.api.routers.commercial_flow.commercial_previsit_service_scope import reviewed_service_types as _reviewed_service_types
 from app.api.routers.commercial_flow.commercial_previsit_context import ecw_case_data as _ecw_case_data
 from app.api.routers.commercial_flow.commercial_previsit_context import past_visit_with_saved_estimate as _past_visit_with_saved_estimate
@@ -303,11 +303,13 @@ def _product_mapping_evidence(profile: dict, network: dict, source: dict, servic
 
 def _apply_inventory_tier(result: dict, benefits: dict, inventory: dict, exclusion: dict) -> None:
     """Use a certified clinic inventory as an operational, never payer-confirmed, tier."""
-    if benefits.get('network_source') == 'payer_participation_message' and benefits.get('network_status') == 'in_network':
+    if benefits.get('network_conflict'):
+        return
+    if benefits.get('network_status') == 'in_network' and benefits.get('network_source') in {'payer_participation_message', 'clinic_product_roster'}:
         benefits['network_conflict'] = True
         benefits['network_status'] = 'unknown'
         result['network_evidence'] = {**inventory, 'decision': 'conflicting_network_evidence',
-            'reason': 'A current payer participation statement conflicts with NMCT’s certified UHC agreement inventory.'}
+            'reason': 'NMCT’s current product roster or a payer statement conflicts with its certified UHC agreement inventory. Verify the exact product before quoting an in-network amount.'}
         return
     benefits['network_status'] = 'out_of_network'
     benefits['network_source'] = 'clinic_contract_inventory'
@@ -345,8 +347,7 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
         practice_id, route_payer, inputs, source,
         source.get('payer_plan_names') or [], str((source.get('payer_plan_scope') or {}).get('group_number') or '')))
     apply_nmct_cigna_administrator_attestation(result, benefits, practice_id, payer_id, payload, inputs, source)
-    if not nmct_contract:
-        apply_nmct_cigna_ppo_attestation(result, benefits, practice_id, payer_name, payload, inputs, source)
+    apply_nmct_product_attestation(result, benefits, practice_id, payer_name, payload, inputs, source, nmct_contract)
     if exclusion:
         result['agreement_exclusion'] = exclusion
         result['network_evidence'] = {**exclusion,
@@ -448,7 +449,7 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
             if source.get('payer_network_names'):
                 evidence['payer_network_name'] = source['payer_network_names'][0]
                 evidence['payer_network_source'] = 'Stedi planNetwork'
-        elif scope_complete and not exclusion:
+        elif scope_complete and not exclusion and benefits.get('network_source') != 'clinic_product_roster':
             result['network_evidence'] = {**evidence, 'decision': 'lacking_applicable_network_evidence',
                 'reason': evidence.get('reason') or
                 'The Clinical Library has no contract linked to this exact payer product and provider.'}
@@ -458,7 +459,7 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
         if scope_complete and str(exc.detail) == 'A sourced nonparticipation rule applies to this provider, product, location and date.':
             benefits['network_status'] = 'out_of_network'
             benefits['network_source'] = 'clinic_nonparticipation_rule'
-        if not exclusion:
+        if not exclusion and benefits.get('network_source') != 'clinic_product_roster':
             result['network_evidence'] = {'decision': 'out_of_network_confirmed_by_scoped_nonparticipation_record'
                 if benefits.get('network_source') == 'clinic_nonparticipation_rule'
                 else 'lacking_applicable_network_evidence',
@@ -486,8 +487,7 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
         apply_nmct_contract_absence(result, benefits, payer_name, nmct_contract,
                                     service_date, source.get('payer_plan_bound'))
     apply_nmct_cigna_administrator_attestation(result, benefits, practice_id, payer_id, payload, inputs, source)
-    if not nmct_contract:
-        apply_nmct_cigna_ppo_attestation(result, benefits, practice_id, payer_name, payload, inputs, source)
+    apply_nmct_product_attestation(result, benefits, practice_id, payer_name, payload, inputs, source, nmct_contract)
     if _api.network_participation.verified_out_of_network(benefits):
         record_confirmed_out_of_network(result, benefits)
     priced_source = {**source, **((result.get('network_evidence') or {}).get('scope') or {})}
