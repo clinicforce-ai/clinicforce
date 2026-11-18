@@ -10,7 +10,7 @@ from app.insurance.collection.pricing_actions import priced_line_issue, priced_p
 from app.insurance.collection.requirements import requirement_blocker
 from app.insurance.library_network_exclusions import product_kind
 from app.insurance.insurance_product import is_medicare_advantage
-from app.insurance.amount_explanation_terms import choice_plus_reported_terms as _choice_plus_reported_terms, identity_or_date_cause
+from app.insurance.amount_explanation_terms import choice_plus_reported_terms as _choice_plus_reported_terms, identity_or_date_cause, identity_or_date_reason
 def _money(cents: int) -> str:
     return f'${cents // 100:,}.{cents % 100:02d}'
 def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network: str, benefits: dict, unpriced: list[str],
@@ -36,10 +36,7 @@ def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network
             return (f'the insurance search returned {count_label} and {"UHC" if result.get("payer") in {"United Healthcare", "UnitedHealthcare"} else "Stedi"} COB reported conflicting medical payer roles'), 'multiple_active_policies'
         return (f'the insurance search returned {count_label} '
                 'and did not identify which pays first'), 'multiple_active_policies'
-    if (reason not in {'no_coverage_found', 'upstream_no_policies'} and payer_response_present and benefits.get('active') is True
-            and patient_benefits_bound(identity) and benefits.get('service_date_matches') is False):
-        return 'the payer response date differs from the scheduled visit date', 'payer_service_date_mismatch'
-    if reason in {'identity_or_coverage_review', 'subscriber_relationship_conflict', 'returned_identity_or_coverage_mismatch'}:
+    if identity_or_date_reason(reason, benefits, identity):
         return identity_or_date_cause(benefits, identity)
     if reason == 'discovered_payer_not_routable' and not active_benefits:
         return 'the payer directory returned more than one supported route for the reported insurer', 'payer_route_ambiguous'
