@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException
 from app.api.routers import staff
 from app.api.routers.staff_flow import staff_prebooking
 from app.api.schemas.staff import PrebookingEstimateResponse
-from app.insurance import network_participation, prebooking, prebooking_reason, stedi, stedi_payers
+from app.insurance import commercial, network_participation, prebooking, prebooking_reason, stedi, stedi_payers, visit_estimate
 
 
 PAYER = {"stediId": "EXAMPLE", "displayName": "Example Health", "transactionSupport": {"eligibilityCheck": "SUPPORTED"}}
@@ -155,6 +155,54 @@ def test_prebooking_uses_verified_office_copay_when_rate_is_missing():
     assert quote["collection"]["amount_cents"] == 1500
     assert quote["allowed_total_cents"] is None
     assert quote["patient_max_cents"] is None
+
+
+def test_raw_office_271_copay_reaches_arrival_collection_without_a_clinic_rate():
+    from testing.synthetic_policy import COPAY_POLICY
+
+    payload = response()
+    payload["plans"][0]["name"] = "Example PPO"
+    rows = payload["plans"][0]["benefits"]
+    rows["statuses"].append({"status": "ACTIVE_COVERAGE",
+                             "service": {"system": "STC", "value": "98"}})
+    office = {"service": {"system": "STC", "value": "98"},
+              "coverageLevel": "INDIVIDUAL", "network": {"indicator": "IN_NETWORK"},
+              "messages": ["PHYSICIAN OFFICE VISIT SPECIALIST"]}
+    rows["coPayment"] = [{**office, "amount": "15", "timePeriod": "VISIT"}]
+    rows["coInsurance"] = [{**office, "percent": "0"}]
+    rows["outOfPocket"] = [{"service": {"system": "STC", "value": "30"},
+                            "coverageLevel": "INDIVIDUAL", "network": {"indicator": "IN_NETWORK"},
+                            "amount": "3000", "timePeriod": "REMAINING"}]
+    benefits = commercial.normalize_stedi_271(payload, "30", True,
+        service_date="2026-10-27", place_of_service="11", provider_npi=PROVIDER["npi"])
+    comparison = {"status": "matched", "binding": "synthetic", "match_version": 2}
+    benefits.update(identity=comparison, network_status="in_network",
+                    network_source="clinic_library_contract")
+    selected = prebooking.validate_services([{"code": "99203", "units": 1}], "new", "Office visit")
+    price = visit_estimate.price_lines(selected, [], benefits,
+        {"cost_share": "payer_returned", "place_of_service": "11", "provider_npi": PROVIDER["npi"]},
+        payload=payload, service_date="2026-10-27")
+    assert benefits["copay_cents"] is None
+    assert price["lines"][0]["benefits"]["copay_cents"] == 1500
+    with patch.object(staff_prebooking.commercial_store, "list_connections", return_value=[
+            {"stedi_payer_id": "EXAMPLE", "rules": {"collection_policy": COPAY_POLICY}}]):
+        amount = staff_prebooking._prospective_collection(network_participation.NMCT_PRACTICE_ID,
+            "EXAMPLE", benefits, comparison, price, selected,
+            {"decision": "confirmed_participating", "source": "clinic_library_contract"}, False)
+    assert amount["amount_cents"] == 1500
+    assert amount["basis"] == "office_copay"
+
+    del rows["coPayment"]
+    without_copay = visit_estimate.price_lines(selected, [], benefits,
+        {"cost_share": "payer_returned", "place_of_service": "11", "provider_npi": PROVIDER["npi"]},
+        payload=payload, service_date="2026-10-27")
+    with patch.object(staff_prebooking.commercial_store, "list_connections", return_value=[
+            {"stedi_payer_id": "EXAMPLE", "rules": {"collection_policy": COPAY_POLICY}}]):
+        no_amount = staff_prebooking._prospective_collection(network_participation.NMCT_PRACTICE_ID,
+            "EXAMPLE", benefits, comparison, without_copay, selected,
+            {"decision": "confirmed_participating", "source": "clinic_library_contract"}, False)
+    assert no_amount["amount_cents"] is None
+    assert staff_prebooking._deferred_collection(network_participation.NMCT_PRACTICE_ID)["amount_cents"] == 0
 
 
 def test_prebooking_pdf_pattern_gives_zero_arrival_and_names_missing_clinic_rates():
