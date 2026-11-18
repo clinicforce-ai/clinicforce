@@ -11,7 +11,7 @@ from app.insurance.provider_specialty import office_role
 
 def _nmct_fixed_office_copay(result: dict, benefits: dict, price: dict,
                              lines: list[dict], amount: int) -> bool:
-    """Approve one sourced office copay when only the CPT allowance is missing."""
+    """Approve one sourced office copay independent of deductible uncertainty."""
     if (result.get('nmct_fixed_office_copay_advance_enabled') is not True
             or price.get('mode') != 'services' or price.get('conditional')
             or price.get('service_issues') or len(lines) != 1 or amount <= 0
@@ -27,8 +27,12 @@ def _nmct_fixed_office_copay(result: dict, benefits: dict, price: dict,
     copay = terms.get('copay_cents')
     if (line.get('code') not in {str(n) for n in (*range(99202, 99206), *range(99212, 99216))}
             or line.get('units') != 1 or line.get('modifiers') or line.get('conditions')
-            or line.get('allowed_cents') is not None
-            or (line.get('rate_resolution') or {}).get('status') != 'RATE_UNAVAILABLE'
+            or not (line.get('allowed_cents') is None
+                    and (line.get('rate_resolution') or {}).get('status') == 'RATE_UNAVAILABLE'
+                    or type(line.get('allowed_cents')) is int
+                    and line['allowed_cents'] >= copay
+                    and line.get('allowed_basis') in {'payer_fee_schedule', 'clinic_contract'}
+                    and (line.get('rate_resolution') or {}).get('status') == 'RESOLVED')
             or terms.get('active') is not True or terms.get('copay_period') != 'VISIT'
             or type(copay) is not int or not 0 < copay <= 100_000 or amount > copay
             or terms.get('deductible_applies') is True

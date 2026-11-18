@@ -18,6 +18,7 @@ export function networkEvidenceStatus(result: PrevisitEstimate | null) {
       'clinic_attested_phcs_roster',
       'clinic_attested_cigna_tpa',
       'clinic_attested_cigna_ppo',
+      'clinic_attested_aetna_office',
     ].includes(benefits.network_source || '')
   const outOfNetworkConfirmed =
     benefits?.network_status === 'out_of_network' &&

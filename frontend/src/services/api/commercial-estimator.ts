@@ -9,6 +9,7 @@ export type {
   VisitCode,
   VisitReview,
   VisitFinancials,
+  ClaimCollection,
 } from './commercial-visit-types'
 
 const root = '/api/doctor/insurance/commercial'

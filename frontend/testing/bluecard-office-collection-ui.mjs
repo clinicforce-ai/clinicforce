@@ -20,6 +20,15 @@ try {
   const { deriveCommercialEstimateView } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/deriveCommercialEstimateView.ts',
   )
+  const { commercialRequirementRows } = await server.ssrLoadModule(
+    '/src/features/commercial-estimate/commercialRequirementStatus.ts',
+  )
+  const { networkRow } = await server.ssrLoadModule(
+    '/src/features/commercial-estimate/referenceCoverageRow.ts',
+  )
+  const { default: CommercialCostTables } = await server.ssrLoadModule(
+    '/src/features/commercial-estimate/CommercialCostTables.tsx',
+  )
   const result = {
     payer: 'Blue Cross Blue Shield Tx',
     plan_details: { stedi: { names: ['Preferred Provider Organization'] } },
@@ -168,6 +177,44 @@ try {
     readOnly: false, recovering: false })
   assert.equal(derived.supportedAmount, true)
   assert.equal(derived.amount, '$101.17')
+
+  const ppoVisit = {
+    payer: 'Blue Cross Blue Shield Tx', service_date: '2026-11-18',
+    plan_details: { stedi: { names: ['PREFERRED PROVIDER OPTION PLUS MEDICAL'] } },
+    identity: { status: 'warning', binding: 'synthetic-member-binding', match_version: 2 },
+    benefits: { active: true, service_date_matches: null, network_status: 'in_network',
+      network_source: 'clinic_group_agreement', copay_cents: 6000 },
+    network_evidence: { decision: 'in_network_contract_supported' },
+    codes: [{ id: 'office', code: '99214', units: 1 }],
+    price_range: { mode: 'services', lines: [{ id: 'office', code: '99214', units: 1,
+      allowed_cents: null, benefits: { copay_cents: 6000, network_status: 'in_network' } }] },
+    requirement_evidence: { procedures: [{ id: 'office', code: '99214',
+      referral: { status: 'Not required' }, authorization: { status: 'Not required' } }] },
+    collection_guidance: { amount_cents: 6000, status: 'estimated', basis: 'office_copay', services: [],
+      reason: 'Collect the reported office copay; final responsibility follows the claim.' },
+    encounter_summary: { collect_today_cents: 6000, payments_verified_cents: 0 },
+  }
+  const ppoModel = deriveCommercialEstimateView({ result: ppoVisit,
+    appointments: [], selectedVisit: null, busy: null, error: null,
+    readOnly: true, recovering: false })
+  assert.equal(ppoModel.networkLabel, 'In network · clinic agreement')
+  assert.equal(ppoModel.amount, '$60.00')
+  const ppoRequirements = commercialRequirementRows(ppoVisit, false, false)
+  assert.equal(ppoRequirements.find((row) => row.label === 'Referral').value, 'CPT 99214: not required')
+  assert.equal(ppoRequirements.find((row) => row.label === 'Prior authorization').value, 'CPT 99214: not required')
+  const ppoCollection = collectionAtVisitRow(ppoVisit, ppoModel, {
+    combinedPlan: null, feeProxy: null, aetnaPlanning: null, aetnaCopayPlanning: null,
+    officeReferenceCopay: null, humanaReferenceCopay: null, partialOfficeCopay: null,
+    pendingAetnaCopay: null, priorDateAetnaCopay: null, pendingBluecardCopay: null,
+    cardPlanningCopay: null, cignaCard: null, automaticCashFallback: false,
+    cignaFeeProxy: false, proxyFormula: undefined, bluecardDeductible: null })
+  assert.equal(ppoCollection.value, '$60.00')
+  const ppoTable = renderToStaticMarkup(React.createElement(CommercialCostTables,
+    { result: ppoVisit, model: ppoModel,
+      rows: [networkRow(ppoModel, false, ppoVisit), ...ppoRequirements, ppoCollection] }))
+  assert.match(ppoTable, /In network · clinic agreement/)
+  assert.match(ppoTable, /CPT 99214: not required/)
+  assert.match(ppoTable, /\$60\.00/)
 } finally {
   await server.close()
 }

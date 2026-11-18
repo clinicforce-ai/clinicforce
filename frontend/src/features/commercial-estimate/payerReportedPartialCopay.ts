@@ -141,7 +141,9 @@ export function specialistOfficeCopay(
           networks.includes(row.network) &&
           (row.places_of_service?.includes('11') ||
             (officeRequest && !row.places_of_service?.length)) &&
-          /\bSpecialist Visit or Evaluation\b|^SPECIALIST$/i.test(row.payer_note || '') &&
+          /^Specialist(?: Visit or Evaluation| Benefit does apply to member.s out-of-pocket maximum)?$/i.test(
+            row.payer_note || '',
+          ) &&
           !/telemedicine|teladoc|virtual/i.test(row.payer_note || '') &&
           row.plan_association !== 'supplementary' &&
           Number.isInteger(row.amount_cents) &&
@@ -156,6 +158,11 @@ export function specialistOfficeCoinsurance(
   result: PrevisitEstimate,
   networks = ['IN_NETWORK', 'IN_AND_OUT_OF_NETWORK'],
 ): string | null {
+  const officeRequest =
+    !result.telehealth &&
+    (result.network_evidence?.place_of_service === '11' ||
+      (!result.network_evidence?.place_of_service &&
+        result.requested_service_types?.includes('98')))
   const percents = new Set(
     (result.benefits?.active === true ? result.benefits.reported_options || [] : [])
       .filter(
@@ -167,7 +174,8 @@ export function specialistOfficeCoinsurance(
             .includes('98') &&
           row.coverage_level === 'INDIVIDUAL' &&
           networks.includes(row.network) &&
-          row.places_of_service?.includes('11') &&
+          (row.places_of_service?.includes('11') ||
+            (officeRequest && !row.places_of_service?.length)) &&
           row.plan_association !== 'supplementary' &&
           row.percent != null,
       )

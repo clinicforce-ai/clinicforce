@@ -72,41 +72,44 @@ export function coveragePolicyStatus({
                         ? result?.identity?.status === 'review'
                           ? 'Payer benefits returned · patient identity differs'
                           : 'Payer benefits returned · patient match missing'
-                        : benefits?.service_date_matches === false
-                          ? 'Coverage dates differ from visit'
-                          : benefits?.active === true
-                            ? 'Coverage active'
-                            : benefits?.coverage_evidence?.status === 'EXPIRED'
-                              ? 'Returned policy expired'
-                              : benefits?.coverage_evidence?.status === 'FUTURE'
-                                ? 'Coverage starts after this visit'
-                                : benefits?.active === false
-                                  ? 'Coverage inactive'
-                                  : candidateStatus === 'EXPIRED'
-                                    ? 'Returned policy expired'
-                                    : candidateStatus === 'INACTIVE'
-                                      ? 'Returned policy inactive'
-                                      : candidateStatus === 'FUTURE'
-                                        ? 'Returned coverage starts after this visit'
-                                        : result?.coverage_status === 'NOT_FOUND'
-                                          ? 'Coverage not found electronically'
-                                          : result?.coverage_status === 'REVIEW_REQUIRED'
-                                            ? 'Policy review pending'
-                                            : result?.ecw_coverage_active
-                                              ? 'eCW policy · payer check needed'
-                                              : result?.recovery?.reason_code ===
-                                                  'multiple_active_policies'
-                                                ? 'Multiple active policies found'
-                                                : failureKind === 'provider_enrollment'
-                                                  ? 'Clinic payer access missing'
-                                                  : result?.identity?.status === 'review'
-                                                    ? 'Policy details differ'
-                                                    : result?.cash_fallback
-                                                      ? 'Payer check needed'
-                                                      : result
-                                                        ? 'Payer check incomplete'
-                                                        : busy === 'estimate'
-                                                          ? 'Coverage check in progress'
-                                                          : 'Coverage not checked'
+                        : result?.collection_guidance?.collection_rule?.mode ===
+                            'aetna_office_individual_oop_deferral'
+                          ? 'Aetna office benefits · $0 check-in'
+                          : benefits?.service_date_matches === false
+                            ? 'Coverage dates differ from visit'
+                            : benefits?.active === true
+                              ? 'Coverage active'
+                              : benefits?.coverage_evidence?.status === 'EXPIRED'
+                                ? 'Returned policy expired'
+                                : benefits?.coverage_evidence?.status === 'FUTURE'
+                                  ? 'Coverage starts after this visit'
+                                  : benefits?.active === false
+                                    ? 'Coverage inactive'
+                                    : candidateStatus === 'EXPIRED'
+                                      ? 'Returned policy expired'
+                                      : candidateStatus === 'INACTIVE'
+                                        ? 'Returned policy inactive'
+                                        : candidateStatus === 'FUTURE'
+                                          ? 'Returned coverage starts after this visit'
+                                          : result?.coverage_status === 'NOT_FOUND'
+                                            ? 'Coverage not found electronically'
+                                            : result?.coverage_status === 'REVIEW_REQUIRED'
+                                              ? 'Policy review pending'
+                                              : result?.ecw_coverage_active
+                                                ? 'eCW policy · payer check needed'
+                                                : result?.recovery?.reason_code ===
+                                                    'multiple_active_policies'
+                                                  ? 'Multiple active policies found'
+                                                  : failureKind === 'provider_enrollment'
+                                                    ? 'Clinic payer access missing'
+                                                    : result?.identity?.status === 'review'
+                                                      ? 'Policy details differ'
+                                                      : result?.cash_fallback
+                                                        ? 'Payer check needed'
+                                                        : result
+                                                          ? 'Payer check incomplete'
+                                                          : busy === 'estimate'
+                                                            ? 'Coverage check in progress'
+                                                            : 'Coverage not checked'
   return policyStatus
 }

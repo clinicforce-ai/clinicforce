@@ -3,6 +3,7 @@ import CostBreakdownTable, { type CostBreakdownRow } from '../insurance-estimate
 import { feeProxyFormula } from './coinsuranceFormula'
 import { money } from './format'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
+import { uhcQmbOfficeRows } from './uhcQmbOfficeTable'
 
 export default function CommercialCostTables({
   result,
@@ -60,10 +61,14 @@ export default function CommercialCostTables({
       )
     : rows
   const planning = result.aetna_office_planning
+  const telemedicineReference = planning?.coinsurance_scope === 'telemedicine_reference'
+  const cappedOffice =
+    result.collection_guidance?.collection_rule?.mode === 'aetna_office_individual_oop_deferral' &&
+    !!planning
   const visibleRows = displayedRows
     .filter((row) => cash || row.label !== 'Cash alternative')
     .map((row) => {
-      if (!planning || model.supportedAmount) return row
+      if (!planning || (model.supportedAmount && !cappedOffice)) return row
       if (row.label === 'Total payer allowed')
         return {
           ...row,
@@ -72,13 +77,26 @@ export default function CommercialCostTables({
           detail:
             'Approved clinic schedule for the proposed office CPT; final payer allowance follows the claim.',
         }
+      if (row.label === 'Copay' && cappedOffice && telemedicineReference)
+        return {
+          ...row,
+          detail:
+            'The $0 specialist copay row is marked telemedicine. The in-person office copay was not returned; the medical out-of-pocket cap drives the $0 check-in decision.',
+        }
       if (row.label === 'Coinsurance')
         return {
           ...row,
-          value: `${planning.coinsurance_percent}% in-network specialist office visit · prior-date payer response`,
-          detail:
-            planning.copay_cents != null
-              ? 'The reported specialist office copay sets the conditional patient share; zero coinsurance adds nothing.'
+          value: telemedicineReference
+            ? `${planning.coinsurance_percent}% telemedicine reference; in-person rate not returned`
+            : planning.coinsurance_percent == null
+              ? 'Not returned for the in-person specialist visit'
+              : `${planning.coinsurance_percent}% in-network specialist office visit`,
+          detail: telemedicineReference
+            ? 'Aetna marked this specialist percentage as telemedicine. It illustrates the fee calculation but does not establish the in-person office rate.'
+            : planning.copay_cents != null
+              ? planning.coinsurance_percent == null
+                ? 'The payer returned a telemedicine coinsurance row, which does not establish an in-person office rate. The displayed split assumes the fixed copay is the only cost share.'
+                : 'The reported specialist office copay sets the conditional patient share; zero coinsurance adds nothing.'
               : 'The payer also returned a separate telemedicine rate; the planned visit is in person.',
         }
       if (
@@ -88,22 +106,53 @@ export default function CommercialCostTables({
         return {
           ...row,
           label: 'Conditional patient share',
-          value:
-            planning.copay_cents != null
+          value: cappedOffice
+            ? money(0)
+            : planning.copay_cents != null
               ? money(planning.copay_cents)
               : `${money(planning.deductible_applies_cents)} if deductible applies; ${money(planning.deductible_waived_cents)} if waived`,
-          detail:
-            planning.copay_cents != null
-              ? `${money(planning.copay_cents)} reported copay + $0.00 deductible + 0% coinsurance. Prior-date planning only.`
+          detail: cappedOffice
+            ? telemedicineReference
+              ? `The telemedicine reference gives ${planning.coinsurance_percent}% × ${money(planning.allowed_cents)} = ${money(planning.gross_coinsurance_cents || 0)} illustratively. The individual in-network medical maximum has ${money(0)} remaining, so covered office cost-sharing is capped at ${money(0)} regardless of the in-person rate.`
+              : `${planning.coinsurance_percent}% × ${money(planning.allowed_cents)} = ${money(planning.gross_coinsurance_cents || 0)} before the out-of-pocket cap; min(${money(planning.gross_coinsurance_cents || 0)}, ${money(0)} individual in-network remaining) = ${money(0)} for covered care.`
+            : planning.copay_cents != null
+              ? `${money(planning.copay_cents)} reported copay + $0.00 remaining deductible${planning.coinsurance_percent == null ? '; in-person coinsurance was not returned. Copay-only scenario.' : ' + 0% office coinsurance.'} Prior-date planning only.`
               : 'The office-visit row does not establish whether the plan-wide deductible applies to this CPT.',
         }
       return row
     })
-  if (planning?.plan_share_cents != null && !model.supportedAmount)
+  if (cappedOffice) {
+    const gross = planning!.gross_coinsurance_cents || 0
+    const insertAt = visibleRows.findIndex((row) => row.label === 'Amount to collect at visit')
+    visibleRows.splice(
+      insertAt < 0 ? visibleRows.length : insertAt,
+      0,
+      {
+        label: telemedicineReference
+          ? 'Illustrative coinsurance before cap'
+          : 'Gross coinsurance before cap',
+        value: money(gross),
+        detail: `${planning!.coinsurance_percent}% × ${money(planning!.allowed_cents)} clinic fee reference${telemedicineReference ? '; the source row is telemedicine and does not establish the in-person rate' : ''}.`,
+      },
+      {
+        label: telemedicineReference
+          ? 'Illustrative out-of-pocket adjustment'
+          : 'Out-of-pocket adjustment',
+        value: `−${money(gross)}`,
+        detail: 'The individual in-network medical out-of-pocket remainder is $0 for covered care.',
+      },
+      {
+        label: 'Estimated Aetna share',
+        value: money(planning!.allowed_cents),
+        detail:
+          'Modeled plan share if the proposed CPT is covered in-network and the clinic fee reference equals the payer allowance; the processed claim sets the final amount.',
+      },
+    )
+  } else if (planning?.plan_share_cents != null && !model.supportedAmount)
     visibleRows.push({
       label: 'Estimated Aetna share',
       value: money(planning.plan_share_cents),
-      detail: `${money(planning.allowed_cents)} clinic Aetna fee reference less ${money(planning.copay_cents!)} patient copay. This is paid by Aetna after an eligible claim, not collected from the patient.`,
+      detail: `${money(planning.allowed_cents)} clinic Aetna fee reference less ${money(planning.copay_cents!)} patient copay, if covered in-network${planning.coinsurance_percent == null ? ' and the fixed copay is the only office cost share' : ''}. This is paid by Aetna after an eligible claim, not collected from the patient.`,
     })
   return (
     <>
@@ -118,8 +167,17 @@ export default function CommercialCostTables({
           />
         )}
       <CostBreakdownTable
-        rows={visibleRows}
-        open={(model.supportedAmount || !!planning) && !cash}
+        rows={
+          !cash && !model.previousEstimate
+            ? uhcQmbOfficeRows(result, visibleRows) || visibleRows
+            : visibleRows
+        }
+        open={
+          (model.supportedAmount ||
+            !!planning ||
+            result.collection_guidance?.basis === 'published_uhc_tx_qmb_office') &&
+          !cash
+        }
       />
     </>
   )

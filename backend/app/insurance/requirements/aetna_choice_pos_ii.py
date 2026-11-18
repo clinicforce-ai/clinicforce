@@ -17,7 +17,7 @@ def prior_date_office(result: dict, context: dict, plans: list[str], codes: set[
             and benefits.get('active') is True and benefits.get('service_date_matches') is False
             and reference.get('active') is True
             and {_key(plan) for plan in plans if not generic_plan_label(plan)} == {'aetnachoiceposii'}
-            and codes == {'99203'} and str(context.get('pos') or '') == '11'
+            and codes in ({'99203'}, {'99213'}) and str(context.get('pos') or '') == '11'
             and benefits.get('network_status') != 'out_of_network'
             and not benefits.get('network_conflict') and not benefits.get('coverage_status_conflict')
             and not benefits.get('source_errors'))

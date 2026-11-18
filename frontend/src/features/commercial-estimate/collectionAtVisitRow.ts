@@ -4,6 +4,8 @@ import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { feeProxyFormula } from './coinsuranceFormula'
 import { money } from './format'
 import type { bluecardOfficeDeductibleScenario } from './bluecardOfficeDeductibleScenario'
+import { cignaBtxOfficeScenario } from './cignaBtxOfficeScenario'
+import { healthselectOfficeBiopsy, healthselectZero } from './healthselectRows'
 
 export { pendingBluecardOfficeCopay, pendingCignaOfficeCopay } from './pendingOfficeCopays'
 import { pendingCignaOfficeCopay } from './pendingOfficeCopays'
@@ -71,6 +73,16 @@ export function collectionAtVisitRow(
   },
 ): CostBreakdownRow {
   const officePlanning = result.aetna_office_planning
+  if (
+    result.collection_guidance?.collection_rule?.mode === 'aetna_office_individual_oop_deferral' &&
+    result.collection_guidance.amount_cents === 0
+  )
+    return {
+      label: 'Amount to collect at visit',
+      value: money(0),
+      detail: result.collection_guidance.reason,
+      emphasis: true,
+    }
   if (officePlanning?.status === 'planning_only' && officePlanning.collectable === false) {
     const balance = Math.max(
       0,
@@ -82,11 +94,13 @@ export function collectionAtVisitRow(
       value: `${money(balance)} conditional planning amount · do not collect yet`,
       detail:
         officePlanning.copay_cents != null
-          ? `${money(officePlanning.allowed_cents)} clinic Aetna fee reference = ${money(officePlanning.copay_cents)} estimated patient copay + ${money(officePlanning.plan_share_cents!)} estimated Aetna share. The Aetna share is not a patient charge. The payer echoed an earlier date; visit-date coverage, Medicare billing protection and prior payments still control collection.`
+          ? `${money(officePlanning.allowed_cents)} clinic Aetna fee reference = ${money(officePlanning.copay_cents)} estimated patient copay + ${money(officePlanning.plan_share_cents!)} estimated Aetna share if covered in-network${officePlanning.coinsurance_percent == null ? ' and the fixed copay is the only office cost share' : ''}. The Aetna share is not a patient charge. The payer echoed an earlier date; visit-date coverage, provider tier, Medicare billing protection and prior payments still control collection.`
           : `If the office deductible applies: min(${money(officePlanning.allowed_cents)} clinic Aetna fee, ${money(officePlanning.deductible_remaining_cents)} remaining deductible, ${money(officePlanning.oop_remaining_cents)} remaining out-of-pocket) = ${money(officePlanning.deductible_applies_cents)} before recorded payments. If waived, ${officePlanning.coinsurance_percent}% coinsurance gives ${money(officePlanning.deductible_waived_cents)}. Confirm visit-date eligibility, provider network, deductible applicability, other coverage and prior payments before charging.`,
       emphasis: true,
     }
   }
+  const cignaBtxScenario = cignaBtxOfficeScenario(result, model)
+  if (cignaBtxScenario) return cignaBtxScenario
   const {
     combinedPlan,
     feeProxy,
@@ -250,8 +264,7 @@ export function collectionAtVisitRow(
           ? `${money(0)} at check-in · ${money(feeProxy!.patient_share_cents)} pre-Medicaid planning share`
           : combinedPlan
             ? `${money(combinedPlan.amount_cents)} planning estimate`
-            : result.collection_guidance?.basis === 'healthselect_ma_zero_televisit' &&
-                result.collection_guidance.amount_cents === 0
+            : healthselectZero(result)
               ? money(0)
               : result.collection_guidance?.basis === 'published_geha_pshb_zero_office' &&
                   result.collection_guidance.amount_cents === 0
@@ -318,8 +331,10 @@ export function collectionAtVisitRow(
           ? `${proxyFormula?.total} ${feeProxy!.message}`
           : combinedPlan
             ? `${money(combinedPlan.office_copay_cents)} + ${combinedPlan.coinsurance_percent}% × ${money(combinedPlan.diagnostic_allowed_cents)} = ${money(combinedPlan.patient_share_cents)}${combinedPlan.payments_cents ? `; less ${money(combinedPlan.payments_cents)} already paid` : ''}. Separate follow-up E/M is planned; deductible and out-of-pocket adjustments remain assumptions until payer balances are returned.`
-            : result.collection_guidance?.basis === 'healthselect_ma_zero_televisit'
-              ? '$0.00 at check-in from the payer’s $0 virtual-visit copay, ERS no-deductible rule and 0% coinsurance. Final billed code, payer order and claim liability remain open.'
+            : healthselectZero(result)
+              ? healthselectOfficeBiopsy(result)
+                ? '$0.00 at check-in from UHC’s $0 office and surgical copays, ERS no-deductible rule and 0% coinsurance. Biopsy authorization, payer order and final claim liability remain open.'
+                : '$0.00 at check-in from the payer’s $0 virtual-visit copay, ERS no-deductible rule and 0% coinsurance. Final billed code, payer order and claim liability remain open.'
               : result.collection_guidance?.basis === 'published_geha_pshb_zero_office'
                 ? result.collection_guidance.reason
                 : result.collection_guidance?.basis === 'qmb_protection'
@@ -416,29 +431,35 @@ export function collectionAtVisitRow(
     row.detail = `For each priced CPT: min(reported copay + any applicable deductible and coinsurance, ${money(0)} individual in-network out-of-pocket remaining) = ${money(0)} patient share. The family out-of-pocket remainder is a limit, not a visit charge. Choose the performed CPT before billing.`
   }
   if (result.collection_guidance?.basis === 'bcbstx_refundable_advance') {
-    row.label = ['blue_ppo_family_deductible_quote', 'cigna_ppo_deductible_quote'].includes(
-      result.collection_guidance.collection_rule?.mode || '',
-    )
-      ? 'Amount to collect at visit'
-      : ['trs_hd_office_refundable_deposit', 'bluecard_family_office_refundable_deposit'].includes(
-            result.collection_guidance.collection_rule?.mode || '',
-          )
-        ? 'Refundable deposit at visit'
-        : 'Refundable advance at visit'
-    row.detail =
-      result.collection_guidance.collection_rule?.mode ===
-        'bluecard_family_office_refundable_deposit' && bluecardDeductible
-        ? `Deductible: min(${money(bluecardDeductible!.reference)}, ${money(bluecardDeductible!.deductibleRemaining)}) = ${money(bluecardDeductible!.deductible)}; coinsurance: 20% × (${money(bluecardDeductible!.reference)} − ${money(bluecardDeductible!.deductible)}) = ${money(bluecardDeductible!.coinsurance)}; capped at ${money(bluecardDeductible!.oopRemaining)} out-of-pocket remaining${bluecardDeductible!.paid ? `; less ${money(bluecardDeductible!.paid)} already paid` : ''}. ${result.collection_guidance.reason}`
+    row.label =
+      result.collection_guidance.collection_rule?.mode === 'blue_advantage_hmo_oop_deposit'
+        ? 'Amount to collect at visit'
         : ['blue_ppo_family_deductible_quote', 'cigna_ppo_deductible_quote'].includes(
               result.collection_guidance.collection_rule?.mode || '',
             )
-          ? result.collection_guidance.reason
+          ? 'Amount to collect at visit'
           : [
                 'trs_hd_office_refundable_deposit',
                 'bluecard_family_office_refundable_deposit',
               ].includes(result.collection_guidance.collection_rule?.mode || '')
+            ? 'Refundable deposit at visit'
+            : 'Refundable advance at visit'
+    row.detail =
+      result.collection_guidance.collection_rule?.mode === 'blue_advantage_hmo_oop_deposit'
+        ? result.collection_guidance.reason
+        : result.collection_guidance.collection_rule?.mode ===
+              'bluecard_family_office_refundable_deposit' && bluecardDeductible
+          ? `Deductible: min(${money(bluecardDeductible!.reference)}, ${money(bluecardDeductible!.deductibleRemaining)}) = ${money(bluecardDeductible!.deductible)}; coinsurance: 20% × (${money(bluecardDeductible!.reference)} − ${money(bluecardDeductible!.deductible)}) = ${money(bluecardDeductible!.coinsurance)}; capped at ${money(bluecardDeductible!.oopRemaining)} out-of-pocket remaining${bluecardDeductible!.paid ? `; less ${money(bluecardDeductible!.paid)} already paid` : ''}. ${result.collection_guidance.reason}`
+          : ['blue_ppo_family_deductible_quote', 'cigna_ppo_deductible_quote'].includes(
+                result.collection_guidance.collection_rule?.mode || '',
+              )
             ? result.collection_guidance.reason
-            : 'The payer returned no financial terms. This refundable advance uses the selected CPTs’ BCBS Texas fee references; it is separate from estimated patient liability. Apply it to the processed claim and refund any excess.'
+            : [
+                  'trs_hd_office_refundable_deposit',
+                  'bluecard_family_office_refundable_deposit',
+                ].includes(result.collection_guidance.collection_rule?.mode || '')
+              ? result.collection_guidance.reason
+              : 'The payer returned no financial terms. This refundable advance uses the selected CPTs’ BCBS Texas fee references; it is separate from estimated patient liability. Apply it to the processed claim and refund any excess.'
   }
   if (pendingHumanaCopay != null) {
     row.label = 'Amount approved to collect at visit'
@@ -460,9 +481,11 @@ export function collectionAtVisitRow(
     !model.cash &&
     !model.previousEstimate &&
     !model.calculating &&
-    ['cms_msp_part_b_deferral', 'aetna_choice_family_oop_deferral'].includes(
-      result.collection_guidance?.collection_rule?.mode || '',
-    )
+    [
+      'cms_msp_part_b_deferral',
+      'aetna_choice_family_oop_deferral',
+      'aetna_office_individual_oop_deferral',
+    ].includes(result.collection_guidance?.collection_rule?.mode || '')
   ) {
     row.label = 'Amount to collect at visit'
     row.value = money(0)

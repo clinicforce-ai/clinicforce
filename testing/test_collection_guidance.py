@@ -21,7 +21,40 @@ def scenario(amount=3800):
                     'requirements': {kind: {'required': 'unknown', 'cleared': False} for kind in ('referral', 'authorization')}}}]}}
 
 
-def test_humana_medical_status_message_collects_refundable_specialist_copay():
+def test_aetna_prior_date_televisit_with_met_individual_oop_defers_check_in():
+    result = scenario()
+    result.pop('collection_policy')
+    result.update(payer='Aetna', service_date='2026-11-17', checked_at='2026-11-16T12:00:00Z',
+                  plan_details={'stedi': {'names': ['Synthetic Low Deductible']}},
+                  telehealth={'place_of_service': '10', 'modality': 'audio_video'},
+                  appointment_context={'place_of_service': '10'},
+                  codes=[{'id': 'office', 'code': '99213', 'units': 1, 'modifiers': []}])
+    result['benefits'].update(identity=result['identity'], network_status='unknown',
+        plan_details={'names': ['Synthetic Low Deductible']},
+        network_source=None, service_date_matches=False, oop_remaining_cents=0,
+        oop_id='medical-oop', reported_options=[{
+            'id': 'medical-oop', 'kind': 'out_of_pocket', 'amount_cents': 0,
+            'coverage_level': 'INDIVIDUAL', 'time_period': 'REMAINING',
+            'network': 'IN_NETWORK', 'plan_association': 'medical'}])
+    result['price_range'].update(complete=False, patient_min_cents=None,
+                                 patient_max_cents=None, service_issues=[])
+    line = result['price_range']['lines'][0]
+    line.update(code='99213', modifiers=[], calculation=None, allowed_cents=None)
+    line['benefits'].update(service_date_matches=False, active=True)
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 0
+    assert guidance['basis'] == 'claim_after_service'
+    assert guidance['collection_rule']['mode'] == 'aetna_televisit_oop_deferral'
+    assert 'Collect $0' in amount_explanation.build(result, guidance)['sentence']
+    for change in ({'active': False}, {'oop_remaining_cents': 100},
+                   {'oop_id': None}, {'plan_details': {'names': ['Other product']}},
+                   {'network_status': 'out_of_network'}, {'has_secondary': True}):
+        altered = deepcopy(result)
+        altered['benefits'].update(change)
+        assert collection_guidance.build(altered)['amount_cents'] is None
+
+
+def test_humana_medicare_ppo_withholds_copay_until_qmb_check():
     result = scenario(4000)
     result.update(payer='Humana Health Plan', plan_details={'stedi': {
         'names': ['Humana Honor'], 'medicare_ppo_evidence': 'synthetic-status'}})
@@ -39,31 +72,28 @@ def test_humana_medical_status_message_collects_refundable_specialist_copay():
                                 'kind': 'copay', 'service_type_code': '98',
                                 'amount_cents': 4000, 'network': 'IN_NETWORK'}])
     guidance = collection_guidance.build(result)
-    assert guidance['amount_cents'] == 4000
-    assert guidance['basis'] == 'humana_specialist_copay_advance'
-    assert guidance['collection_rule']['mode'] == 'humana_specialist_copay_advance'
-    assert encounter_summary.build({**result, 'collection_guidance': guidance})['collect_today_cents'] == 4000
+    assert guidance['amount_cents'] is None
+    assert encounter_summary.build({**result, 'collection_guidance': guidance})['collect_today_cents'] is None
     paid = collection_guidance.build(result, {'payments': {'reference': 'synthetic-receipt', 'amount_cents': 1500}})
-    assert paid['amount_cents'] == 2500
+    assert paid['amount_cents'] is None
     for changed in (
         {'billing_protection': {'status': 'qmb'}},
         {'identity': {'status': 'review'}},
         {'benefits': {**result['benefits'], 'has_secondary': True}},
         {'benefits': {**result['benefits'], 'service_date_matches': False}},
-        {'price_range': {**result['price_range'], 'lines': [{**line, 'allowed_cents': None}]}},
         {'price_range': {**result['price_range'], 'lines': [{**line, 'benefits': {
             **line['benefits'], 'deductible_applies': True}}]}},
         {'price_range': {**result['price_range'], 'lines': [{**line, 'benefits': {
             **line['benefits'], 'copay_id': 'other-benefit'}}]}},
     ):
-        assert collection_guidance.build({**result, **changed})['amount_cents'] is None
+        assert collection_guidance.build({**result, **changed})['amount_cents'] in {None, 0}, changed
 
 
 def test_nmct_collects_matched_stedi_office_copay_without_cpt_rate():
     result = scenario(1500)
     result.pop('collection_policy')
     result.update(payer='Humana Health Plan', plan_details={'stedi': {
-        'names': ['Humana TotalComplete']}},
+        'names': ['Humana TotalComplete'], 'medicare_hmo_evidence': 'synthetic-active-stc30'}},
         nmct_fixed_office_copay_advance_enabled=True)
     result['identity'] = {'status': 'matched', 'binding': 'synthetic-binding', 'match_version': 2}
     result['benefits'].update(identity=result['identity'], service_date_matches=True,
@@ -86,8 +116,19 @@ def test_nmct_collects_matched_stedi_office_copay_without_cpt_rate():
     assert guidance['basis'] == 'office_copay'
     assert guidance['collection_rule']['mode'] == 'nmct_fixed_office_copay_advance'
     assert encounter_summary.build({**result, 'collection_guidance': guidance})['collect_today_cents'] == 1500
+    with_fee = deepcopy(result)
+    with_fee['price_range']['lines'][0].update(allowed_cents=11362,
+        allowed_basis='payer_fee_schedule', rate_resolution={'status': 'RESOLVED'},
+        issues=['Confirm the remaining individual deductible that applies to this visit.'])
+    assert collection_guidance.build(with_fee)['amount_cents'] == 1500
     paid = collection_guidance.build(result, {'payments': {'reference': 'synthetic-receipt', 'amount_cents': 500}})
     assert paid['amount_cents'] == 1000
+    assert not result.get('billing_protection')
+    protected = {**result, 'billing_protection': {'status': 'qmb',
+        'identity_binding': 'synthetic-binding', 'reference': 'synthetic member verification',
+        'verified_at': '2026-11-16T12:00:00Z'}}
+    assert collection_guidance.build(protected)['basis'] == 'qmb_protection'
+    assert collection_guidance.build(protected)['amount_cents'] == 0
     other_payer = deepcopy(result)
     other_payer.update(payer='Example Health', plan_details={'stedi': {'names': ['Example Choice']}})
     assert collection_guidance.build(other_payer)['amount_cents'] == 1500
@@ -106,7 +147,7 @@ def test_nmct_collects_matched_stedi_office_copay_without_cpt_rate():
         {'price_range': {**price, 'lines': [{**line, 'benefits': {
             **line['benefits'], 'deductible_applies': True}}]}},
     ):
-        assert collection_guidance.build({**result, **changed})['amount_cents'] is None
+        assert collection_guidance.build({**result, **changed})['amount_cents'] in {None, 0}
 
 
 def test_patient_share_and_collection_policy_are_independent():
@@ -585,6 +626,72 @@ def test_trs_hd_office_missing_accumulators_uses_refundable_fee_deposit():
     assert (collection_guidance.build(returned_balance).get('collection_rule') or {}).get('mode') != 'trs_hd_office_refundable_deposit'
     result['benefits']['active'] = False
     assert collection_guidance.build(result)['amount_cents'] is None
+
+
+def test_blue_advantage_hmo_office_collects_capped_refundable_advance():
+    result = scenario()
+    result.pop('collection_policy')
+    result.update(payer='Blue Cross Blue Shield Tx', stedi_payer={'id': 'QDTRP'},
+        service_date='2026-11-18', checked_at='2026-11-17T12:00:00Z',
+        nmct_bcbstx_refundable_advance_enabled=True,
+        plan_details={'stedi': {'names': ['Blue Advantage HMO']}},
+        appointment_context={'place_of_service': '11'},
+        codes=[{'id': 'office', 'code': '99203', 'units': 1, 'modifiers': []}],
+        selected_ids=['office'],
+        temporary_rate_reference={'complete': True, 'source': 'BCBS Texas clinic schedule',
+            'lines': [{'id': 'office', 'code': '99203', 'units': 1, 'modifiers': [],
+                       'unit_reference_cents': 10117, 'source_reference': 'library:synthetic-blue'}]})
+    result['benefits'].update(identity=result['identity'], network_source='clinic_group_agreement',
+        service_date_matches=True, deductible_remaining_cents=0, oop_remaining_cents=2348,
+        deductible_id='deductible-30', oop_id='oop-30', reported_options=[
+            {'id': 'deductible-30', 'kind': 'deductible', 'service_type_code': '30',
+             'coverage_level': 'INDIVIDUAL', 'network': 'IN_NETWORK',
+             'time_period': 'REMAINING', 'amount_cents': 0, 'plan_association': 'medical', 'plan_index': 0},
+            {'id': 'oop-30', 'kind': 'out_of_pocket', 'service_type_code': '30',
+             'coverage_level': 'INDIVIDUAL', 'network': 'IN_NETWORK',
+             'time_period': 'REMAINING', 'amount_cents': 2348, 'plan_association': 'medical', 'plan_index': 0},
+            {'id': 'office-98', 'kind': 'coinsurance', 'service_type_code': '98',
+             'coverage_level': 'INDIVIDUAL', 'network': 'IN_NETWORK',
+             'percent': '50', 'plan_association': 'medical', 'plan_index': 0}])
+    result['price_range'].update(complete=False, patient_min_cents=None, patient_max_cents=None)
+    result['price_range']['lines'][0].update(calculation=None, modifiers=[], allowed_cents=None,
+        rate_resolution={'status': 'RATE_UNAVAILABLE'})
+    result['price_range']['lines'][0]['benefits'].update(network_status='in_network',
+        service_date_matches=True, copay_cents=None, coinsurance_percent='50',
+        coinsurance_id='office-98', deductible_remaining_cents=0, oop_remaining_cents=2348)
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 2348
+    assert guidance['collection_rule']['mode'] == 'blue_advantage_hmo_oop_deposit'
+    assert guidance['reference_total_cents'] == 2348
+    assert encounter_summary.build({**result, 'collection_guidance': guidance})['collect_today_cents'] == 2348
+    assert 'refundable Blue Advantage HMO office advance' in amount_explanation.build(result, guidance)['sentence']
+    assert collection_guidance.build(result, {'payments': {'reference': 'synthetic-receipt',
+        'amount_cents': 500}})['amount_cents'] == 1848
+    raw = {'plans': [{'name': 'Blue Advantage HMO', 'benefits': {
+        'statuses': [{'status': 'ACTIVE', 'service': {'system': 'STC', 'value': '30'}}],
+        'deductible': [{'amount': '0', 'timePeriod': 'REMAINING', 'coverageLevel': 'INDIVIDUAL',
+            'network': {'indicator': 'IN_NETWORK'}, 'service': {'system': 'STC', 'value': '30'}}],
+        'outOfPocket': [{'amount': '23.48', 'timePeriod': 'REMAINING', 'coverageLevel': 'INDIVIDUAL',
+            'network': {'indicator': 'IN_NETWORK'}, 'service': {'system': 'STC', 'value': '30'}}],
+        'coInsurance': [{'percent': '0.5', 'coverageLevel': 'INDIVIDUAL',
+            'network': {'indicator': 'IN_NETWORK'}, 'service': {'system': 'STC', 'value': '98'}}]}}]}
+    normalized = commercial.normalize_stedi_271(raw, '98', True)
+    from_stedi = deepcopy(result)
+    from_stedi['benefits'].update(normalized, identity=result['identity'],
+        network_source='clinic_group_agreement')
+    from_stedi['price_range']['lines'][0]['benefits'].update(normalized)
+    assert collection_guidance.build(from_stedi)['amount_cents'] == 2348
+    for mutation in (
+        lambda value: value['plan_details']['stedi'].update(names=['Blue Choice PPO']),
+        lambda value: value['benefits'].update(oop_remaining_cents=None),
+        lambda value: value['benefits'].update(oop_remaining_conflict_ids=['other-oop']),
+        lambda value: value['benefits'].update(network_status='unknown'),
+        lambda value: value['price_range']['lines'][0]['benefits'].update(coinsurance_percent='40'),
+        lambda value: value['temporary_rate_reference']['lines'][0].update(unit_reference_cents=4000),
+    ):
+        blocked = deepcopy(result)
+        mutation(blocked)
+        assert collection_guidance.build(blocked)['amount_cents'] is None
 
 
 def test_cigna_no_financial_terms_uses_refundable_bcbstx_reference_advance():

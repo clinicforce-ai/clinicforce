@@ -10,7 +10,11 @@ export type PrevisitBenefits = null | {
   service_date_matches?: boolean | null
   returned_service_dates?: { start?: string; end?: string }
   active?: boolean | null
-  plan_details?: { names?: string[]; medicare_ppo_evidence?: string | null }
+  plan_details?: {
+    names?: string[]
+    medicare_ppo_evidence?: string | null
+    medicare_hmo_evidence?: string | null
+  }
   has_secondary?: boolean
   medicare_part_b_secondary?: {
     status: 'reported'
@@ -43,6 +47,7 @@ export type PrevisitBenefits = null | {
     | 'clinic_attested_phcs_roster'
     | 'clinic_attested_cigna_tpa'
     | 'clinic_attested_cigna_ppo'
+    | 'clinic_attested_aetna_office'
     | null
   network_evidence_ids?: string[]
   selected_benefit_ids?: string[]

@@ -10,7 +10,7 @@ from app.insurance.collection.pricing_actions import priced_line_issue, priced_p
 from app.insurance.collection.requirements import requirement_blocker
 from app.insurance.library_network_exclusions import product_kind
 from app.insurance.insurance_product import is_medicare_advantage
-from app.insurance.amount_explanation_terms import choice_plus_reported_terms as _choice_plus_reported_terms
+from app.insurance.amount_explanation_terms import choice_plus_reported_terms as _choice_plus_reported_terms, identity_or_date_cause
 def _money(cents: int) -> str:
     return f'${cents // 100:,}.{cents % 100:02d}'
 def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network: str, benefits: dict, unpriced: list[str],
@@ -40,7 +40,7 @@ def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network
             and patient_benefits_bound(identity) and benefits.get('service_date_matches') is False):
         return 'the payer response date differs from the scheduled visit date', 'payer_service_date_mismatch'
     if reason in {'identity_or_coverage_review', 'subscriber_relationship_conflict', 'returned_identity_or_coverage_mismatch'}:
-        return 'the returned policy did not match the patient and subscriber details for this visit', 'policy_identity_mismatch'
+        return identity_or_date_cause(benefits, identity)
     if reason == 'discovered_payer_not_routable' and not active_benefits:
         return 'the payer directory returned more than one supported route for the reported insurer', 'payer_route_ambiguous'
     if payer_response_present and identity.get('missing_fields') and not (identity.get('differences') or identity.get('policy_differences')):
@@ -129,9 +129,11 @@ def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network
         return 'the selected CPTs do not form a billable service combination', 'service_selection_invalid'
     if benefits.get('active') is True and network == 'unknown':
         return 'the exact plan and provider have no current clinic network link for this visit', 'provider_network_unresolved'
-    medical_names = (((result.get('plan_details') or {}).get('stedi') or {}).get('names') or [])
-    if (is_medicare_advantage(medical_names)
-            and (result.get('price_range') or {}).get('complete')
+    plan = ((result.get('plan_details') or {}).get('stedi') or {})
+    medical_names = plan.get('names') or []
+    if ((is_medicare_advantage(medical_names) or plan.get('medicare_hmo_evidence'))
+            and (not plan.get('medicare_hmo_evidence') or benefits.get('qmb_status') == 'protected'
+                 or (result.get('billing_protection') or {}).get('status') == 'qmb')
             and (result.get('collection_guidance') or {}).get('amount_cents') is None):
         protection = result.get('billing_protection') or {}
         if benefits.get('qmb_status') == 'protected' or protection.get('status') == 'qmb':
@@ -208,7 +210,7 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
     amount = guidance.get('amount_cents')
     medical_names = (((result.get('plan_details') or {}).get('stedi') or {}).get('names') or [])
     identified_product = (((result.get('plan_details') or {}).get('stedi') or {}).get('identified_product'))
-    ma_ppo = is_medicare_advantage(medical_names)
+    ma_plan = is_medicare_advantage(medical_names) or bool((((result.get('plan_details') or {}).get('stedi') or {}).get('medicare_hmo_evidence')))
     if result.get('payment_mode') == 'cash':
         named_package = (result.get('cash_quote') or {}).get('selection') and (result.get('cash_quote') or {}).get('complete')
         visit_reason = (result.get('cash_quote') or {}).get('reason')
@@ -231,7 +233,7 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
     elif amount is not None:
         if basis == 'claim_after_service':
             cause, code = _cash_cause(result, failure, recovery, card, network, benefits, unpriced, missing, guidance.get('source_errors'))
-            if (guidance.get('collection_rule') or {}).get('mode') in {'aetna_choice_family_oop_deferral', 'uhc_choice_plus_family_oop_deferral'}:
+            if (guidance.get('collection_rule') or {}).get('mode') in {'aetna_choice_family_oop_deferral', 'aetna_televisit_oop_deferral', 'uhc_choice_plus_family_oop_deferral'}:
                 sentence, code = (guidance['reason'], 'collection_deferred')
             elif (guidance.get('collection_rule') or {}).get('mode') == 'cms_msp_part_b_deferral':
                 sentence, code = ('Collect $0.00 at arrival: the payer reports Original Medicare Part B as secondary. Submit the claims and determine any patient balance from the remittances; the office copay is not due at check-in', 'collection_deferred')
@@ -279,7 +281,7 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
                 sentence += f', while {missing} is excluded because its patient cost is unknown'
             elif basis == 'office_copay' and price.get('complete') and price.get('patient_min_cents') is not None and price['patient_min_cents'] > amount:
                 sentence += '; other estimated patient costs follow the claim'
-            elif network == 'out_of_network' and not ma_ppo:
+            elif network == 'out_of_network' and not ma_plan:
                 sentence += ', while any extra doctor charge remains unknown'
             code = 'office_copay_partial' if unpriced else 'office_copay'
             if basis == 'office_copay' and identified_product in {'FEP Blue Basic PSHB', 'FEP Blue Standard FEHB'} and amount > 0:
@@ -289,10 +291,12 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
             sentence, code = (f"Collect $0 now because {guidance.get('reason', 'the applicable in-network out-of-pocket limit has no remaining balance').rstrip('.').lower()}", 'oop_limit_met')
         elif basis == 'qmb_protection':
             sentence, code = ('Collect $0 now because confirmed QMB protection prohibits Medicare cost-sharing collection; any other liability requires separate covered-service and claim evidence', 'qmb_protected')
+        elif basis == 'healthselect_ma_zero_office_biopsy': sentence, code = ('Collect $0 now: this matched UHC HealthSelect Medicare Advantage PPO reports $0 office and surgical copays, 0% coinsurance and no annual medical deductible. The proposed codes, biopsy authorization, payer order and final claim remain open', basis)
         elif basis == 'healthselect_ma_zero_televisit': sentence, code = ('Collect $0 now: this matched UHC HealthSelect Medicare Advantage PPO reports a $0 virtual-visit copay and 0% coinsurance, with no annual medical deductible. The proposed code, payer order and final claim remain open', basis)
         elif basis in {'cigna_clinic_fee_quote', 'cigna_fee_proxy_advance'}: sentence, code = (f'Collect {_money(amount)} as a clinic-directed refundable advance using Cigna rates where available and BCBS Texas fees for other selected CPTs; apply deductible, coinsurance, out-of-pocket cap and prior payments. This is not a Cigna Cost of Care Estimator result; reconcile after the claim' if basis == 'cigna_clinic_fee_quote' else f'Collect {_money(amount)} for the planned diagnostic services using Cigna exact-CPT benefits and the clinic BCBS Texas fee schedule', basis)
         elif basis in {'bcbstx_proxy_advance', 'bcbstx_refundable_advance'}:
             sentence, code = (f'Collect {_money(amount)} as the clinic-approved BCBS Texas fee proxy advance for the planned diagnostic services; the UHC allowed amount and final claim share remain unknown' if basis == 'bcbstx_proxy_advance' else
+                f'Collect {_money(amount)} as a refundable Blue Advantage HMO office advance capped by the payer-reported remaining individual out-of-pocket balance; the HMO allowance and final share follow the claim' if (guidance.get('collection_rule') or {}).get('mode') == 'blue_advantage_hmo_oop_deposit' else
                 f'Collect {_money(amount)} as a refundable deposit using the clinic BCBS Texas CPT 99203 fee reference; remaining balances were not returned and final patient liability follows the processed claim' if (guidance.get('collection_rule') or {}).get('mode') == 'trs_hd_office_refundable_deposit' else
                 f'Collect {_money(amount)} as a refundable Blue PPO quote for the selected services using matched clinic fees and reported family benefits; reconcile and refund any excess after the processed claim' if (guidance.get('collection_rule') or {}).get('mode') == 'blue_ppo_family_deductible_quote' else
                 f'Collect {_money(amount)} as a refundable Cigna PPO office quote using the clinic BCBS Texas fee reference; Cigna allowance remains unknown, {"the clinic reports this provider in network without payer confirmation" if (result.get("benefits") or {}).get("network_source") == "clinic_attested_cigna_ppo" else "provider tier remains unconfirmed"}, and any excess is refunded after the claim' if (guidance.get('collection_rule') or {}).get('mode') == 'cigna_ppo_deductible_quote' else
@@ -350,7 +354,7 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
                             sentence += ', and the office deductible does not apply'
                     if paid:
                         sentence += ', after the recorded payment'
-                    if network == 'out_of_network' and not ma_ppo:
+                    if network == 'out_of_network' and not ma_plan:
                         sentence += ', though extra doctor charges remain unknown'
                 else:
                     sentence = 'No payment is due now under the applicable plan benefits'
@@ -361,7 +365,7 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
                             'This estimate uses the plan’s copay, deductible, and share of NMCT’s contract prices for the planned care'
                             if network == 'in_network' else
                             'This estimate uses the payer’s out-of-network allowed price under Medicare Advantage member billing protections'
-                            if network == 'out_of_network' and ma_ppo else
+                            if network == 'out_of_network' and ma_plan else
                             'This estimate uses the payer’s out-of-network allowed price, though any extra doctor charge remains unknown'
                             if network == 'out_of_network' else
                             'This is the known payment for the planned care, while other costs remain unknown')
@@ -477,8 +481,7 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
         sentence = f'{plan_label} is treated as {tier} for this visit: {sentence[:1].lower()}{sentence[1:]}'
     summary = result.get('encounter_summary') or {}
     return {'sentence': sentence + '.', 'reason_code': code, 'network_tier': network,
-            'pricing_basis': basis, 'unpriced_codes': unpriced,
-            'plan_name': identified_product or (medical_names[0] if len(medical_names) == 1 else None),
+            'pricing_basis': basis, 'unpriced_codes': unpriced, 'plan_name': identified_product or (medical_names[0] if len(medical_names) == 1 else None),
             'network_decision': inventory.get('decision'),
             'network_source': benefits.get('network_source'),
             'contract_evidence': {key: inventory.get(key) for key in

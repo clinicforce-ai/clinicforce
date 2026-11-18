@@ -4,9 +4,44 @@ from __future__ import annotations
 from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_rate_reference import refresh_saved_temporary_rates
-from app.insurance import aetna_fees, blue_cross_proxy, choice_plus_emg_proxy, cigna_clinic_quote, group_contract_support, payer_fees, published_plan_benefits, uhc_dsnp_office_proxy
+from app.insurance import aetna_fees, blue_cross_proxy, choice_plus_emg_proxy, cigna_clinic_quote, group_contract_support, identity as insurance_identity, payer_fees, published_plan_benefits, uhc_dsnp_office_proxy
 from app.insurance.identity import patient_plan_applies
 from app.insurance.stedi_benefits.normalize import ambiguous_combined_zero_oop
+
+
+def refresh_saved_aetna_identity(result: dict, case: dict) -> None:
+    """Rebind a narrow legacy review from the hash-verified saved Aetna 271."""
+    context = case.get('previsit_context') or {}
+    inputs = context.get('inputs') or {}
+    benefits = result.get('benefits') or {}
+    old = result.get('identity') or benefits.get('identity') or {}
+    plan = ((result.get('plan_details') or {}).get('stedi') or {})
+    if (not aetna_fees.is_aetna_payer(str(result.get('payer') or ''))
+            or plan.get('names') != ['Aetna Medicare Value Plus (PPO)']
+            or plan.get('group_number') != '000003-TX'
+            or plan.get('plan_number') != '000003-TX000083'
+            or old.get('status') != 'review' or not old.get('binding')
+            or benefits.get('active') is not True or benefits.get('source_errors')
+            or benefits.get('coverage_status_conflict')
+            or case.get('previsit', {}).get('request_state') != 'complete'
+            or result.get('service_date') != inputs.get('service_date')
+            or not case.get('previsit_raw_object_key') or not case.get('previsit_raw_sha256')):
+        return
+    try:
+        raw = _api.object_store.get_object_bytes(case['previsit_raw_object_key'])
+        if _api.hashlib.sha256(raw).hexdigest() != case['previsit_raw_sha256']:
+            return
+        payload = _api.json.loads(raw)
+        if str(payload.get('payerId') or '').upper() not in {'60054', 'HPQRS'}:
+            return
+        fresh = insurance_identity.compare(payload, _api._coverage_snapshot(inputs, context.get('source') or {}))
+    except Exception:
+        return
+    if (fresh.get('status') != 'warning' or fresh.get('reconciliation_rule') != 'aetna_payer_demographics'
+            or fresh.get('binding') != old['binding']):
+        return
+    result['identity'] = fresh
+    benefits['identity'] = fresh
 
 
 def restore_saved_fep_standard_product(result: dict, case: dict) -> None:
@@ -34,6 +69,43 @@ def restore_saved_fep_standard_product(result: dict, case: dict) -> None:
     identity = result.get('identity') or benefits.get('identity') or {}
     published_plan_benefits.apply_plan_terms(benefits, plan, service_date,
         patient_plan_applies(benefits, identity, service_date))
+
+
+def restore_saved_uhc_qmb_product(result: dict, case: dict) -> None:
+    """Reparse a hash-verified saved 271 whose older parser missed status IDs."""
+    plan = ((result.get('plan_details') or {}).get('stedi') or {})
+    benefits = result.get('benefits') or {}
+    service_date = str(result.get('service_date') or '')
+    if (plan.get('names') != ['TX UHC DUAL COMPLETE HMOPOS CO QMB H4514-024-000 W']
+            or (plan.get('plan_number') and plan.get('group_number'))
+            or not published_plan_benefits.uhc_qmb_patient_applies(
+                benefits, service_date, patient_plan_applies(benefits, result.get('identity'), service_date))
+            or not case.get('previsit_raw_object_key') or not case.get('previsit_raw_sha256')):
+        return
+    try:
+        raw = _api.object_store.get_object_bytes(case['previsit_raw_object_key'])
+        if _api.hashlib.sha256(raw).hexdigest() != case['previsit_raw_sha256']:
+            return
+        payload = _api.json.loads(raw)
+        if str(payload.get('payerId') or '') != '87726':
+            return
+        identified = _api.commercial.plan_details(payload)
+    except Exception:
+        return
+    if not published_plan_benefits.uhc_tx_qmb_product(identified, service_date, True):
+        return
+    result['plan_details']['stedi'] = {**plan, **identified}
+    benefits['plan_details'] = {**(benefits.get('plan_details') or {}), **identified}
+
+
+def restore_saved_published_product(result: dict, case: dict) -> None:
+    restore_saved_uhc_qmb_product(result, case)
+    benefits = result.get('benefits') or {}
+    day = str(result.get('service_date') or '')
+    published_plan_benefits.apply_uhc_tx_qmb_terms(benefits,
+        ((result.get('plan_details') or {}).get('stedi') or {}), day,
+        patient_plan_applies(benefits, result.get('identity'), day))
+    restore_saved_fep_standard_product(result, case)
 
 
 def saved_fep_standard_office_needs_reprice(result: dict) -> bool:
@@ -105,8 +177,42 @@ def upgrade_saved_biopsy_preview(result: dict, case: dict) -> None:
     result['service_plan'] = {**plan, 'selection_source': 'suggested'}
 
 
+def refresh_saved_cigna_btx_identity(result: dict, case: dict) -> None:
+    """Rebind an uncoded BTX visit from the intact saved Cigna response."""
+    context = case.get('previsit_context') or {}
+    inputs, source = context.get('inputs') or {}, context.get('source') or {}
+    old = result.get('benefits') or {}
+    if (str(result.get('payer') or '').casefold() != 'cigna'
+            or (result.get('service_plan') or {}).get('kind') != 'botox'
+            or (result.get('identity') or {}).get('status') != 'review'
+            or result.get('codes') or (result.get('price_range') or {}).get('lines')
+            or result.get('payment_mode') == 'cash'
+            or old.get('active') is not True or old.get('service_date_matches') is False
+            or old.get('coverage_status_conflict') or old.get('source_errors')
+            or inputs.get('service_date') != result.get('service_date')
+            or case.get('previsit', {}).get('request_state') != 'complete'
+            or not case.get('previsit_raw_object_key') or not case.get('previsit_raw_sha256')):
+        return
+    try:
+        raw = _api.object_store.get_object_bytes(case['previsit_raw_object_key'])
+        if _api.hashlib.sha256(raw).hexdigest() != case['previsit_raw_sha256']:
+            return
+        fresh = _api._case_benefits(_api.json.loads(raw), inputs, source, case)
+        matched = fresh.get('identity') or {}
+        if (matched.get('reconciliation_rule') != 'cigna_member_suffix'
+                or not patient_plan_applies(fresh, matched, inputs['service_date'])
+                or fresh.get('source_errors')):
+            return
+    except Exception:
+        return
+    result['benefits'] = fresh
+    result['identity'] = matched
+    suppress_saved_ambiguous_combined_zero_oop(result)
+
+
 def refresh_saved_cigna_office_benefits(result: dict, case: dict, practice_id: str) -> None:
-    """Reproject an older Cigna office check from its verified protected 271."""
+    """Reproject saved Cigna office evidence from its verified protected 271."""
+    refresh_saved_cigna_btx_identity(result, case)
     context = case.get('previsit_context') or {}
     inputs = context.get('inputs') or {}
     price = result.get('price_range') or {}
@@ -268,6 +374,9 @@ def _reprice_saved_new_network(result: dict, case: dict, practice_id: str, payer
                  'payer_plan_bound': patient_plan_applies(benefits, identity, str(inputs.get('service_date') or '')),
                  'payer_plan_names': [plan['identified_product']] if plan.get('identified_product') else plan.get('names') or [],
                  'payer_network_names': plan.get('network_names') or []}
+        if (exact['payer_plan_bound'] and plan.get('medicare_hmo_evidence')
+                and (benefits.get('plan_details') or {}).get('names') == plan.get('names')):
+            benefits['plan_details']['medicare_hmo_evidence'] = plan['medicare_hmo_evidence']
         price, issues = _api._previsit_range(practice_id, inputs, exact,
                                        str((payer or {}).get('id') or context.get('payer_id') or ''),
                                        result.get('codes') or [], benefits, payload=payload,
@@ -280,15 +389,40 @@ def _reprice_saved_new_network(result: dict, case: dict, practice_id: str, payer
         # clinic pricing configuration is temporarily unavailable.
         return
     result['price_range'] = price
-    if is_schedule_payer and price.get('complete') and not issues:
+    if (is_schedule_payer and (price.get('complete') or price.get('lines')
+            and all((line.get('rate_resolution') or {}).get('status') == 'RESOLVED'
+                    for line in price['lines']))):
         result['issues'] = [issue for issue in result.get('issues') or []
                             if not (str(issue).startswith('Clinic pricing:') or
-                                    'clinic contract or CPT rate changed' in str(issue).lower() or
+                                    'clinic contract or cpt rate changed' in str(issue).lower() or
                                     'single enabled clinic connection' in str(issue).lower())]
+
+
+def restore_saved_humana_hmo_product(result: dict, case: dict) -> None:
+    """Recover an older saved product category from its intact payer response."""
+    plan = ((result.get('plan_details') or {}).get('stedi') or {})
+    benefits = result.get('benefits') or {}
+    service_date = str(((case.get('previsit_context') or {}).get('inputs') or {}).get('service_date') or '')
+    if (payer_fees.payer_key(str(result.get('payer') or '')) == 'humana'
+            and plan.get('names') and not plan.get('medicare_hmo_evidence')
+            and benefits.get('active') is True
+            and patient_plan_applies(benefits, result.get('identity') or benefits.get('identity') or {}, service_date)
+            and case.get('previsit_raw_object_key') and case.get('previsit_raw_sha256')):
+        try:
+            raw = _api.object_store.get_object_bytes(case['previsit_raw_object_key'])
+            if _api.hashlib.sha256(raw).hexdigest() == case['previsit_raw_sha256']:
+                current = _api.commercial.plan_details(_api.json.loads(raw))
+                if current.get('names') == plan['names'] and current.get('medicare_hmo_evidence'):
+                    plan['medicare_hmo_evidence'] = current['medicare_hmo_evidence']
+                    if (benefits.get('plan_details') or {}).get('names') == plan['names']:
+                        benefits['plan_details']['medicare_hmo_evidence'] = current['medicare_hmo_evidence']
+        except Exception:
+            pass  # Retain the saved estimate when protected payer evidence is unavailable.
 
 
 def refresh_saved_network_pricing(result: dict, case: dict, practice_id: str,
                                   route_payer: dict | None, prior_network: tuple) -> None:
+    restore_saved_humana_hmo_product(result, case)
     benefits = result.get('benefits') or {}
     current_network = (benefits.get('network_status'), benefits.get('network_source'))
     network_changed = (prior_network != current_network and current_network[1] in {

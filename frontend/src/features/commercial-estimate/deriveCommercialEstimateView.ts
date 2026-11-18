@@ -6,9 +6,14 @@ import { selectedRequirementIssue } from './selectedRequirementIssue'
 import { visitServiceLabel } from './visitServiceLabel'
 import { benefitPresentation } from './benefitPresentation'
 import { payerPlanDisplay } from './payerPlanDisplay'
-import { provisionalEstimateAmounts } from './provisionalEstimateAmounts'
+import {
+  provisionalEstimateAmounts,
+  provisionalSummaryExplanation,
+} from './provisionalEstimateAmounts'
 import { networkEvidenceStatus } from './networkEvidenceStatus'
+import { networkSourceLabel } from './networkSourceLabel'
 import { emgOptionPresentation } from './emgOptionPresentation'
+import { healthselectZero } from './healthselectRows'
 import type { CommercialEstimateActions } from './useCommercialEstimateActions'
 export function deriveCommercialEstimateView({
   result,
@@ -125,7 +130,7 @@ export function deriveCommercialEstimateView({
       : null
   const cash = result?.payment_mode === 'cash'
   let coverageTone =
-    policyStatus === 'Coverage active'
+    policyStatus === 'Coverage active' || policyStatus === 'Aetna office benefits · $0 check-in'
       ? 'is-confirmed'
       : policyStatus === 'Coverage dates differ from visit'
         ? 'is-review'
@@ -152,39 +157,30 @@ export function deriveCommercialEstimateView({
         : result?.network_evidence?.decision === 'in_network_contract_supported' &&
             patientBenefitsBound
           ? 'In network · clinic agreement'
-          : benefits?.network_source === 'clinic_attested_cigna_ppo' && patientBenefitsBound
+          : benefits?.network_source === 'clinic_attested_aetna_office' && patientBenefitsBound
             ? 'In network · clinic attestation'
-            : benefits?.active === true &&
-                !patientBenefitsBound &&
-                ['in_network', 'out_of_network'].includes(benefits.network_status || '')
-              ? 'Patient plan not matched'
-              : benefits?.network_status === 'in_network'
-                ? networkConfirmed
-                  ? 'In network'
-                  : 'Network not determined'
-                : benefits?.network_status === 'out_of_network'
-                  ? outOfNetworkConfirmed
-                    ? 'Out of network'
+            : benefits?.network_source === 'clinic_attested_cigna_ppo' && patientBenefitsBound
+              ? 'In network · clinic attestation'
+              : benefits?.active === true &&
+                  !patientBenefitsBound &&
+                  ['in_network', 'out_of_network'].includes(benefits.network_status || '')
+                ? 'Patient plan not matched'
+                : benefits?.network_status === 'in_network'
+                  ? networkConfirmed
+                    ? 'In network'
                     : 'Network not determined'
-                  : contractCandidate
-                    ? 'Contract match unavailable'
-                    : 'Not determined'
-  const networkSource =
-    result?.network_evidence?.decision === 'in_network_contract_supported'
-      ? 'Current signed clinic agreement · review member product and clinician tier'
-      : benefits?.network_source === 'clinic_library_contract'
-        ? 'Current Clinical Library contract'
-        : benefits?.network_source === 'clinic_attested_cigna_ppo'
-          ? 'Clinic attestation for matched Cigna PPO office provider · not payer confirmed'
-          : benefits?.network_source === 'clinic_library_absent'
-            ? 'No contract linked to this exact payer product and provider'
-            : benefits?.network_source === 'clinic_no_insurer_contract'
-              ? 'No current insurer contract registered in the NMCT Clinical Library'
-              : benefits?.network_source === 'clinic_nonparticipation_rule'
-                ? 'Current scoped clinic nonparticipation rule'
-                : benefits?.network_source === 'clinic_contract_inventory'
-                  ? 'Certified clinic contract inventory · not payer-confirmed'
-                  : guidance?.network_source
+                  : benefits?.network_status === 'out_of_network'
+                    ? outOfNetworkConfirmed
+                      ? 'Out of network'
+                      : 'Network not determined'
+                    : contractCandidate
+                      ? 'Contract match unavailable'
+                      : 'Not determined'
+  const networkSource = networkSourceLabel(
+    result?.network_evidence?.decision,
+    benefits?.network_source,
+    guidance?.network_source,
+  )
   let networkTone =
     !result || tooEarly || result.recovery?.state === 'pending'
       ? ''
@@ -233,8 +229,8 @@ export function deriveCommercialEstimateView({
       guidance?.primary_secondary_copay === true) &&
     (networkConfirmed || outOfNetworkCollection || independentOfficeCopay || refundableAdvance)
   const healthselectZeroArrival =
-    guidance?.basis === 'healthselect_ma_zero_televisit' &&
-    guidance.amount_cents === 0 &&
+    result != null &&
+    healthselectZero(result) &&
     benefits?.active === true &&
     benefits.service_date_matches !== false &&
     patientBenefitsBound &&
@@ -248,6 +244,7 @@ export function deriveCommercialEstimateView({
     result?.encounter_summary?.collect_today_cents === 0
   const clinicInstructionAmount =
     healthselectZeroArrival ||
+    (guidance?.basis === 'published_uhc_tx_qmb_office' && guidance.amount_cents === 0) ||
     guidance?.basis === 'claim_after_service' ||
     (guidance?.basis === 'ecw_billing_note' &&
       (guidance.amount_cents === 0 || benefits?.active !== true))
@@ -261,7 +258,9 @@ export function deriveCommercialEstimateView({
     (!requirementIssue || clinicInstructionAmount) &&
     (cash || clinicInstructionAmount || currentPayerAmount) &&
     ((result?.encounter_summary?.collect_today_cents == null &&
-      guidance?.basis === 'published_geha_pshb_zero_office' &&
+      ['published_geha_pshb_zero_office', 'published_uhc_tx_qmb_office'].includes(
+        guidance?.basis || '',
+      ) &&
       guidance.amount_cents === 0) ||
       result?.encounter_summary?.collect_today_cents === undefined ||
       result.encounter_summary.collect_today_cents === guidance.amount_cents)
@@ -369,13 +368,15 @@ export function deriveCommercialEstimateView({
               ? 'Provisional patient estimate · do not collect'
               : estimatedShare
                 ? 'Estimated patient share · do not collect'
-                : !amount && !cash
-                  ? 'Collection decision needed'
-                  : ['bcbstx_refundable_advance', 'cigna_refundable_office_copay'].includes(
-                        guidance?.basis || '',
-                      )
-                    ? 'Refundable advance to collect now'
-                    : 'Amount to collect now'
+                : guidance?.collection_rule?.mode === 'blue_advantage_hmo_oop_deposit' && amount
+                  ? 'Amount to collect at visit'
+                  : !amount && !cash
+                    ? 'Collection decision needed'
+                    : ['bcbstx_refundable_advance', 'cigna_refundable_office_copay'].includes(
+                          guidance?.basis || '',
+                        )
+                      ? 'Refundable advance to collect now'
+                      : 'Amount to collect now'
   const amountParts = result?.encounter_summary?.components
   const officeDeductible = guidance?.services.find(
     (service) => service.code === officeCopayLine?.code,
@@ -424,16 +425,7 @@ export function deriveCommercialEstimateView({
     emgScenario && !calculating && !/nerve testing/i.test(baseExplanation)
       ? `${baseExplanation} ${emg.total_min_cents != null ? 'The nerve-testing total below is for planning only' : 'Nerve testing is excluded because its patient cost is unknown'}.`
       : baseExplanation
-  const summaryExplanation =
-    provisionalAmount != null
-      ? result?.aetna_office_planning
-        ? result.aetna_office_planning.copay_cents != null
-          ? 'The payer-reported specialist copay is the estimated patient share. The approved Aetna fee less that copay is the estimated plan share. Visit-date coverage, Medicare billing protection and prior payments still control collection.'
-          : 'Deductible-applies planning amount from the approved Aetna office fee and prior-date payer terms. Confirm visit-date coverage, provider network, deductible applicability, other coverage and prior payments before setting a collection amount.'
-        : result?.provisional_scenario?.kind === 'ncs_study_count'
-          ? 'Estimated patient share across alternative NCS study counts. Muscle testing is excluded unless documented. Do not collect this planning range.'
-          : 'Estimated patient share for the provisional CPT scenario. Review the services and requirements before collecting.'
-      : explanation
+  const summaryExplanation = provisionalSummaryExplanation(result, provisionalAmount, explanation)
   const provider = result?.appointment_context?.rendering_provider?.name
   const anticipatedService = visitServiceLabel(result)
   return {

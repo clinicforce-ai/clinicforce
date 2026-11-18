@@ -23,15 +23,42 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 1rem;
+  gap: 0.5rem;
   margin: 0.5rem 0;
 }
-.insurance-card-delete {
-  color: #bd2542;
-  border: 1px solid #bd2542;
+.insurance-card-actions .insurance-card-open,
+.insurance-card-actions .insurance-card-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
   border-radius: 6px;
-  background: #fff;
+  border: 1px solid transparent;
   padding: 0.5rem 0.75rem;
   font-weight: 600;
+  text-decoration: none;
   cursor: pointer;
+}
+.insurance-card-actions .insurance-card-open {
+  color: #fff;
+  background: #184a9b;
+}
+.insurance-card-actions .insurance-card-delete {
+  color: #fff;
+  background: #bd2542;
+}
+.insurance-card-actions .insurance-card-open:hover {
+  background: #123e86;
+}
+.insurance-card-actions .insurance-card-delete:hover {
+  background: #9d1733;
+}
+.insurance-card-actions .insurance-card-open:focus-visible,
+.insurance-card-actions .insurance-card-delete:focus-visible {
+  outline: 3px solid #0b6f7b;
+  outline-offset: 2px;
+}
+.insurance-card-actions .insurance-card-delete:disabled {
+  opacity: 0.6;
+  cursor: wait;
 }

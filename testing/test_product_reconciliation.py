@@ -1291,6 +1291,39 @@ def test_reconciled_group_agreement_supplies_in_network_tier(monkeypatch, practi
     assert not pricing._network_contract_evidence('clinic', network, profile, inputs['service_date']).get('document_id')
 
 
+def test_saved_nmct_linked_group_agreement_survives_read_recheck(monkeypatch):
+    payer, network, profile, inputs, source = setup_path(monkeypatch)
+    payer['display_name'] = 'Blue Cross Blue Shield Tx'
+    profile['rules']['library_source'].update(sha256='synthetic-digest', origin='signed_group_agreement')
+    document = {'id': 'synthetic-contract', 'kind': 'contract', 'content_type': 'application/pdf',
+                'label': 'Signed Blue agreement', 'payer': payer['display_name'],
+                'sha256': 'synthetic-digest', 'effective_from': '2026-01-01'}
+    monkeypatch.setattr(api.staff_store, 'list_library', lambda *_: [document])
+    monkeypatch.setattr(api.staff_store, 'get_library', lambda *_: document)
+    source['payer_plan_names'] = ['PREFERRED PROVIDER OPTION PLUS MEDICAL']
+    evidence = pricing._network_contract_evidence('primary', network, profile, DAY)
+    assert evidence['origin'] == 'signed_group_agreement'
+    result = {'payer': payer['display_name'], 'identity': {'status': 'matched',
+                  'binding': 'synthetic-member', 'match_version': 2},
+              'plan_details': {'stedi': {'names': source['payer_plan_names']}},
+              'benefits': {'active': True, 'service_date_matches': None,
+                           'coverage_evidence': {'status': 'ACTIVE', 'start': '2026-01-01'},
+                           'network_status': 'in_network', 'network_source': 'clinic_group_agreement'},
+              'network_evidence': {**evidence, 'decision': 'in_network_contract_supported'},
+              'issues': []}
+    case = {'previsit_context': {'payer_id': 'payer-route', 'inputs': inputs, 'source': source}}
+    recheck_saved_network_evidence(result, case, 'primary', payer)
+    assert result['benefits']['network_status'] == 'in_network'
+    assert result['benefits']['network_source'] == 'clinic_group_agreement'
+    assert result['network_evidence']['decision'] == 'in_network_contract_supported'
+    assert result['issues'] == []
+
+    changed = {**case, 'previsit_context': {**case['previsit_context'], 'inputs': {
+        **inputs, 'rendering_provider': {'npi': '3333333333'}}}}
+    recheck_saved_network_evidence(result, changed, 'primary', payer)
+    assert result['benefits']['network_status'] == 'unknown'
+
+
 def test_group_agreement_allows_approved_copay_advance():
     benefits = {'active': True, 'service_date_matches': True, 'network_status': 'in_network',
                 'network_source': 'clinic_group_agreement',

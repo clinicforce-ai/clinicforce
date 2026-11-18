@@ -1,4 +1,11 @@
 """Payer-reported office terms used in the amount explanation."""
+from app.insurance.identity import patient_benefits_bound
+
+
+def identity_or_date_cause(benefits: dict, identity: dict) -> tuple[str, str]:
+    if benefits.get('active') is True and patient_benefits_bound(identity) and benefits.get('service_date_matches') is False:
+        return 'the payer response date differs from the scheduled visit date', 'payer_service_date_mismatch'
+    return 'the returned policy did not match the patient and subscriber details for this visit', 'policy_identity_mismatch'
 
 
 def choice_plus_reported_terms(benefits: dict) -> str | None:

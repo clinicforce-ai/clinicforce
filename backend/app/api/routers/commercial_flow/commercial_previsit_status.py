@@ -6,7 +6,7 @@ from app.insurance.network_participation import verified_in_network, verified_ou
 from app.insurance import aetna_office_planning, evidence_resolution, group_contract_support, payer_fees, published_plan_benefits
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence, recheck_saved_payer_message
-from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import guard_unresolved_telehealth, guard_telehealth_guidance, restore_active_blue_cross_insurance, restore_saved_fep_standard_product, retain_conflicted_insurance, refresh_saved_cigna_office_benefits, refresh_saved_uhc_registration_benefits, refresh_saved_network_pricing, upgrade_saved_biopsy_preview, refresh_saved_cross_payer_planning, suppress_saved_ambiguous_combined_zero_oop
+from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import guard_unresolved_telehealth, guard_telehealth_guidance, restore_active_blue_cross_insurance, restore_saved_published_product, restore_saved_humana_hmo_product, retain_conflicted_insurance, refresh_saved_aetna_identity, refresh_saved_cigna_office_benefits, refresh_saved_uhc_registration_benefits, refresh_saved_network_pricing, upgrade_saved_biopsy_preview, refresh_saved_cross_payer_planning, suppress_saved_ambiguous_combined_zero_oop
 from app.api.routers.commercial_flow.commercial_previsit_requirements import refresh_saved_requirements
 from app.api.routers.commercial_flow.commercial_previsit_enrollment import _enrollment_failure
 from app.api.routers.commercial_flow.commercial_previsit_service_scope import retain_incomplete_service_evidence as _retain_incomplete_service_evidence
@@ -15,7 +15,6 @@ from app.api.routers.commercial_flow.commercial_previsit_benefits import case_be
 async def configuration(request: _api.Request) -> dict:
     session = await _api._session(request)
     return _api._config(session["practice_id"])
-
 @_api.router.get("/appointments", responses={409: {"description": "ecw_patient_selection_required: return to staff lookup and confirm the patient before checking benefits."}})
 async def ecw_appointments(request: _api.Request) -> dict:
     """List confirmed scheduled visits without an eligibility check.
@@ -332,6 +331,7 @@ def _recheck_saved_payer_allowance(result: dict, case: dict, practice_id: str) -
     result.pop('planning_estimate', None)
 def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     result = _api.deepcopy(case['previsit_context']['result'])
+    refresh_saved_aetna_identity(result, case)
     suppress_saved_ambiguous_combined_zero_oop(result)
     upgrade_saved_biopsy_preview(result, case)
     refresh_saved_uhc_registration_benefits(result, case)
@@ -378,8 +378,9 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
                 if (isinstance(policy, dict) and policy.get('mode') in {'defer_to_claim', 'collect_verified_copay', 'collect_supported_advance'} and policy.get('approved_by')
                         and policy.get('approved_at') and policy.get('reference')):
                     result['collection_policy'] = policy
+        restore_saved_humana_hmo_product(result, case)
         _recheck_saved_clinic_pricing(result, case, practice_id)
-        restore_saved_fep_standard_product(result, case)
+        restore_saved_published_product(result, case)
         prior_network = ((result.get('benefits') or {}).get('network_status'),
                          (result.get('benefits') or {}).get('network_source'))
         recheck_saved_network_evidence(result, case, practice_id, route_payer)
@@ -493,7 +494,6 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         result, result['collection_guidance'], case.get('visit_review'))
     result['evidence_resolution'] = evidence_resolution.build(result, source)
     return result
-
 def _recovery_event(case: dict, session: dict, stage: str, outcome: str, *, reason: str | None = None, count: int | None = None, http_status: int | None = None) -> None:
     _api.collection_event('coverage_recovery', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
         case_id=case['id'], stage=stage,

@@ -87,9 +87,11 @@ jobs:
           node ../testing/test-healow-review.mjs
           node ../testing/test-insurance-request-context.mjs
           node ../testing/aetna-separate-copay-ui.mjs
+          node ../testing/cigna-btx-office-ui.mjs
           node ../testing/test_ecw_visit_dates.mjs
           node testing/member-benefits-ui.mjs
           node testing/uhc-hmopos-pending-ui.mjs
+          node testing/uhc-qmb-office-ui.mjs
           node testing/humana-specialist-headline-ui.mjs
           node testing/uhc-saved-projection-ui.mjs
           node testing/umr-choice-plus-collection-ui.mjs
@@ -101,6 +103,7 @@ jobs:
           node ../testing/cigna-office-collection-ui.mjs
           node ../testing/cigna-clinic-quote-ui.mjs
           node ../testing/bluecard-office-ui.mjs
+          node ../testing/blue-advantage-hmo-ui.mjs
           node ../testing/fep-standard-office-ui.mjs
           node testing/bluecard-office-collection-ui.mjs
           node testing/bcbstx-epo-unmatched-ui.mjs
@@ -109,6 +112,7 @@ jobs:
           node testing/emg-auto-cash-ui.mjs
           node testing/blue-ppo-family-quote-ui.mjs
           node testing/aetna-choice-pos-reference-ui.mjs
+          node ../testing/paid-claim-ui.mjs
           node ../testing/medicare-part-b-secondary-ui.mjs
           node testing/historical-replay-ui.mjs
           npm run format:check

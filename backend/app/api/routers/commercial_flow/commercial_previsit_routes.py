@@ -7,7 +7,6 @@ from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_reuse import (
     SAVED_RESPONSE_UNAVAILABLE, saved_benefits_for_review,
 )
-
 @_api.router.get('/cases/{case_id}/previsit')
 async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     """Read saved recovery without submitting or retrying a paid transaction.
@@ -20,20 +19,20 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     Coverage verification does not imply that a price is available.
     evidence_resolution reports each field's source findings and precise
     remaining action after the shared estimator evaluates saved evidence.
-    Saved reads project current network rules; an intact protected 2026 FEP Blue Standard response can refresh a Preferred $40 office copay and deductible waiver under current clinic policy without a payer call or write. plan_details.stedi.response_payer_name records the organization that answered the protected eligibility response; it does not identify a plan product.
+    Saved reads project current network rules; an intact protected 2026 FEP Blue Standard response can refresh a Preferred $40 office copay and deductible waiver under current clinic policy without a payer call or write. Older Humana Medicare-risk HMO saves recover the product category from the checksum-verified response before current database CPT repricing and collection. plan_details.stedi.response_payer_name records the organization that answered the protected eligibility response; it does not identify a plan product.
     benefits.reported_secondary_payer names one dated, patient-bound medical
     271 secondary payer; it does not verify Medicare entitlement or claim order.
-    Fresh saved Cigna responses are reparsed without treating an exact
+    An uncoded saved Cigna BTX visit can rebind its selected policy from the hash-verified protected 271 without a new payer call. Fresh saved Cigna responses are reparsed without treating an exact
     "Attribution Status - Not applicable" STC 30 exclusion as inactive coverage.
     Card-printed tiered office copays remain reference-only until visit coverage, network, service and collection checks pass.
-    aetna_office_planning shows conditional deductible-applies/waived specialist shares from the current Aetna fee and a patient-bound 271 within seven days; collectable is false, and collection_guidance and visit-date coverage are unchanged.
+    aetna_office_planning shows conditional Commercial specialist shares within seven days, or the separate patient copay and Aetna plan remainder for a matched Value Plus PPO response one day early. A saved hash-verified Aetna self-policy response may refresh a previously unresolved identity on read. A telemedicine-only coinsurance row does not establish in-person office coinsurance. For one established Choice POS II in-person office CPT with patient-bound benefits, $0 remaining deductible, one linked $0 remaining individual in-network medical out-of-pocket balance, and an approved clinic Aetna fee, collection_rule.mode aetna_office_individual_oop_deferral returns $0 at check-in even for an exact one-day payer date echo. aetna_office_planning.gross_coinsurance_cents exposes the fee-times-coinsurance illustration; coinsurance_scope identifies a telemedicine-only row, which is not described as an in-person office rate. The medical cap drives the zero collection decision, and the UI shows the illustrative adjustment and modeled payer share. The fee is a clinic reference and final claim liability may differ. A scoped 2026 clinic attestation can label the exact product, group, rendering provider and office setting in network with network_source clinic_attested_aetna_office; it is not a payer participation statement. Other prior-date planning remains conditional and not collectible.
     A saved Cigna OAP specialist video visit can reapply the current member-bound
     payer office copay with zero office deductible and coinsurance without a new
     Stedi call; a readable matched card must agree with the payer copay.
-    A matched UHC HealthSelect MA PPO group 13546 virtual visit can show a $0
-    arrival amount from zero payer copay/coinsurance and the published no-deductible
-    rule even when a saved line records other coverage or an unpriced conditional
-    scenario; billed code, payer order, and final claim liability stay open.
+    A matched UHC HealthSelect MA PPO group 13546 virtual visit or exact POS 11
+    office 99213 plus punch biopsy 11104 proposal can show a $0 arrival amount
+    from matched zero payer copay/coinsurance and the published no-deductible rule.
+    Office biopsy requires separate office and surgical payer benefit rows; billed codes, biopsy authorization, payer order, and final claim stay open.
     Flat Stedi 271 ZZ industry codes are interpreted as benefit places of
     service; appointment_context.place_of_service reports the planned setting.
     Older saved NMCT Cigna office checks with no copay are read-only reprojected
@@ -115,7 +114,7 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     come from the clinic-wide aetna_fee_schedule database table when the payer
     and one medical product identify the category. The rate is an allowed fee,
     not a patient share or permission to collect. temporary_rate_reference
-    remains a separate planning source for other supported payers.
+    remains a separate planning source for other supported payers. A patient-bound active Aetna Commercial video CPT 99213 visit can report the appointment-date clinic fee as a reference and defer check-in collection to $0 when one linked in-network medical individual out-of-pocket remainder is zero, even if the payer echoes another date. This does not establish current benefits or the final telehealth allowance.
     The NMCT Cigna PPO single-CPT 99203 refundable office quote may equal the matched clinic fee less prior payments when same-plan deductible and out-of-pocket balances exceed the fee and the 20% office benefit has no copay; it is not a Cigna allowance or final liability.
     For a Cigna office E/M visit, temporary_rate_reference.alternatives lists matching BCBSTX fee rows
     for available, unselected levels in the same E/M family. These are separate
@@ -234,7 +233,6 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
         await _api._reconcile_saved_discovery(case, session)
     return _api._previsit_result(case, session['practice_id'])
 
-
 @_api.router.get('/cases/{case_id}/payer-response')
 async def saved_payer_response(case_id: str, request: _api.Request):
     """Return protected payer evidence, including linked service replies when present."""
@@ -251,7 +249,6 @@ async def saved_payer_response(case_id: str, request: _api.Request):
     except Exception as exc:
         raise _api.HTTPException(502, 'The saved payer response could not be loaded.') from exc
     return _api._response({'source': 'Stedi', 'response': payload})
-
 
 @_api.router.get('/cases/{case_id}/historical-replay-bundle')
 async def historical_replay_bundle(case_id: str, request: _api.Request) -> dict:
@@ -320,7 +317,6 @@ async def historical_replay_bundle(case_id: str, request: _api.Request) -> dict:
             'selection': {'origin': 'documented', 'lines': selected_lines} if documented else None,
             'selection_status': 'documented' if documented else 'requires_historical_cpt_evidence'}
 
-
 @_api.router.post('/cases/{case_id}/payer-route')
 async def select_payer_route(case_id: str, value: _api.PayerRouteInput, request: _api.Request,
                             background_tasks: _api.BackgroundTasks) -> dict:
@@ -354,7 +350,6 @@ async def select_payer_route(case_id: str, value: _api.PayerRouteInput, request:
     _api._recovery_event(case, session, 'payer_routing', 'selected', reason=payer.get('match_basis', 'name_or_alias'))
     background_tasks.add_task(_api._recheck_discovery_candidate, case, session, provider, selected_route=payer)
     return _api._previsit_result(case, session['practice_id'])
-
 
 @_api.router.post('/cases/{case_id}/coverage-candidate')
 async def select_coverage_candidate(case_id: str, value: _api.CoverageCandidateInput, request: _api.Request,

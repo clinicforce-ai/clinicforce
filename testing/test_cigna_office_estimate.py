@@ -13,6 +13,7 @@ from app.api.routers.commercial_flow.commercial_previsit_tpa import (
     administrator_route, check_administrator, same_administrator_patient,
 )
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence
+from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import refresh_saved_cigna_btx_identity
 from app.api.routers.commercial_flow import commercial_previsit_reuse as reuse
 from app.insurance import collection_guidance, commercial, ecw_backend, identity, provider_specialty
 from app.insurance.requirements import published
@@ -657,6 +658,56 @@ def test_cigna_group_or_policy_number_corroborates_long_member_suffix():
     payload['subscriber'].pop('groupNumber')
     payload['subscriber']['additionalInformation'] = {'groupOrPolicyNumber': 'SYNTHETIC-GROUP'}
     assert identity.compare(payload, api._coverage_snapshot(inputs, source))['reconciliation_rule'] == 'cigna_member_suffix'
+
+
+def test_cigna_missing_ecw_group_binds_linked_self_person_suffix_with_other_policies():
+    payload, inputs, source = example()
+    inputs['member_id'] = '987654321'
+    inputs['group_number'] = None
+    payload['subscriber']['memberId'] = '98765432101'
+    payload['subscriber'].pop('groupNumber')
+    payload['subscriber']['additionalInformation'] = {'groupOrPolicyNumber': 'SYNTHETIC-GROUP'}
+    source['active_coverages'] = 2
+    source['_patient_id'] = 'synthetic-patient'
+    coverage = api._coverage_snapshot(inputs, source)
+    coverage['subscriber_patient_linked'] = True
+    matched = identity.compare(payload, coverage)
+    assert matched['reconciliation_rule'] == 'cigna_member_suffix'
+    assert identity.payer_identity_verified(matched)
+    assert identity.compare(payload, {**coverage, 'subscriber_patient_linked': False})['status'] == 'review'
+
+
+def test_saved_uncoded_cigna_btx_rebinds_from_hash_verified_payer_response():
+    payload, inputs, source = example()
+    inputs.update(reason='BTX', group_number=None)
+    payload['plans'][0]['benefits']['nonCovered'] = []
+    payload['subscriber'].pop('groupNumber')
+    payload['subscriber']['additionalInformation'] = {'groupOrPolicyNumber': 'SYNTHETIC-GROUP'}
+    source.update(_patient_id='synthetic-patient', active_coverages=2,
+                  subscriber_evidence={'patient_linked': True})
+    raw = json.dumps(payload).encode()
+    case = {'previsit_context': {'inputs': inputs, 'source': source},
+            'previsit': {'request_state': 'complete'},
+            'previsit_raw_object_key': 'synthetic-protected-response',
+            'previsit_raw_sha256': api.hashlib.sha256(raw).hexdigest()}
+    result = {'payer': 'Cigna', 'service_date': DAY, 'service_plan': {'kind': 'botox'},
+              'codes': [], 'price_range': {'lines': []}, 'identity': {'status': 'review'},
+              'benefits': {'active': True, 'source_errors': []}}
+    with patch.object(api.object_store, 'get_object_bytes', return_value=raw):
+        refresh_saved_cigna_btx_identity(result, case)
+    assert result['identity']['reconciliation_rule'] == 'cigna_member_suffix'
+    assert result['benefits']['active'] is True
+
+    unlinked = deepcopy(result)
+    unlinked['identity'] = {'status': 'review'}
+    unlinked['benefits'] = {'active': True, 'source_errors': []}
+    with patch.object(api.object_store, 'get_object_bytes', return_value=raw):
+        refresh_saved_cigna_btx_identity(unlinked, {**case, 'previsit_context': {
+            'inputs': inputs, 'source': {**source, 'subscriber_evidence': {'patient_linked': False}}}})
+    assert unlinked['identity']['status'] == 'review'
+    with patch.object(api.object_store, 'get_object_bytes', return_value=b'changed'):
+        refresh_saved_cigna_btx_identity(unlinked, case)
+    assert unlinked['identity']['status'] == 'review'
 
 
 def test_corroborated_cigna_member_suffix_qualifies_for_member_specific_rules():

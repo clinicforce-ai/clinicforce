@@ -170,6 +170,114 @@ const unknownNetworkPriorDay = {
       selected_benefit_ids: ['synthetic-stedi-office-copay'], network_status: 'unknown' } }] },
 }
 const unknownNetworkReference = aetnaPriorDateReferenceCopay(unknownNetworkPriorDay, model)
+const zeroPriorDay = {
+  ...unknownNetworkPriorDay,
+  benefits: { ...unknownNetworkPriorDay.benefits, reported_options: [{
+    ...unknownNetworkPriorDay.benefits.reported_options[0], amount_cents: 0,
+  }] },
+  price_range: { ...unknownNetworkPriorDay.price_range, lines: [{
+    ...unknownNetworkPriorDay.price_range.lines[0], benefits: {
+      ...unknownNetworkPriorDay.price_range.lines[0].benefits, copay_cents: 0,
+    },
+  }] },
+}
+assert.equal(aetnaPriorDateReferenceCopay(zeroPriorDay, model), null,
+  'Wrong-date $0 copay must not become the visit collection headline')
+const zeroPriorDayView = deriveCommercialEstimateView({ result: {
+  ...zeroPriorDay,
+  collection_guidance: { ...zeroPriorDay.collection_guidance, services: [] },
+}, appointments: [], selectedVisit: null, busy: null, error: null, readOnly: true,
+recovering: false })
+const zeroArrival = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
+  { model: zeroPriorDayView, result: zeroPriorDay }))
+const zeroTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+  { model: zeroPriorDayView, result: zeroPriorDay }))
+assert.doesNotMatch(zeroArrival, /Payer-reported office copay/)
+assert.doesNotMatch(zeroArrival, /<strong[^>]*role="status"[^>]*>US\$0\.00<\/strong>/)
+assert.doesNotMatch(zeroTable, /Amount to collect at visit[^<]*office copay reference/)
+const cappedOffice = {
+  ...zeroPriorDay, service_date: '2026-11-18', reason: 'Six-week follow-up',
+  visit_type: 'established',
+  insurance_details: { member_id: 'SYNTHETIC', group_number: 'SYNTHETIC-GROUP' },
+  benefits: { ...zeroPriorDay.benefits, oop_remaining_cents: 0,
+    oop_annual_cents: 400000, deductible_remaining_cents: 0,
+    network_status: 'in_network', network_source: 'clinic_attested_aetna_office',
+    returned_service_dates: { start: '2026-11-17' },
+    reported_options: [
+      { kind: 'copay', service_type_code: '98', network: 'IN_NETWORK',
+        coverage_level: 'EMPLOYEE_ONLY', amount_cents: 0 },
+      { kind: 'coinsurance', service_type_code: '98', network: 'IN_NETWORK',
+        coverage_level: 'EMPLOYEE_ONLY', percent: '20.0' },
+      { kind: 'out_of_pocket', service_type_code: '30', network: 'IN_NETWORK',
+        coverage_level: 'INDIVIDUAL', time_period: 'CALENDAR_YEAR', amount_cents: 400000,
+        plan_association: 'medical' },
+      { kind: 'out_of_pocket', service_type_code: '30', network: 'IN_NETWORK',
+        coverage_level: 'INDIVIDUAL', time_period: 'REMAINING', amount_cents: 0,
+        plan_association: 'medical' },
+    ] },
+  price_range: { ...zeroPriorDay.price_range, lines: [{
+    ...zeroPriorDay.price_range.lines[0], code: '99213', units: 1,
+  }] },
+  aetna_office_planning: { status: 'planning_only', code: '99213', allowed_cents: 7553,
+    gross_coinsurance_cents: 1511, deductible_applies_cents: 0,
+    deductible_waived_cents: 0, deductible_remaining_cents: 0,
+    oop_remaining_cents: 0, coinsurance_percent: '20.0', collectable: false,
+    payer_response_date: '2026-11-17', service_date: '2026-11-18' },
+  collection_guidance: { amount_cents: 0, status: 'zero_advance', basis: 'claim_after_service',
+    reason: 'Collect $0 at check-in for covered in-network care.',
+    collection_rule: { mode: 'aetna_office_individual_oop_deferral' }, services: [] },
+  encounter_summary: { collect_today_cents: 0, payments_verified_cents: 0 },
+}
+const cappedView = deriveCommercialEstimateView({ result: cappedOffice,
+  appointments: [], selectedVisit: null, busy: null, error: null, readOnly: true,
+  recovering: false })
+assert.equal(cappedView.supportedAmount, true)
+assert.match(cappedView.networkLabel, /In network/)
+assert.equal(cappedView.policyStatus, 'Aetna office benefits · $0 check-in')
+assert.equal(cappedView.networkTone, 'is-confirmed')
+assert.equal(cappedView.coverageTone, 'is-confirmed')
+const cappedArrival = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
+  { model: cappedView, result: cappedOffice, partialCopay: null, visibleAmount: true }))
+const cappedTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+  { model: cappedView, result: cappedOffice }))
+assert.match(cappedArrival, /\$75\.53 clinic Aetna fee reference/)
+assert.match(cappedArrival, /20(?:\.0)?% × \$75\.53 = \$15\.11/)
+assert.match(cappedArrival, /\$0\.00/)
+assert.match(cappedTable, /Clinic Aetna fee reference.*\$75\.53/)
+assert.match(cappedTable, /Member and group.*SYNTHETIC-GROUP/)
+assert.match(cappedTable, /Network.*In network/)
+assert.match(cappedTable, /Conditional patient share.*\$0\.00/)
+assert.match(cappedTable, /Gross coinsurance.*\$15\.11/)
+assert.match(cappedTable, /Estimated Aetna share.*\$75\.53/)
+assert.match(cappedTable, /Amount to collect at visit.*\$0\.00/)
+assert.doesNotMatch(cappedTable, /verification pending|do not collect yet/i)
+const teleCapped = {
+  ...cappedOffice,
+  aetna_office_planning: { ...cappedOffice.aetna_office_planning,
+    coinsurance_scope: 'telemedicine_reference' },
+  benefits: { ...cappedOffice.benefits, reported_options:
+    cappedOffice.benefits.reported_options.map((row) =>
+      ['copay', 'coinsurance'].includes(row.kind)
+        ? { ...row, id: `tele-${row.kind}`, payer_note: 'Telemedicine Specialist Visit or Evaluation' }
+        : row) },
+  price_range: { ...cappedOffice.price_range, lines: [
+    { ...cappedOffice.price_range.lines[0], benefits: {
+      ...cappedOffice.price_range.lines[0].benefits,
+      copay_id: 'tele-copay', coinsurance_id: 'tele-coinsurance' } }] },
+}
+const teleView = deriveCommercialEstimateView({ result: teleCapped,
+  appointments: [], selectedVisit: null, busy: null, error: null, readOnly: true,
+  recovering: false })
+const teleTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+  { model: teleView, result: teleCapped }))
+const teleFigures = renderToStaticMarkup(React.createElement(PayerReportedPlanFigures,
+  { result: teleCapped }))
+assert.match(teleFigures, /Telemedicine specialist copay/)
+assert.doesNotMatch(teleFigures, /Match this plan and rendering provider/i)
+assert.match(teleTable, /20(?:\.0)?% telemedicine reference; in-person rate not returned/)
+assert.match(teleTable, /Illustrative coinsurance before cap.*\$15\.11/)
+assert.match(teleTable, /Amount to collect at visit.*\$0\.00/)
+assert.doesNotMatch(teleTable, /verification pending|do not collect yet|Match this plan and rendering provider/i)
 assert.equal(aetnaPriorDateReferenceCopay({ ...unknownNetworkPriorDay, benefits: {
   ...unknownNetworkPriorDay.benefits, reported_options: [{
     ...priorDay.benefits.reported_options[0], amount_cents: 6500 }] } }, model), null)
@@ -203,6 +311,30 @@ const unknownNetworkView = deriveCommercialEstimateView({ result: {
   appointments: [], selectedVisit: null, busy: null, error: null, readOnly: false,
   recovering: false })
 assert.equal(unknownNetworkView.coverageTone, 'is-review')
+
+const videoDeferral = { ...unknownNetworkPriorDay, service_date: '2026-11-17',
+  reason: 'Televisit', telehealth: { place_of_service: '10', modality: 'audio_video' },
+  benefits: { ...unknownNetworkPriorDay.benefits, oop_remaining_cents: 0 },
+  price_range: { complete: false, mode: 'services', allowed_min_cents: 7553,
+    allowed_max_cents: 7553, lines: [{
+    id: 'office', code: '99213', units: 1, modifiers: [],
+    allowed_cents: 7553, unit_allowed_cents: 7553, allowed_basis: 'aetna_fee_schedule',
+    rate_resolution: { status: 'RESOLVED' },
+    benefits: { active: true, service_date_matches: false },
+  }] },
+  collection_guidance: { amount_cents: 0, status: 'zero_advance',
+    basis: 'claim_after_service', reason: 'Collect $0 at check-in; submit the claim.',
+    collection_rule: { mode: 'aetna_televisit_oop_deferral' }, services: [] },
+  encounter_summary: { collect_today_cents: 0, payments_verified_cents: 0 },
+}
+const videoView = deriveCommercialEstimateView({ result: videoDeferral,
+  appointments: [], selectedVisit: null, busy: null, error: null, readOnly: true,
+  recovering: false })
+assert.equal(videoView.supportedAmount, true)
+const videoTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+  { model: videoView, result: videoDeferral }))
+assert.match(videoTable, /Amount to collect at visit.*\$0\.00/)
+assert.match(videoTable, /Not confirmed for telehealth.*\$75\.53 clinic Aetna fee reference/)
 
 const sharedOfficeMedicare = {
   ...unknownNetworkPriorDay,
@@ -320,4 +452,16 @@ assert.match(medicareTable, /Conditional patient share.*\$50\.00/)
 assert.match(medicareTable, /Estimated Aetna share.*\$46\.33/)
 assert.match(medicareTable, /Amount to collect at visit.*\$50\.00 conditional planning amount/)
 assert.doesNotMatch(medicareTable, /\$46\.33 conditional planning amount/)
+const savedMedicare = { ...medicareOffice,
+  aetna_office_planning: { ...medicareOffice.aetna_office_planning, coinsurance_percent: null } }
+const savedMedicareTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+  { model: medicareModel, result: savedMedicare }))
+const savedMedicareSummary = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
+  { model: medicareModel, result: savedMedicare, partialCopay: null, visibleAmount: true }))
+assert.match(savedMedicareSummary, /\$50\.00/)
+assert.match(savedMedicareSummary, /\$46\.33 estimated Aetna share/)
+assert.match(savedMedicareTable, /Clinic Aetna fee reference.*\$96\.33/)
+assert.match(savedMedicareTable, /Conditional patient share.*\$50\.00/)
+assert.match(savedMedicareTable, /Estimated Aetna share.*\$46\.33/)
+assert.match(savedMedicareTable, /Not returned for the in-person specialist visit/)
 console.log('Aetna separate copay: $40 office reference; $0 general OOP does not erase the separate cap')

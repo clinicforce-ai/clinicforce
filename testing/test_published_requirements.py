@@ -5,6 +5,7 @@ import pytest
 
 from app.insurance.contract_requirements import evaluate
 from app.insurance import published_plan_benefits
+from app.insurance.identity import payer_identity_verified
 
 
 def test_humana_plan_requires_card_and_payer_match_before_publishing_office_rule():
@@ -274,6 +275,7 @@ def test_bcbstx_in_network_ppo_99213_office_requirements():
     assert decision['authorization']['status'] == 'Not required'
     assert decision['procedures'][0]['authorization']['status'] == 'Not required'
     assert decision['authorization']['sources'][0]['source_type'] == 'clinic_confirmation'
+
     displayed_payer = {**context, 'payer_names': ['Blue Cross Blue Shield Tx']}
     assert evaluate(result, displayed_payer, [])['referral']['status'] == 'Not required'
     assert evaluate(result, displayed_payer, [])['authorization']['status'] == 'Not required'
@@ -283,7 +285,7 @@ def test_bcbstx_in_network_ppo_99213_office_requirements():
     assert evaluate(result, {**context, 'pos': '22'}, [])['authorization']['status'] == 'Verification required'
     assert evaluate(result, {**context, 'pos': None}, [])['authorization']['status'] == 'Verification required'
     higher, _ = case('BCBSTX', 'PREFERRED PROVIDER OPTION MEDICAL', '99214')
-    assert evaluate(higher, context, [])['authorization']['status'] == 'Verification required'
+    assert evaluate(higher, context, [])['authorization']['status'] == 'Not required'
     result['price_range'] = {'lines': [{'id': '0', 'code': '99213', 'benefits': {
         'requirements': {'authorization': {'payer_signal': 'required'}}}}]}
     assert evaluate(result, context, [])['authorization']['status'] == 'Required'
@@ -295,6 +297,51 @@ def test_bcbstx_in_network_ppo_99213_office_requirements():
     assert evaluate(result, context, [])['authorization']['status'] == 'Verification required'
     result['benefits']['coverage_evidence'] = {'status': 'ACTIVE', 'start': '2026-01-01'}
     assert evaluate(result, context, [])['authorization']['status'] == 'Not required'
+
+
+def test_bcbstx_plus_99214_office_requirements_follow_patient_bound_saved_visit():
+    result, context = case('Blue Cross Blue Shield Tx', 'PREFERRED PROVIDER OPTION PLUS MEDICAL',
+                           '99214', day='2026-11-18')
+    result['benefits']['service_date_matches'] = None
+    result['benefits']['coverage_evidence'] = {'status': 'ACTIVE', 'start': '2026-01-01'}
+    decision = evaluate(result, context, [])
+    for kind in ('referral', 'authorization'):
+        assert decision[kind]['status'] == 'Not required'
+        assert decision['procedures'][0][kind]['status'] == 'Not required'
+        assert decision[kind]['applicable_scope']['payer_product'] == 'PREFERRED PROVIDER OPTION PLUS MEDICAL'
+    assert decision['authorization']['sources'][0]['source_type'] == 'clinic_confirmation'
+
+    surname_warning = deepcopy(result)
+    surname_warning['benefits']['identity'].update(
+        status='warning', reconciliation_rule=None, can_confirm=True,
+        differences=[{'field': 'last_name'}], policy_differences=[], missing_fields=[])
+    assert not payer_identity_verified(surname_warning['benefits']['identity'])
+    warning_decision = evaluate(surname_warning, context, [])
+    assert warning_decision['referral']['status'] == 'Not required'
+    assert warning_decision['authorization']['status'] == 'Not required'
+    mapped_network = {**context, 'plans': ['CI', context['plans'][0], 'Blue Choice PPO']}
+    assert evaluate(surname_warning, mapped_network, [])['authorization']['status'] == 'Not required'
+    for changed in ({'can_confirm': False}, {'differences': [{'field': 'first_name'}]},
+                    {'policy_differences': [{'field': 'member_id'}]}, {'binding': None}):
+        conflicted = deepcopy(surname_warning)
+        conflicted['benefits']['identity'].update(changed)
+        assert evaluate(conflicted, context, [])['authorization']['status'] != 'Not required'
+
+    wrong_network = deepcopy(result)
+    wrong_network['benefits']['network_status'] = 'unknown'
+    assert evaluate(wrong_network, context, [])['authorization']['status'] != 'Not required'
+    assert evaluate(result, {**context, 'pos': '22'}, [])['authorization']['status'] != 'Not required'
+    extra_service = deepcopy(result)
+    extra_service['codes'].append({'id': '1', 'code': '95908', 'units': 1})
+    assert evaluate(extra_service, context, [])['authorization']['status'] != 'Not required'
+    wrong_date = deepcopy(result)
+    wrong_date['benefits']['coverage_evidence']['start'] = '2026-11-19'
+    assert evaluate(wrong_date, context, [])['authorization']['status'] != 'Not required'
+    payer_requires_auth = deepcopy(result)
+    payer_requires_auth['benefits']['service_date_matches'] = True
+    payer_requires_auth['price_range'] = {'lines': [{'id': '0', 'code': '99214', 'benefits': {
+        'requirements': {'authorization': {'payer_signal': 'required'}}}}]}
+    assert evaluate(payer_requires_auth, context, [])['authorization']['status'] == 'Required'
 
 
 def test_uhc_group_lppo_routine_office_followup_requirements():

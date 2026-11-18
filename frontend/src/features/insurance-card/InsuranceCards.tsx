@@ -88,7 +88,7 @@ export default function InsuranceCards({
             {card.source === 'ecw_current' ? 'Current eCW card' : 'ClinicForce upload'}
           </figcaption>
           <div className="insurance-card-actions">
-            <a href={card.url} target="_blank" rel="noreferrer">
+            <a className="insurance-card-open" href={card.url} target="_blank" rel="noreferrer">
               Open card
             </a>
             {onCardDeleted && card.source === 'clinicforce_upload' && card.intake_id && (

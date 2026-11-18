@@ -43,10 +43,10 @@ export function RequirementDecision({
   return (
     <>
       {label}
-      {kind === 'referral' && evidence && (
+      {kind === 'referral' && evidence && status !== 'Not required' && (
         <small>Referral obtained: {evidence.referral_obtained || 'UNKNOWN'}</small>
       )}
-      {kind === 'prior authorization' && evidence && (
+      {kind === 'prior authorization' && evidence && status !== 'Not required' && (
         <>
           {needsCodeSelection && status === 'Required' && (
             <small>Approval needed if selected</small>

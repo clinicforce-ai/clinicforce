@@ -9,9 +9,11 @@ export type AetnaOfficePlanning = {
   plan_share_cents?: number
   deductible_remaining_cents: number
   oop_remaining_cents: number
-  coinsurance_percent: string
+  coinsurance_percent: string | null
   deductible_applies_cents: number
   deductible_waived_cents: number
+  gross_coinsurance_cents?: number
+  coinsurance_scope?: 'in_person_office' | 'telemedicine_reference'
   payer_response_date: string
   service_date: string
   rate_source?: string | null
@@ -292,6 +294,26 @@ export type BotoxReview = {
   separate_em_documented?: boolean
 }
 
+export type ClaimCollection = {
+  status: 'estimated' | 'adjudicated'
+  source: 'inferred_from_paid_claim' | 'adjudicated_835'
+  code: string
+  units: number
+  submitted_cents: number
+  insurer_paid_cents: number
+  allowed_cents: number
+  allowed_confirmed: boolean
+  patient_share_cents: number
+  payments_verified_cents: number
+  amount_cents: number
+  copay_cents: number
+  coinsurance_percent: string
+  deductible_remaining_cents: number | null
+  oop_remaining_cents: number | null
+  benefits_checked_at: string
+  reason: string
+}
+
 export type VisitFinancials = {
   source: string
   checked_at: string
@@ -299,6 +321,7 @@ export type VisitFinancials = {
   partial: boolean
   message: string
   transactions_checked: number
+  claim_collection?: ClaimCollection | null
   lines: Array<{
     transaction_id: string
     claim_reference?: string
@@ -330,6 +353,7 @@ export type BotoxPreview = {
 export type StediPlanDetails = {
   names?: string[]
   medicare_ppo_evidence?: string | null
+  medicare_hmo_evidence?: string | null
   supplementary_names?: string[]
   network_names?: string[]
   identified_product?: string | null

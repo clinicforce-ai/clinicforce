@@ -403,7 +403,7 @@ export function RequirementCard({
                 ? 'Choose CPT level'
                 : missingRuleAction}
         </strong>
-        {evidence && (
+        {evidence && status !== 'Not required' && (
           <small>
             {title === 'Referral'
               ? `Referral obtained: ${evidence.referral_obtained || 'UNKNOWN'}`
