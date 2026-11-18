@@ -10,14 +10,14 @@ const money = (cents: number | null | undefined) =>
     : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100)
 
 const benefitMoney = (cents: number | null | undefined) =>
-  cents == null ? 'Not returned by insurer' : money(cents)
+  cents == null ? 'No confirmed amount for this visit' : money(cents)
 
 function issueText(issue: string) {
   const explanations: Record<string, string> = {
     'Confirm the remaining individual deductible that applies to this visit.':
-      'The insurer did not return an applicable remaining individual deductible.',
+      'No remaining individual deductible was matched to this visit in the insurer’s response.',
     'Confirm the remaining individual out-of-pocket maximum.':
-      'The insurer did not return a remaining individual out-of-pocket maximum.',
+      'No remaining individual out-of-pocket maximum was matched to this visit in the insurer’s response.',
     'Confirm which copay or coinsurance term applies, including any visit-count conditions.':
       'The insurer did not establish one applicable copay or coinsurance term for this visit.',
     'Verify the active clinic contract rate and exact plan mapping for this code, modifier and visit.':
@@ -37,7 +37,7 @@ function BenefitTerms({ terms }: { terms: PrebookingTerms }) {
         <dt>Coinsurance</dt>
         <dd>
           {terms.coinsurance_percent == null
-            ? 'Not returned by insurer'
+            ? 'No confirmed rate for this visit'
             : `${terms.coinsurance_percent}%`}
         </dd>
       </div>
@@ -235,7 +235,7 @@ export default function StaffPrebookingResult({
       )}
       {result.benefits && (
         <section className="prebooking-benefit-section" aria-labelledby="prebooking-benefit-title">
-          <h3 id="prebooking-benefit-title">Benefits returned for this visit</h3>
+          <h3 id="prebooking-benefit-title">Payer benefit terms for this visit</h3>
           <BenefitTerms terms={result.benefits} />
         </section>
       )}

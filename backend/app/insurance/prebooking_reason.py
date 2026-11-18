@@ -17,8 +17,8 @@ _FALLBACK = {
         "details to a policy. The rejection did not identify which detail failed."
     ),
     "missing_benefits": (
-        "Likely explanation (inference): the insurer returned coverage but omitted the "
-        "service-specific cost-sharing terms needed for this visit. Its response did not say why."
+        "Likely explanation (inference): the insurer's eligibility reply did not identify "
+        "one cost-sharing rule for this visit. The reply did not explain which rule applies."
     ),
     "check_incomplete": (
         "Likely explanation (inference): the insurer or eligibility connection could not "
@@ -39,6 +39,7 @@ _HYPOTHESES = {
     "missing_benefits": {
         "eligibility_terms_omitted": "The payer may return active coverage without this visit's cost-sharing terms in its eligibility reply; those terms were absent here.",
         "cost_estimate_needed": "The payer may provide this visit's cost-sharing terms only through a separate cost estimate; its eligibility reply omitted them.",
+        "visit_conditions_unclear": "The payer may have supplied terms for a different type of visit or location; its reply did not say which row applies here.",
         "category_not_applicable": "The payer may have left this cost-sharing category blank because it does not apply to this plan; the reply did not say the visit costs $0.",
         "plan_product_omitted": "The payer may have returned only general coverage instead of the exact plan product needed for NMCT's rate lookup.",
     },
@@ -65,13 +66,27 @@ def _safe_signals(evidence: dict) -> dict:
     codes = evidence.get("error_codes") or []
     safe["error_codes"] = [str(code) for code in codes[:5]
                            if re.fullmatch(r"\d{2}", str(code))]
-    terms = {"plan product", "office copay", "coinsurance", "remaining deductible",
+    terms = {"plan product", "office copay", "coinsurance", "office copay or coinsurance", "remaining deductible",
              "remaining out-of-pocket limit"}
     safe["missing_terms"] = [term for term in (evidence.get("missing_terms") or [])[:5]
                              if term in terms]
     safe["service_types"] = [str(code) for code in (evidence.get("service_types") or [])[:5]
                              if re.fullmatch(r"\d{2}", str(code))]
+    if type(evidence.get("cost_share_rows_present")) is bool:
+        safe["cost_share_rows_present"] = evidence["cost_share_rows_present"]
     return safe
+
+
+def cost_share_rows_present(payload: dict, service_types: list[str]) -> bool:
+    """Check structured payer rows locally; no source text or patient data reaches AI."""
+    from app.insurance.stedi_benefits.fields import _stedi_entries
+
+    requested = set(service_types) | {"30"}
+    sources = [payload, *((payload.get("_service_payloads") or {}).values())]
+    return any(row.get("code") in {"A", "B"} and (
+        not row.get("serviceTypeCodes") or requested.intersection(
+            str(code) for code in row["serviceTypeCodes"]))
+        for source in sources if isinstance(source, dict) for row in _stedi_entries(source))
 
 
 def infer(kind: str, evidence: dict) -> str:
@@ -80,9 +95,18 @@ def infer(kind: str, evidence: dict) -> str:
         raise ValueError("Unsupported prebooking explanation")
     safe = _safe_signals(evidence)
     missing = safe["missing_terms"]
-    observed = ("The insurer's response did not include " + ", ".join(missing) + ". "
+    missing_label = (", ".join(missing[:-1]) + ", and " + missing[-1] if len(missing) > 2
+                     else " and ".join(missing))
+    observed = (("The insurer returned cost-sharing rows, but ClinicForce did not identify which one applies to this visit. Still unconfirmed: "
+                 if safe.get("cost_share_rows_present") else "The insurer's response did not include these visit-specific items: ")
+                + missing_label + ". "
                 if kind == "missing_benefits" and missing else "")
     choices = list(_HYPOTHESES[kind])
+    if kind == "missing_benefits":
+        if safe.get("cost_share_rows_present"):
+            choices = [code for code in choices if code not in {"eligibility_terms_omitted", "cost_estimate_needed"}]
+        else:
+            choices.remove("visit_conditions_unclear")
     if "plan product" not in missing and "plan_product_omitted" in choices:
         choices.remove("plan_product_omitted")
     if safe.get("future_date") is not True and "future_date_window" in choices:

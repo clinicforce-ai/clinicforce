@@ -146,7 +146,7 @@ try {
   assert.match(await page.getByText('Collect on arrival').locator('..').innerText(), /\$0\.00/)
   assert.equal(await page.locator('.prebooking-share').count(), 0)
   assert.match(await page.locator('.prebooking-service-row').innerText(), /Synthetic signed rate/)
-  assert.match(await page.locator('.prebooking-benefit-section').innerText(), /Not returned by insurer/)
+  assert.match(await page.locator('.prebooking-benefit-section').innerText(), /No confirmed amount for this visit/)
   assert.match(await page.locator('.prebooking-review').innerText(), /The insurer did not return an applicable remaining individual deductible/)
   assert.equal(await page.getByText('Confirm the remaining individual deductible that applies to this visit.').count(), 0)
   partial = false

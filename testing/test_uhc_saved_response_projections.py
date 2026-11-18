@@ -755,7 +755,7 @@ def test_conflicting_office_copays_stay_unresolved_in_either_payer_row_order(rev
 
     assert terms['active'] is True
     assert terms['copay_cents'] is None
-    assert 'which copay or coinsurance term applies' in terms['review_reasons'][0]
+    assert 'different copay rows for this service' in terms['review_reasons'][0]
 
 
 def test_empty_followup_search_does_not_hide_earlier_active_benefits():

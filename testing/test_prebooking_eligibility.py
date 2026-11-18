@@ -26,7 +26,7 @@ def test_ai_reason_uses_only_structured_evidence_and_labels_inference():
         reason = prebooking_reason.infer("missing_benefits", {
             "coverage": "active", "payer_status": "MEM123",
             "missing_terms": ["office copay", "coinsurance", "Pat"]})
-    assert reason.startswith("The insurer's response did not include office copay, coinsurance. ")
+    assert reason.startswith("The insurer's response did not include these visit-specific items: office copay and coinsurance. ")
     assert "Likely explanation (AI inference): " in reason
     assert "cost-sharing terms" in reason
     sent = client.return_value.converse.call_args.kwargs["messages"]
@@ -60,6 +60,39 @@ def test_ai_reason_can_name_a_nonapplicable_benefit_without_assuming_zero_cost()
             "coverage": "active", "missing_terms": ["office copay"]})
     assert "does not apply to this plan" in reason
     assert "did not say the visit costs $0" in reason
+
+
+def test_ai_reason_does_not_call_present_office_rows_omitted():
+    payload = {"plans": [{"benefits": {"coInsurance": [{
+        "service": {"system": "STC", "value": "98"}, "percent": 0,
+        "messages": ["synthetic office condition"]}]}}]}
+    assert prebooking_reason.cost_share_rows_present(payload, ["98"])
+    assert not prebooking_reason.cost_share_rows_present(payload, ["73"])
+    reply = {"output": {"message": {"content": [{"toolUse": {
+        "name": "choose_prebooking_cause", "input": {"reason_code": "visit_conditions_unclear"}}}]}}}
+    with patch.object(prebooking_reason.boto3, "client") as client:
+        client.return_value.converse.return_value = reply
+        reason = prebooking_reason.infer("missing_benefits", {
+            "coverage": "active", "missing_terms": ["office copay or coinsurance"],
+            "service_types": ["98"], "cost_share_rows_present": True})
+    assert "returned cost-sharing rows" in reason
+    assert "different type of visit or location" in reason
+    choices = client.return_value.converse.call_args.kwargs["toolConfig"]["tools"][0]["toolSpec"]["inputSchema"]["json"]["properties"]["reason_code"]["enum"]
+    assert "eligibility_terms_omitted" not in choices
+
+
+def test_conflicting_payer_coinsurance_rows_explain_why_no_term_was_selected():
+    from app.insurance.commercial import normalize_stedi_271
+
+    payload = response(status="ACTIVE_COVERAGE", service="98")
+    payload["benefitsInformation"] = [{"code": "A", "benefitPercent": 0,
+        "coverageLevelCode": "IND", "inPlanNetworkIndicatorCode": "Y",
+        "serviceTypeCodes": ["98"], "messages": [label]}
+        for label in ("Specialist", "Other office condition")]
+    terms = normalize_stedi_271(payload, "98", True, office_visit=True,
+                                 place_of_service="11")
+    assert terms["coinsurance_percent"] is None
+    assert any("different coinsurance rows" in reason for reason in terms["review_reasons"])
 
 
 def test_prebooking_uses_verified_office_copay_when_rate_is_missing():
@@ -445,7 +478,7 @@ def test_estimate_route_checks_identity_and_services_before_pricing():
                     "selected_services": [{"code": "99213", "units": 1}]}
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                      headers={"Origin": "http://test"}) as client:
-            with patch.object(staff, "require_staff", AsyncMock(return_value={"practice_id": "clinic-1", "practice_name": "Example Clinic"})), \
+            with patch.object(staff, "require_staff", AsyncMock(return_value={"practice_id": network_participation.NMCT_PRACTICE_ID, "practice_name": "Example Clinic"})), \
                  patch.object(staff_prebooking.clinic_store, "get_for_practice", return_value=PROVIDER), \
                  patch.object(staff_prebooking.commercial_store, "list_networks", return_value=[]), \
                  patch.object(staff_prebooking, "_today", return_value="2026-10-27"), \
@@ -455,6 +488,7 @@ def test_estimate_route_checks_identity_and_services_before_pricing():
                  patch.object(staff_prebooking.prebooking_reason, "infer", return_value=(
                      "Likely explanation (AI inference): the insurer returned general coverage without naming one plan product.")) as infer, \
                  patch.object(commercial_estimator.commercial_store, "list_connections", return_value=[]), \
+                 patch.object(commercial_estimator.staff_store, "list_library", return_value=[]), \
                  patch.object(library_network_exclusions, "applicable_exclusion", return_value=None), \
                  patch.object(staff.staff_store, "create_intake") as create_intake, \
                  patch.dict(os.environ, {"STEDI_EXECUTION_MODE": "commercial_pilot", "STEDI_LIVE_ELIGIBILITY_ENABLED": "true"}):
@@ -470,9 +504,10 @@ def test_estimate_route_checks_identity_and_services_before_pricing():
                 assert result.json()["patient_birth_date"] == "1980-01-01"
                 assert result.json()["patient_address"]["line1"] == "100 Example Ave"
                 assert result.json()["patient_max_cents"] is None
-                assert result.json()["collection"]["amount_cents"] is None
+                assert result.json()["collection"]["amount_cents"] == 0
                 assert result.json()["network_status"] == "unknown"
                 assert any("Likely explanation (AI inference)" in issue for issue in result.json()["issues"])
+                assert "Likely explanation (AI inference)" in result.json()["collection"]["reason"]
                 assert infer.call_args.args[0] == "missing_benefits"
                 PrebookingEstimateResponse.model_validate(result.json())
                 assert check.await_count == 2
