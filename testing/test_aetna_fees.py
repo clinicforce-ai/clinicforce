@@ -148,7 +148,7 @@ def test_enabled_aetna_connection_still_uses_database_schedule():
          patch.object(previsit, 'scoped_admin_nonparticipation', return_value=None), \
          patch.object(previsit, 'apply_admin_nonparticipation'), \
          patch.object(previsit, 'apply_nmct_cigna_administrator_attestation'), \
-         patch.object(previsit, 'apply_nmct_cigna_ppo_attestation'), \
+         patch.object(previsit, 'apply_nmct_product_attestation'), \
          patch.object(previsit._api, '_previsit_range', return_value=({'lines': []}, [])) as schedule, \
          patch.object(previsit._api, '_previsit_practice_path',
                       side_effect=previsit._api.HTTPException(409, 'No linked contract')) as network_lookup, \

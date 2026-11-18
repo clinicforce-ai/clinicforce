@@ -135,7 +135,9 @@ export default function StaffPrebookingResult({
           ? 'NMCT clinic contract'
           : result.network_evidence?.source === 'payer_participation_message'
             ? 'Payer provider statement'
-            : null
+            : result.network_evidence?.source === 'clinic_product_roster'
+              ? 'NMCT confirmed product list'
+              : null
 
   return (
     <section

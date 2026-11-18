@@ -61,7 +61,7 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
       payer: 'Example Health', checked_at: '2026-10-29T12:00:00Z', checked_on: '2026-10-29', check_ids: ['ec_synthetic'],
       patient_given_name: 'Pat', patient_family_name: 'Example', patient_birth_date: '1980-01-01',
       patient_address: { line1: '100 Example Ave', line2: null, city: 'Albany', state: 'NY', postal_code: '12207', country: null },
-      network_status: 'in_network', network_evidence: { source: 'clinic_library_contract', reason: 'Synthetic NMCT contract.' }, plan_name: 'Example PPO', plan_type: 'PPO',
+      network_status: 'in_network', network_evidence: { source: 'clinic_product_roster', reason: 'Synthetic NMCT participation.' }, plan_name: 'Example PPO', plan_type: 'PPO',
       benefits: { copay_cents: 2500, coinsurance_percent: '0', deductible_annual_cents: partial ? null : 100000, deductible_remaining_cents: partial ? null : 40000,
         oop_annual_cents: 300000, oop_remaining_cents: 120000 },
       lines: [{ code: officeCode, units: 1, role: 'visit', service_type: '98', allowed_cents: 10000, patient_cents: partial ? null : 2500,
@@ -136,8 +136,9 @@ try {
   priced = true
   await page.getByLabel('Member ID from insurance card').fill('SYNTHETIC2')
   await page.getByRole('button', { name: 'Check insurance and estimate visit' }).click()
-  await page.getByText('Synthetic NMCT contract.').waitFor()
+  await page.getByText('Synthetic NMCT participation.').waitFor()
   assert.match(await page.locator('.prebooking-status-row').innerText(), /Plan type\s+PPO/)
+  assert.match(await page.locator('.prebooking-status-row').innerText(), /Source: NMCT confirmed product list/)
   assert.equal(checks, 3)
   assert.equal(plans, 1)
   const totals = await page.locator('.prebooking-cost-grid').innerText()

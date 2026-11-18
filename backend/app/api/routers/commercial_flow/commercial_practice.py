@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
+from app.insurance import network_product_roster
 
 def _network(practice_id: str, network_id: str) -> dict:
     value = next((row for row in _api.commercial_store.list_networks(practice_id) if row["id"] == network_id), None)
@@ -181,6 +182,9 @@ def _scoped_product_aliases(network: dict, profiles: list[dict], source: dict, s
         mapping = _applicable_product_mapping(network, profile, source, service_date, payer)
         if mapping:
             aliases.update(_api.insurance_identity.normalized(name) for name in mapping.get('products') or [])
+    if network_product_roster.matches_contract_network(network, source,
+            str((payer or {}).get('display_name') or ''), service_date):
+        aliases.add(_api.insurance_identity.normalized(network.get('network_name')))
     return aliases
 
 
@@ -188,6 +192,9 @@ def _pricing_profile(profile: dict, network: dict, source: dict, service_date: s
                      payer: dict | None = None) -> dict:
     """Select the exact approved rate plan for a bound payer product."""
     plan = str(source.get('plan') or '').strip()
+    if network_product_roster.matches_contract_network(network, source,
+            str((payer or {}).get('display_name') or ''), service_date):
+        return {**profile, 'rate_plan_matcher': network['plan_matcher'], 'require_exact_rate_plan': True}
     mapping = _applicable_product_mapping(network, profile, source, service_date, payer)
     if mapping and mapping.get('contract_product'):
         matcher = str(mapping.get('rate_plan_matcher') or network.get('plan_matcher') or '').strip()

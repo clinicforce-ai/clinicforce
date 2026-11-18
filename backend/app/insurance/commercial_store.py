@@ -37,6 +37,19 @@ def list_connections(practice_id: str) -> list[dict]:
     return [_row(row) for row in rows]
 
 
+def matching_network_product(practice_id: str, payer_key: str, match_key: str, service_date: str) -> dict | None:
+    """Read one current clinic-confirmed product; the roster is independent of rate profiles."""
+    if not patient_store.DATABASE_URL and not (os.getenv('DB_HOST') and os.getenv('DATABASE_PASSWORD')):
+        return None
+    with _connection() as db:
+        row = db.execute('''SELECT product_name,source_reference FROM commercial_network_products
+            WHERE practice_id=%s AND payer_key=%s AND match_key=%s AND status='active'
+              AND effective_from<=%s AND (effective_to IS NULL OR effective_to>=%s)
+            ORDER BY effective_from DESC,product_name LIMIT 1''',
+            (practice_id, payer_key, match_key, service_date, service_date)).fetchone()
+    return dict(row) if row else None
+
+
 def list_cpt_requirements(practice_id: str) -> list[dict]:
     """Read sourced, product-specific rules without member data."""
     if not patient_store.DATABASE_URL and not (os.getenv('DB_HOST') and os.getenv('DATABASE_PASSWORD')):

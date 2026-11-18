@@ -7,7 +7,7 @@ import json
 from fastapi import HTTPException
 
 from app.core import object_store, staff_store
-from app.insurance import commercial, commercial_store, group_contract_support, insurance_product, inventory_certification, library_network_exclusions, network_participation
+from app.insurance import commercial, commercial_store, group_contract_support, insurance_product, inventory_certification, library_network_exclusions, network_participation, network_product_roster
 from app.insurance import identity as insurance_identity
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies
 from app.api.routers.commercial_flow.commercial_previsit_tpa import cigna_primary_route
@@ -152,6 +152,15 @@ def apply_nmct_cigna_ppo_attestation(result: dict, benefits: dict, practice_id: 
     return True
 
 
+def apply_nmct_product_attestation(result: dict, benefits: dict, practice_id: str,
+        payer: str, payload: dict | None, inputs: dict, source: dict, contract: dict | None) -> bool:
+    """Check the current database roster before the older Cigna-only rule."""
+    if network_product_roster.apply(result, benefits, practice_id, payer, inputs, source, payload):
+        return True
+    return not contract and apply_nmct_cigna_ppo_attestation(
+        result, benefits, practice_id, payer, payload, inputs, source)
+
+
 def apply_nmct_contract_absence(result: dict, benefits: dict, payer: str, document: dict | None,
                                 service_date: str, plan_bound: bool) -> bool:
     card = result.get('card_check') or {}
@@ -188,7 +197,8 @@ def apply_nmct_contract_absence(result: dict, benefits: dict, payer: str, docume
             or plan_bound is not True or benefits.get('active') is not True
             or benefits.get('service_date_matches') is False
             or benefits.get('network_source') in {'payer_participation_message', 'clinic_attested_phcs_roster',
-                                                  'clinic_attested_cigna_tpa', 'clinic_attested_cigna_ppo'}
+                                                  'clinic_attested_cigna_tpa', 'clinic_attested_cigna_ppo',
+                                                  'clinic_product_roster'}
             or network_participation.verified_out_of_network(benefits)
             or network_participation.participation_conflict(benefits)):
         return False
@@ -360,6 +370,11 @@ def recheck_saved_network_evidence(result: dict, case: dict, practice_id: str, p
         if not nmct_document:
             return
         _clear_saved_tier(result, 'NMCT has a current insurer contract. Recalculate the saved out-of-network amount.')
+    if benefits.get('network_source') == 'clinic_product_roster':
+        exact.update(payer_plan_names=names, payer_network_names=plan.get('network_names') or [])
+        if network_product_roster.apply(result, benefits, practice_id, payer_name, context.get('inputs') or {}, exact): return
+        _clear_saved_tier(result, 'NMCT no longer lists this product as participating for the saved visit. Refresh before collecting.')
+        return
     if benefits.get('network_source') == 'clinic_nonparticipation_rule':
         benefits.update(network_status='unknown', network_source=None)
     if benefits.get('network_source') == 'clinic_nmct_policy':
