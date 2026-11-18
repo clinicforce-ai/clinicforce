@@ -32,6 +32,21 @@ def request_body(details: dict, payer: dict, provider: dict, *, service_type: st
     return body
 
 
+def plan_type(payload: dict) -> str | None:
+    """Read one payer-reported active medical plan type, without guessing from benefit tiers."""
+    from app.insurance.stedi_benefits.fields import _stedi_entries
+
+    types = set()
+    for row in _stedi_entries(payload):
+        if (row.get("code") != "status" or "30" not in (row.get("serviceTypeCodes") or [])
+                or str(row.get("status") or "").upper() not in {"ACTIVE", "ACTIVE_COVERAGE"}):
+            continue
+        words = set(re.findall(r"[A-Z0-9]+", str(row.get("insuranceType") or row.get("insuranceTypeCode") or "").upper()))
+        found = words & {"PPO", "HMO", "EPO", "POS"}
+        types.update(found)
+    return next(iter(types)) if len(types) == 1 else None
+
+
 def _person_matches(returned: dict, first: str, last: str, birth_date: str) -> bool:
     if not isinstance(returned, dict) or not isinstance(returned.get("name") or {}, dict):
         return False

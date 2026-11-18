@@ -90,11 +90,13 @@ export type PrebookingEstimate = {
   network_status: 'in_network' | 'out_of_network' | 'unknown'
   network_evidence: {
     reason?: string
+    reason_code?: string
     decision?: string
     source?: string
     product_network_source?: string
   } | null
   plan_name: string | null
+  plan_type: 'PPO' | 'HMO' | 'EPO' | 'POS' | null
   benefits: PrebookingTerms | null
   lines: Array<{
     code: string

@@ -41,6 +41,10 @@
   margin: 18px 0;
 }
 
+.prebooking-status-row {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .prebooking-status-row > div,
 .prebooking-cost-card {
   display: flex;
