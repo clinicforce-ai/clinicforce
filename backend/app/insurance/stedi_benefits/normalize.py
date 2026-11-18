@@ -348,6 +348,10 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         review_reasons.append(_oop_conflict_reason(payload, wanted, cost_share.conflicts['oop_annual'], annual=True))
     if cost_share.conflicts.get('oop_remaining'):
         review_reasons.append(_oop_conflict_reason(payload, wanted, cost_share.conflicts['oop_remaining'], annual=False))
+    if cost_share.conflicts.get('copay'):
+        review_reasons.append('The insurer returned different copay rows for this service. Their amounts or visit conditions differ, and the reply did not identify which one applies to this visit.')
+    if cost_share.conflicts.get('coinsurance'):
+        review_reasons.append('The insurer returned different coinsurance rows for this service. Their percentages or visit conditions differ, and the reply did not identify which one applies to this visit.')
     if cost_share.oop_medical_candidate_ids or cost_share.oop_quarantined_ids:
         review_reasons.append('Separate medical and supplementary coverage was returned; unassigned out-of-pocket rows are retained but cannot set this medical visit’s limit.')
     if inactive and has_active:

@@ -19,7 +19,7 @@ from app.api.schemas.staff import (PrebookingEligibility, PrebookingOptions, Pre
 from app.core import clinic_store
 from app.insurance import (collection_guidance, commercial, commercial_store, cpt_suggester,
                            encounter_summary, identity,
-                           network_participation, prebooking, stedi, stedi_financial,
+                           network_participation, prebooking, prebooking_reason, stedi, stedi_financial,
                            stedi_payers, visit_estimate)
 
 
@@ -122,13 +122,29 @@ def _terms(benefits: dict) -> dict:
             "referral_signal", "resolved_service_type")}
 
 
+def _deferred_collection(practice_id: str) -> dict:
+    if network_participation.is_nmct_practice(practice_id):
+        return {"amount_cents": 0, "basis": "clinic_deferred_prebooking", "reason":
+                "NMCT policy: collect $0 at arrival for this check; bill after coverage and claim review. This does not mean the visit costs $0.",
+                "components": None}
+    return {"amount_cents": None, "basis": "needs_review", "reason":
+            "No clinic arrival collection policy is set for this practice.", "components": None}
+
+
 def _prospective_collection(practice_id: str, payer_id: str, benefits: dict, comparison: dict,
                             price: dict, lines: list[dict], network_evidence: dict | None,
                             ready: bool) -> dict:
     missing = {"amount_cents": None, "basis": "needs_review", "reason":
-               "A collection amount needs a priced service, matched member and plan, clinic network and rate evidence, and an approved collection rule.",
+               "ClinicForce did not calculate one patient share for these services or find an applicable fixed office copay in the insurer's reply.",
                "components": None}
-    if not ready:
+    office_copay_candidate = (network_participation.is_nmct_practice(practice_id)
+        and benefits.get("active") is True and identity.patient_benefits_bound(comparison)
+        and network_participation.verified_in_network(benefits)
+        and price.get("mode") == "services" and len(lines) == 1
+        and len(price.get("lines") or []) == 1
+        and price["lines"][0].get("id") == lines[0]["id"]
+        and visit_estimate.clinical_group(lines[0]["code"]) == "visit")
+    if not ready and not office_copay_candidate:
         return missing
     connections = [row for row in commercial_store.list_connections(practice_id)
                    if row.get("stedi_payer_id") == payer_id]
@@ -136,7 +152,8 @@ def _prospective_collection(practice_id: str, payer_id: str, benefits: dict, com
     if not (isinstance(policy, dict) and policy.get("mode") in {
             "defer_to_claim", "collect_verified_copay", "collect_supported_advance"}
             and all(policy.get(key) for key in ("approved_by", "approved_at", "reference"))):
-        return missing
+        return {**missing, "reason":
+                "NMCT has no approved check-in collection rule for this insurer."}
     evidence = {"benefits": benefits, "identity": comparison, "price_range": price,
                 "codes": lines, "selected_ids": [row["id"] for row in lines],
                 "network_evidence": network_evidence, "payment_mode": "insurance",
@@ -146,7 +163,9 @@ def _prospective_collection(practice_id: str, payer_id: str, benefits: dict, com
         summary = encounter_summary.build({**evidence, "collection_guidance": guidance})
     except (ValueError, TypeError, KeyError, AttributeError, IndexError):
         return {**missing, "reason": "The clinic collection formula could not be completed; review the payer check and clinic policy."}
-    amount = summary.get("collect_today_cents") if summary.get("complete") and not summary.get("integrity_error") else None
+    independent_copay = guidance.get("basis") == "office_copay" and office_copay_candidate
+    amount = (summary.get("collect_today_cents") if not summary.get("integrity_error")
+              and (summary.get("complete") or independent_copay) else None)
     components = summary.get("components") or {}
     complete_components = (summary.get("complete") and len(components) == 5
                            and all(type(value) is int for value in components.values()))
@@ -166,6 +185,15 @@ def _estimate_from_payer(practice_id: str, details: dict, context: dict | None, 
                 "subscriber_last": details.get("subscriber_family_name") or details["family_name"],
                 "relationship": "" if details.get("relationship") == "dependent" else "self",
                 "payer_id": payer["stediId"]}
+    returned_dependent = payload.get("dependent")
+    if (details.get("relationship") != "dependent" and details.get("member_id")
+            and isinstance(returned_dependent, dict) and returned_dependent
+            and prebooking.matches_identity(payload, details)):
+        subscriber = commercial.payer_person(payload.get("subscriber") or {})
+        if subscriber.get("firstName") and subscriber.get("lastName"):
+            coverage.update(subscriber_first=subscriber["firstName"], subscriber_last=subscriber["lastName"],
+                            relationship=(returned_dependent.get("relationToSubscriberCode")
+                                          or returned_dependent.get("relationToSubscriber") or ""))
     comparison = identity.compare(payload, coverage)
     benefits = commercial.normalize_stedi_271(payload, "30", False, service_date=service_date,
         provider_npi=provider["npi"], place_of_service=(context or {}).get("place_of_service"),
@@ -200,7 +228,7 @@ def _estimate_from_payer(practice_id: str, details: dict, context: dict | None, 
         payload=payload, review={"selected_ids": [row["id"] for row in lines]})
     price = result.get("price_range") or {}
     network = benefits.get("network_status") or "unknown"
-    verified = bool(context) and (network_participation.verified_in_network(benefits)
+    verified = bool(context) and identity.patient_benefits_bound(comparison) and (network_participation.verified_in_network(benefits)
                                   or network_participation.verified_out_of_network(benefits))
     priced_rows = {row["code"]: row for row in price.get("lines") or []}
     contract_rates = len(priced_rows) == len(lines) and all(
@@ -236,6 +264,9 @@ def _estimate_from_payer(practice_id: str, details: dict, context: dict | None, 
     allowed_total = sum(row["allowed_cents"] for row in priced_rows.values()) if contract_ready else None
     collection = _prospective_collection(practice_id, payer["stediId"], benefits, comparison,
                                          price, lines, result.get("network_evidence"), ready)
+    collection_gap = collection["reason"] if collection["amount_cents"] is None else ""
+    if collection["amount_cents"] is None:
+        collection = _deferred_collection(practice_id)
     priced_lines = []
     for selected in lines:
         row = priced_rows.get(selected["code"]) or {}
@@ -247,22 +278,40 @@ def _estimate_from_payer(practice_id: str, details: dict, context: dict | None, 
                              "rate_source": row.get("rate_source") if contract_ready else None,
                              "benefits": _terms(row.get("benefits") or {}),
                              "issues": row.get("issues") or [], "conditions": row.get("conditions") or []})
-    issues = list(dict.fromkeys([*result["issues"], *(price.get("service_issues") or []),
-        *(reason for row in priced_lines for reason in row["issues"])]))
+    blockers = []
     if not identity.patient_benefits_bound(comparison):
-        issues.insert(0, "Benefits did not match the entered member and patient.")
+        blockers.append("Benefits did not match the entered member and patient. Check the card details and dependent selection before estimating collection.")
     if not plan:
-        issues.insert(0, "The insurer did not identify one plan product for this person.")
-    if not verified:
-        issues.insert(0, "A matching NMCT provider and location contract was not available.")
+        blockers.append("The insurer did not identify one plan product for this person.")
+    if identity.patient_benefits_bound(comparison) and not verified and network == "unknown":
+        if office_note := prebooking_reason.out_of_network_office_rows(price):
+            blockers.append(office_note)
+    if context and not verified and identity.patient_benefits_bound(comparison):
+        blockers.append("The payer response did not identify whether the requested NMCT provider is in network for this plan; no in-network clinic price was used.")
+    elif not context:
+        blockers.append("ClinicForce has no selected NMCT provider and office location for its contract-rate lookup.")
     if not network_participation.is_nmct_practice(practice_id):
-        issues.insert(0, "Priced prebooking estimates currently support NMCT contracted plans only.")
+        blockers.append("Priced prebooking estimates currently support NMCT contracted plans only.")
     elif network != "in_network":
-        issues.insert(0, "An NMCT in-network contract price was not established for this plan.")
+        blockers.append("This plan did not return an in-network result for NMCT, so its in-network clinic rates were not used.")
     elif not contract_rates:
-        issues.insert(0, "No matching NMCT contract rate was available for every selected service.")
+        blockers.append("ClinicForce has no exact NMCT contract rate for every selected CPT on this plan, provider, office and date. The eligibility reply does not include the clinic's contracted rates.")
+    elif not priced_lines_complete:
+        blockers.append("The insurer did not return enough applicable benefit terms to calculate the patient share.")
     elif not reconciled:
-        issues.insert(0, "The insurer did not return enough applicable benefit terms to calculate the patient share.")
+        blockers.append("ClinicForce's selected service amounts did not add up to the visit total, so no patient share was shown.")
+    elif price.get("complete") is not True:
+        blockers.append("ClinicForce did not complete the selected service price calculation, so no patient share was shown.")
+    issues = list(dict.fromkeys([*blockers, *result["issues"], *(price.get("service_issues") or []),
+        *(reason for row in priced_lines for reason in row["issues"])]))
+    if collection["basis"] == "clinic_deferred_prebooking" and not issues:
+        collection["reason"] += " " + collection_gap
+    office = priced_lines[0]["benefits"] if len(priced_lines) == 1 and priced_lines[0]["role"] == "visit" else {}
+    if (collection["basis"] == "clinic_deferred_prebooking" and verified and network == "in_network"
+            and office.get("copay_cents") is None and office.get("coinsurance_percent") in {"0", "0.0", "0.00"}
+            and office.get("deductible_applicability") == "UNKNOWN"
+            and office.get("deductible_remaining_cents") != 0 and office.get("deductible_annual_cents") != 0):
+        collection["reason"] += " The insurer reports 0% office coinsurance but does not say whether the office visit is subject to the deductible."
     displayed_terms = _terms(benefits)
     if (verified and network == "in_network" and identity.patient_benefits_bound(comparison)
             and len(priced_lines) == 1 and priced_lines[0]["role"] == "visit"):
@@ -283,7 +332,7 @@ def _estimate_from_payer(practice_id: str, details: dict, context: dict | None, 
             "issues": issues[:20]}
 
 
-@router.post("/prebooking-estimate/check", response_model=PrebookingEstimateResponse, description="Run an unsaved Stedi 270/271 check for an office-visit planning scenario and optional selected services. Member ID is required. The selected clinic rendering NPI is sent as the requesting provider without an organization name, allowing Stedi to resolve the name from NPPES. Payer AAA rejection codes return payer_rejected with the card field to correct, before identity matching or pricing. An active member-bound out-of-state Blue plan can use NMCT's signed Texas BlueCard agreement, exact provider/location scope and local contracted rates when the home payer has no clinic estimator connection. A signed, scoped NMCT Blue agreement can map a member-bound generic PPO medical label to the clinic plan for contract rate lookup; a specific payer product still needs its own mapping. A hash-verified signed group agreement can stand in for a missing direct profile document link only when its provider, network, plan, location and date exactly match the rate scope. STC 98 office terms are shown when STC 30 reports coverage but no financial terms. Return coverage, payer terms and the matched patient address when available; provide the NMCT contract-allowed visit cost and per-service rate sources when member, plan, provider, service and in-network contract rates match. Estimated patient and plan shares require complete benefit calculations and reconciled totals; they remain null if unknown. A prospective collection amount additionally requires an administrator-approved payer policy and passes the shared visit calculation integrity check; it is rechecked after booking. The no-store response repeats entered patient identity. Unknown values are null. Future-date checks can be unsupported by a payer and never fall back silently to today. No patient, case or appointment is created; recheck after booking.")
+@router.post("/prebooking-estimate/check", response_model=PrebookingEstimateResponse, description="Run an unsaved Stedi 270/271 check for an office-visit planning scenario and optional selected services. Member ID is required. The selected clinic rendering NPI is sent as the requesting provider without an organization name, allowing Stedi to resolve the name from NPPES. Payer AAA rejection codes return payer_rejected with the card field to correct, before identity matching or pricing. A payer-returned dependent can bind to the entered patient without eCW when the dependent name, birth date and full member ID match; the returned subscriber and relationship then supply the pricing identity. An active member-bound out-of-state Blue plan can use NMCT's signed Texas BlueCard agreement, exact provider/location scope and local contracted rates when the home payer has no clinic estimator connection. A signed, scoped NMCT Blue agreement can map a member-bound generic PPO medical label to the clinic plan for contract rate lookup; a specific payer product still needs its own mapping. A hash-verified signed group agreement can stand in for a missing direct profile document link only when its provider, network, plan, location and date exactly match the rate scope. STC 98 office terms are shown when STC 30 reports coverage but no financial terms. Out-of-network office cost-sharing rows are named when provider participation is unverified, but the rows do not establish that provider tier. Return coverage, payer terms and the matched patient address when available; report member network unknown and prioritize card correction when the payer response does not bind the entered member and patient; provide the NMCT contract-allowed visit cost and per-service rate sources when member, plan, provider, service and in-network contract rates match. Estimated patient and plan shares require complete benefit calculations and reconciled totals; they remain null if unknown. A positive prospective collection amount requires an administrator-approved payer policy and the shared visit calculation checks; a verified fixed office copay can be used without a full contract rate. If no approved positive amount is available, NMCT policy returns $0 to collect at arrival and bills after coverage and claim review, without treating patient liability as zero. The no-store response repeats entered patient identity. Unknown visit-price and liability values are null. Rejections and missing or conflicting payer terms include a specific reason or a labeled AI inference from deidentified response signals, including whether relevant cost-sharing rows were present. Future-date checks can be unsupported by a payer and never fall back silently to today. No patient, case or appointment is created; recheck after booking.")
 async def prebooking_estimate_check(value: PrebookingEstimateRequest, request: Request):
     staff = await _staff.require_staff(request)
     if (os.getenv("STEDI_EXECUTION_MODE", "off") != "commercial_pilot"
@@ -332,6 +381,16 @@ async def prebooking_estimate_check(value: PrebookingEstimateRequest, request: R
                     if service_date != today else
                     "The payer check did not complete. Review Stedi activity before another inquiry."),
                       "coverage_start": None, "coverage_end": None})
+    if not interpretable:
+        inferred = await run_in_threadpool(prebooking_reason.infer, "check_incomplete", {
+            "payer_status": str(response.get("outcome") or "unknown")[:20],
+            "future_date": service_date != today})
+        coverage["message"] += " " + inferred
+    elif coverage["status"] == "needs_review" and coverage["message"] == (
+            "The insurer did not return a clear coverage answer for this date."):
+        coverage["message"] = await run_in_threadpool(prebooking_reason.infer, "missing_coverage", {
+            "payer_status": "COMPLETE", "service_types": ["30"],
+            "future_date": service_date != today})
     base = {"coverage": coverage, "payer": payer["displayName"], "checked_at": checked_at,
             "checked_on": service_date, "check_ids": check_ids,
             "patient_given_name": details["given_name"], "patient_family_name": details["family_name"],
@@ -341,11 +400,21 @@ async def prebooking_estimate_check(value: PrebookingEstimateRequest, request: R
             "network_evidence": None, "plan_name": None, "benefits": None, "lines": [],
             "allowed_total_cents": None, "plan_total_cents": None,
             "patient_min_cents": None, "patient_max_cents": None, "estimate_status": "needs_review",
-            "collection": {"amount_cents": None, "basis": "needs_review", "reason":
-                           "The payer did not confirm the selected care and a clinic collection amount is unavailable.",
-                           "components": None},
+            "collection": _deferred_collection(staff["practice_id"]),
             "issues": []}
+    if coverage["status"] == "payer_rejected" and coverage["message"] in {
+            "The insurer rejected the submitted member details. Check the insurance card and try again.",
+            "The insurer rejected this inquiry. Check the card details and try again."}:
+        codes = sorted({str(row.get(key)) for row in commercial.eligibility_errors(payload)
+                        for key in ("code", "errorCode", "industryCode")
+                        if re.fullmatch(r"\d{2}", str(row.get(key) or ""))})
+        inferred = await run_in_threadpool(prebooking_reason.infer, "payer_rejected", {
+            "payer_status": str(payload.get("status") or "REJECTED")[:20], "error_codes": codes})
+        coverage["message"] = (f"Insurer rejection code {', '.join(codes)}. " if codes else
+                               "The insurer rejected the inquiry without a reason code. ") + inferred
     if coverage["status"] != "active_today":
+        if base["collection"]["basis"] == "clinic_deferred_prebooking":
+            base["collection"]["reason"] += " " + coverage["message"]
         return JSONResponse({**base, "issues": [coverage["message"]]}, headers=_staff.NO_STORE)
     categories = list(dict.fromkeys(visit_estimate.service_type(row["code"], {}) for row in lines))
     issues = []
@@ -361,22 +430,38 @@ async def prebooking_estimate_check(value: PrebookingEstimateRequest, request: R
         if isinstance(service_payload.get("id"), str) and re.fullmatch(r"ec_[A-Za-z0-9-]{1,80}", service_payload["id"]):
             check_ids.append(service_payload["id"])
         if reply.get("outcome") != "complete" or not isinstance(reply.get("payload"), dict):
-            issues.append(f"Service category {category} was not confirmed for the selected date. Review Stedi activity before another inquiry; no check for today was substituted.")
+            category_reason = prebooking.evaluate(service_payload, details, service_date)
+            if category_reason["status"] == "payer_rejected" and category_reason["message"] not in {
+                    "The insurer rejected the submitted member details. Check the insurance card and try again.",
+                    "The insurer rejected this inquiry. Check the card details and try again."}:
+                explanation = category_reason["message"]
+            else:
+                explanation = await run_in_threadpool(prebooking_reason.infer,
+                    "payer_rejected" if category_reason["status"] == "payer_rejected" else "check_incomplete", {
+                    "coverage": "general medical active", "payer_status": str(reply.get("outcome") or "unknown")[:20],
+                    "service_types": [category]})
+            issues.append(f"Service category {category} was not confirmed. {explanation}")
             break
         try:
             category_active = commercial.normalize_stedi_271(service_payload, category, False,
                 service_date=service_date).get("active") is True
         except (ValueError, TypeError, KeyError, AttributeError, IndexError):
             category_active = False
-        if not prebooking.matches_identity(service_payload, details) or not category_active:
-            issues.append(f"Service category {category} did not confirm the same active patient and policy.")
+        if not prebooking.matches_identity(service_payload, details):
+            issues.append(f"Service category {category} returned a different patient or member ID from the general-medical check.")
+            break
+        if not category_active:
+            issues.append(f"The insurer's service category {category} reply did not show active coverage for this patient and date.")
             break
         payload.setdefault("_service_payloads", {})[category] = service_payload
     try:
         estimate = await run_in_threadpool(_estimate_from_payer, staff["practice_id"], details,
                                             context, payer, provider, payload, service_date, lines)
     except (ValueError, TypeError, KeyError, AttributeError, IndexError):
-        return JSONResponse({**base, "issues": ["The payer benefits could not be interpreted for these services. Review the check in Stedi."]},
+        reason = "ClinicForce's benefit calculator failed while reading the insurer's response for these services. The clinic must review this check in Stedi before using an insured price."
+        if base["collection"]["basis"] == "clinic_deferred_prebooking":
+            base["collection"]["reason"] += " " + reason
+        return JSONResponse({**base, "issues": [reason]},
                             headers=_staff.NO_STORE)
     if issues:
         estimate["estimate_status"] = "needs_review"
@@ -384,7 +469,31 @@ async def prebooking_estimate_check(value: PrebookingEstimateRequest, request: R
         estimate["patient_min_cents"] = estimate["patient_max_cents"] = None
         estimate["lines"] = [{**row, "allowed_cents": None, "patient_cents": None, "rate_source": None}
                              for row in estimate["lines"]]
-        estimate["collection"] = {**estimate["collection"], "amount_cents": None,
-                                  "components": None, "basis": "needs_review", "reason": issues[0]}
+        estimate["collection"] = _deferred_collection(staff["practice_id"])
     estimate["issues"] = list(dict.fromkeys([*issues, *estimate["issues"]]))[:20]
+    missing_benefit_issue = "The insurer did not return enough applicable benefit terms to calculate the patient share."
+    missing_plan_issue = "The insurer did not identify one plan product for this person."
+    if missing_benefit_issue in estimate["issues"] or missing_plan_issue in estimate["issues"]:
+        terms = estimate.get("benefits") or {}
+        missing = (["office copay or coinsurance"]
+                   if terms.get("copay_cents") is None and terms.get("coinsurance_percent") is None else [])
+        missing += [label for key, label in (("deductible_remaining_cents", "remaining deductible"),
+                   ("oop_remaining_cents", "remaining out-of-pocket limit"))
+                   if terms.get(key) is None]
+        if missing_plan_issue in estimate["issues"]:
+            missing.insert(0, "plan product")
+        service_types = sorted({str(row.get("service_type")) for row in estimate["lines"]
+                                if row.get("service_type")})
+        inferred = await run_in_threadpool(prebooking_reason.infer, "missing_benefits", {
+            "coverage": "active", "missing_terms": missing,
+            "service_types": service_types,
+            "cost_share_rows_present": prebooking_reason.cost_share_rows_present(payload, service_types)})
+        estimate["issues"] = [inferred if issue in {missing_benefit_issue, missing_plan_issue} else issue
+                              for issue in estimate["issues"]]
+    if (estimate.get("collection") or {}).get("basis") == "clinic_deferred_prebooking" and estimate["issues"]:
+        estimate["collection"]["reason"] += " " + estimate["issues"][0]
+        inferred_issue = next((issue for issue in estimate["issues"]
+                               if "Likely explanation (" in issue), None)
+        if inferred_issue and inferred_issue != estimate["issues"][0]:
+            estimate["collection"]["reason"] += " " + inferred_issue
     return JSONResponse({**base, **estimate}, headers=_staff.NO_STORE)

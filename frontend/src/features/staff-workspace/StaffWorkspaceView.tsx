@@ -296,7 +296,12 @@ export default function StaffWorkspaceView({ model }: { model: StaffWorkspaceMod
           />
         )}
         {screen === 'inbox' && <StaffInboxScreen model={model} session={session} />}
-        {screen === 'prebooking' && <StaffPrebookingScreen onBack={() => navigate('patients')} />}
+        {screen === 'prebooking' && (
+          <StaffPrebookingScreen
+            onBack={() => navigate('patients')}
+            practiceId={session.practice_id}
+          />
+        )}
         {screen === 'links' && (
           <StaffUploadLinks
             key={linkPatient?.id || linkPatient?.intakeId || 'new'}

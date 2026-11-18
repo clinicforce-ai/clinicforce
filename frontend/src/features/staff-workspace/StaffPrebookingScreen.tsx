@@ -22,7 +22,13 @@ const empty: PrebookingDetails = {
   birth_date: '',
   member_id: '',
 }
-export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }) {
+export default function StaffPrebookingScreen({
+  onBack,
+  practiceId,
+}: {
+  onBack: () => void
+  practiceId: string
+}) {
   const [payers, setPayers] = useState<Payer[]>([])
   const [insurer, setInsurer] = useState('')
   const [optionsState, setOptionsState] = useState<'idle' | 'loading' | 'ready' | 'failed'>('idle')
@@ -30,6 +36,7 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
   const [contextId, setContextId] = useState('')
   const [busy, setBusy] = useState<'planning' | 'checking' | null>(null)
   const [error, setError] = useState('')
+  const [payerCheckUnavailable, setPayerCheckUnavailable] = useState(false)
   const [form, setForm] = useState<PrebookingDetails>(empty)
   const [reason, setReason] = useState('')
   const [visitType, setVisitType] = useState<VisitType>('new')
@@ -40,12 +47,14 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
   const [selected, setSelected] = useState<Record<string, number>>({})
   const [result, setResult] = useState<PrebookingEstimate | null>(null)
   const today = new Date().toLocaleDateString('en-CA')
-
+  const nmct = ['primary', 'f378bc13-af1d-4ea5-bfbd-8cd102e42ddc'].includes(practiceId)
+  const payerNotListed =
+    optionsState === 'ready' && payers.length === 0 && insurer.trim().length >= 2
   useEffect(() => {
     getPrebookingContexts()
       .then(({ contexts: choices }) => {
         setContexts(choices)
-        if (choices.length) setContextId(choices[0].id)
+        setContextId(choices.length === 1 ? choices[0].id : '')
       })
       .catch(() => setContexts([]))
   }, [])
@@ -63,7 +72,9 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
         .catch(() => {
           if (active) {
             setOptionsState('failed')
-            setError('Insurance companies are temporarily unavailable.')
+            setError(
+              'ClinicForce did not receive the insurer list from Stedi. No insurer was checked.',
+            )
           }
         })
     }, 300)
@@ -77,12 +88,14 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
     setForm((current) => ({ ...current, [key]: value }))
     setResult(null)
     setError('')
+    setPayerCheckUnavailable(false)
   }
   function changeReason(value: string) {
     setReason(value)
     setPlan(null)
     setSelected({})
     setResult(null)
+    setPayerCheckUnavailable(false)
   }
   function toggle(code: string, group?: PrebookingPlan['groups'][number]) {
     setSelected((current) => {
@@ -102,8 +115,13 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
   async function check(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (busy) return
+    setPayerCheckUnavailable(false)
     if (!form.payer_id) {
       setError('Choose the insurer from the search results.')
+      return
+    }
+    if (contexts.length > 1 && !contextId) {
+      setError('Choose the clinic provider and office where this visit would take place.')
       return
     }
     if (!form.member_id.trim()) {
@@ -120,6 +138,7 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
     setBusy(plan ? 'checking' : 'planning')
     setResult(null)
     setError('')
+    let estimateRequested = false
     try {
       const planned = plan || (await planPrebookingServices(reason.trim(), visitType))
       if (!plan) setPlan(planned)
@@ -140,6 +159,7 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
       }
       if (!plan) setSelected(included)
       setBusy('checking')
+      estimateRequested = true
       setResult(
         await checkPrebookingEstimate({
           ...form,
@@ -155,6 +175,13 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
         }),
       )
     } catch (caught) {
+      setPayerCheckUnavailable(
+        estimateRequested &&
+          (!(caught instanceof ApiError) ||
+            caught.status === 0 ||
+            caught.status === 408 ||
+            caught.status >= 500),
+      )
       setError(
         caught instanceof ApiError && [0, 408].includes(caught.status)
           ? 'The request may have reached Stedi. Check Stedi activity before sending another inquiry.'
@@ -187,6 +214,21 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
           {error}
         </p>
       )}
+      {nmct &&
+        !result &&
+        (payerCheckUnavailable || optionsState === 'failed' || payerNotListed) && (
+          <div className="prebooking-cost-card is-patient" role="status">
+            <span>Collect on arrival</span>
+            <strong>$0.00</strong>
+            <small>
+              {payerNotListed
+                ? 'Stedi did not list an insurer matching this search, so no payer benefit amount was obtained. '
+                : ''}
+              NMCT policy: collect $0 at arrival; bill after coverage and claim review. This does
+              not mean the visit costs $0.
+            </small>
+          </div>
+        )}
       <form className="staff-panel" onSubmit={(event) => void check(event)} autoComplete="off">
         <h2>Patient and insurance</h2>
         <div className="staff-two-columns">
@@ -317,8 +359,33 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
             placeholder="Example: Headache consultation, or hand numbness with EMG planned"
           />
         </label>
+        {contexts.length > 1 && (
+          <label className="staff-field">
+            <span>Clinic provider and office *</span>
+            <select
+              value={contextId}
+              required
+              disabled={Boolean(busy)}
+              onChange={(event) => {
+                setContextId(event.target.value)
+                setResult(null)
+                setError('')
+              }}
+            >
+              <option value="">Choose the provider and office for this visit</option>
+              {contexts.map((context) => (
+                <option key={context.id} value={context.id}>
+                  {context.label}
+                </option>
+              ))}
+            </select>
+            <small>
+              Benefits can differ by provider. Use the office where the visit would occur.
+            </small>
+          </label>
+        )}
         <details className="prebooking-more-options">
-          <summary>Other details: dependent, visit date, provider</summary>
+          <summary>Other details: dependent and visit date</summary>
           <div className="staff-two-columns">
             <label className="staff-field">
               <span>Insurance belongs to</span>
@@ -393,31 +460,13 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
               />
               <small>Blank checks today. Some payers reject future dates.</small>
             </label>
-            <label className="staff-field">
-              <span>Clinic provider and location</span>
-              <select
-                value={contextId}
-                disabled={Boolean(busy)}
-                onChange={(event) => {
-                  setContextId(event.target.value)
-                  setResult(null)
-                }}
-              >
-                <option value="">No configured provider selected</option>
-                {contexts.map((context) => (
-                  <option key={context.id} value={context.id}>
-                    {context.label}
-                  </option>
-                ))}
-              </select>
-              <small>
-                {contexts.length
-                  ? 'The first configured NMCT context is selected automatically.'
-                  : 'No configured provider/location found; a contract price may be unavailable.'}
-              </small>
-            </label>
           </div>
         </details>
+        {contexts.length === 1 && (
+          <p className="staff-small staff-muted">
+            {`Clinic provider and office used for pricing: ${contexts[0]?.label || 'None selected'}.`}
+          </p>
+        )}
         {plan && (
           <StaffPrebookingPlan
             plan={plan}

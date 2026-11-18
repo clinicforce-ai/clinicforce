@@ -281,16 +281,16 @@ class PrebookingCollectionComponents(Model):
 
 
 class PrebookingCollection(Model):
-    """Prospective advance from the clinic's approved collection rule, not a payment request."""
+    """Arrival instruction: approved advance or NMCT $0 deferral; not final patient liability."""
 
-    amount_cents: int | None
-    basis: str
-    reason: str
+    amount_cents: int | None = Field(description="Dollars to collect on arrival in cents; NMCT uses zero under its bill-after-review policy when no approved positive amount is available")
+    basis: str = Field(description="Approved collection basis, clinic_deferred_prebooking for NMCT $0 deferral, or needs_review")
+    reason: str = Field(description="Plain NMCT collection policy and, for a $0 deferral, the stated or labeled inferred reason for missing payer pricing")
     components: PrebookingCollectionComponents | None
 
 
 class PrebookingEstimateResponse(Model):
-    """Unknown financial values are null, never assumed to be zero."""
+    """Unknown visit price and patient liability stay null; NMCT may collect $0 by clinic policy."""
 
     coverage: PrebookingEstimateCoverage
     payer: str
