@@ -147,7 +147,7 @@ try {
   assert.equal(await page.locator('.prebooking-share').count(), 0)
   assert.match(await page.locator('.prebooking-service-row').innerText(), /Synthetic signed rate/)
   assert.match(await page.locator('.prebooking-benefit-section').innerText(), /No confirmed amount for this visit/)
-  assert.match(await page.locator('.prebooking-review').innerText(), /The insurer did not return an applicable remaining individual deductible/)
+  assert.match(await page.locator('.prebooking-review').innerText(), /No remaining individual deductible was matched to this visit/)
   assert.equal(await page.getByText('Confirm the remaining individual deductible that applies to this visit.').count(), 0)
   partial = false
   copayOnly = true
