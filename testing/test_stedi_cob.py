@@ -183,7 +183,7 @@ def _saved_case(identity=None):
 
 
 @pytest.mark.parametrize('prior_future_preflight', [False, True])
-@pytest.mark.parametrize('payer_label', ['UnitedHealthcare', 'United Health Care'])
+@pytest.mark.parametrize('payer_label', ['UnitedHealthcare', 'United Health Care', 'Cigna'])
 def test_automatic_cob_followup_persists_request_response_and_safe_summary(prior_future_preflight, payer_label):
     case, session = _saved_case()
     case['previsit_context']['result']['payer'] = payer_label

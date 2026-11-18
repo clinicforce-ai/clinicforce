@@ -93,6 +93,36 @@ def test_uhc_choice_plus_self_registration_typo_uses_payer_identity():
         assert identity.compare(payer, {**recorded, **changed})['status'] == 'review'
 
 
+def test_aetna_shortened_given_name_and_payer_dob_bind_one_self_policy():
+    coverage = {'patient_id': 'synthetic-patient', 'coverage_id': 'synthetic-policy',
+                'active_coverages': 1, 'subscriber_patient_linked': True,
+                'relationship': '18', 'member_id': 'SYN123', 'group_number': 'SYN-GROUP',
+                'patient_first': 'Taylor Morgan', 'patient_last': 'Rivera',
+                'patient_birth_date': '1950-01-10', 'subscriber_first': 'Taylor Morgan',
+                'subscriber_last': 'Rivera', 'subscriber_birth_date': '1950-01-10'}
+    payer = {'payerId': '60054', 'subscriber': {'memberId': 'SYN123',
+             'dateOfBirth': '1950-01-19', 'name': {'person': {
+                 'firstName': 'TAYLOR', 'middleName': 'M', 'lastName': 'RIVERA'}},
+             'dates': {'service': {'start': '2026-11-16'}},
+             'additionalInformation': {'group': {'number': 'SYN-GROUP'}}},
+             'plans': [{'benefits': {'statuses': [{'status': 'ACTIVE_COVERAGE',
+                 'service': {'system': 'STC', 'value': '30'}}]}}]}
+    matched = identity.compare(payer, coverage)
+    assert matched['status'] == 'warning'
+    assert matched['reconciliation_rule'] == 'aetna_payer_demographics'
+    assert identity.patient_benefits_bound(matched)
+    assert identity.payer_identity_verified(matched)
+    assert {row['field'] for row in matched['differences']} == {'first_name', 'birth_date'}
+    benefits = api._previsit_benefits(payer, coverage, '2026-11-17')
+    assert benefits['identity']['status'] == 'warning'
+    assert benefits['active'] is True and benefits['service_date_matches'] is False
+    for changed in ({'member_id': 'OTHER'}, {'patient_last': 'Other'},
+                    {'active_coverages': 2}, {'subscriber_patient_linked': False},
+                    {'group_number': 'OTHER'}, {'other_active_coverage': True},
+                    {'subscriber_first': 'Different'}):
+        assert identity.compare(payer, {**coverage, **changed})['status'] == 'review'
+
+
 def test_uhc_choice_plus_specialist_provider_role_copay_wins_over_generic_office_rows():
     scope = {'coverageLevel': 'INDIVIDUAL', 'network': {'indicator': 'IN_NETWORK'},
              'placesOfService': [{'code': '10'}]}

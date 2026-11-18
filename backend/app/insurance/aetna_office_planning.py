@@ -5,11 +5,14 @@ from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 import re
 
-from app.insurance import aetna_fees
+from app.insurance import aetna_fees, aetna_medicare_office_planning
 from app.insurance.identity import patient_benefits_bound
 
 
 def estimate(result: dict, inputs: dict) -> dict | None:
+    medicare = aetna_medicare_office_planning.estimate(result, inputs)
+    if medicare:
+        return medicare
     benefits = result.get('reference_benefits') or result.get('benefits') or {}
     identity = result.get('identity') or benefits.get('identity') or {}
     plan = (result.get('plan_details') or {}).get('stedi') or benefits.get('plan_details') or {}

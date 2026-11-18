@@ -3,6 +3,7 @@
 import json
 import os
 import unittest
+from hashlib import sha256
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 from uuid import uuid4
@@ -56,7 +57,7 @@ class PatientUploadTests(unittest.IsolatedAsyncioTestCase):
         self.client.cookies.set(staff.STAFF_COOKIE, self.token)
         self.objects = {}
         def put(practice_id, record_id, filename, content, content_type):
-            key = f"staff-insurance/{practice_id}/{record_id}/{uuid4()}"
+            key = f"{object_store.S3_PREFIX}/staff-insurance/{sha256(practice_id.encode()).hexdigest()}/{record_id}/{uuid4()}/source.pdf"
             self.objects[key] = content
             return key
         self.patches += [patch.object(object_store, "enabled", return_value=True), patch.object(object_store, "put_staff_document", side_effect=put),
@@ -119,6 +120,37 @@ class PatientUploadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.get(f"/api/staff/intakes/{row['intake_id']}")).status_code, 404)
         self.assertEqual((await self.client.get("/api/staff/upload-links")).json()["upload_links"], [])
         self.assertEqual((await self.client.post(f"/api/staff/upload-links/{link['id']}/revoke")).status_code, 404)
+
+    async def test_clinician_can_remove_wrong_card_and_request_replacement(self):
+        with staff_store._connection() as connection:
+            connection.execute("INSERT INTO staff_patients(id,practice_id,given_name,family_name,birth_date,created_at) VALUES ('replace-patient',%s,'Pat','Example','1990-01-01',%s)",
+                               (self.actor['practice_id'], staff_store.now()))
+        first = await self.new_link('replace-patient')
+        self.assertEqual((await self.upload(first)).status_code, 201)
+        intake_id = links.owned_request(first['id'], self.actor['practice_id'])['intake_id']
+        intake = staff_store.get_intake(intake_id, self.actor['practice_id'])
+        document = intake['documents'][0]
+        path = f"/api/staff/intakes/{intake_id}/documents/{document['id']}"
+        self.client.cookies.set(staff.STAFF_COOKIE, self.other_token)
+        self.assertEqual((await self.client.delete(path)).status_code, 404)
+        self.client.cookies.set(staff.STAFF_COOKIE, self.token)
+        with patch.object(object_store, 'delete_object', side_effect=RuntimeError('storage unavailable')):
+            removed = await self.client.delete(path)
+        self.assertEqual(removed.status_code, 202, removed.text)
+        self.assertTrue(removed.json()['cleanup_pending'])
+        self.assertEqual((await self.client.get(path)).status_code, 404)
+        saved = staff_store.get_intake(intake_id, self.actor['practice_id'])
+        self.assertEqual(saved['documents'], [])
+        self.assertEqual(saved['ocr_fields'], {})
+        self.assertNotIn('member_id', saved['fields'])
+        self.assertEqual((await self.client.get('/api/staff/patients/dashboard')).json()['patients'][0]['card_status'], 'missing')
+        self.assertIn(document['object_key'], self.objects)
+        self.assertEqual((await self.client.post('/api/staff/deletions/retry-cleanup')).json()['pending_file_cleanup'], 0)
+        self.assertNotIn(document['object_key'], self.objects)
+        self.assertEqual((await self.client.delete(path)).status_code, 200)
+        replacement = await self.new_link('replace-patient')
+        self.assertEqual((await self.upload(replacement)).status_code, 201)
+        self.assertEqual((await self.client.get('/api/staff/patients/dashboard')).json()['patients'][0]['card_status'], 'received')
 
     async def test_complete_patient_link_prefills_and_skips_card_ocr(self):
         with staff_store._connection() as connection:

@@ -427,7 +427,9 @@ export function deriveCommercialEstimateView({
   const summaryExplanation =
     provisionalAmount != null
       ? result?.aetna_office_planning
-        ? 'Deductible-applies planning amount from the approved Aetna office fee and prior-date payer terms. Confirm visit-date coverage, provider network, deductible applicability, other coverage and prior payments before setting a collection amount.'
+        ? result.aetna_office_planning.copay_cents != null
+          ? 'The payer-reported specialist copay is the estimated patient share. The approved Aetna fee less that copay is the estimated plan share. Visit-date coverage, Medicare billing protection and prior payments still control collection.'
+          : 'Deductible-applies planning amount from the approved Aetna office fee and prior-date payer terms. Confirm visit-date coverage, provider network, deductible applicability, other coverage and prior payments before setting a collection amount.'
         : result?.provisional_scenario?.kind === 'ncs_study_count'
           ? 'Estimated patient share across alternative NCS study counts. Muscle testing is excluded unless documented. Do not collect this planning range.'
           : 'Estimated patient share for the provisional CPT scenario. Review the services and requirements before collecting.'

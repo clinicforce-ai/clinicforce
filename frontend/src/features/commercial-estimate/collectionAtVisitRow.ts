@@ -23,7 +23,9 @@ function pricedOfficeCopayDetail(result: PrevisitEstimate): string | null {
     !calc ||
     !/^992(?:0[2-5]|1[2-5])$/.test(line.code) ||
     line.rate_resolution?.status !== 'RESOLVED' ||
-    !['clinic_contract', 'payer_fee_schedule'].includes(line.allowed_basis || '') ||
+    !['clinic_contract', 'payer_fee_schedule', 'aetna_fee_schedule'].includes(
+      line.allowed_basis || '',
+    ) ||
     line.allowed_cents == null ||
     calc.patient_cents == null ||
     calc.plan_cents == null ||
@@ -37,9 +39,11 @@ function pricedOfficeCopayDetail(result: PrevisitEstimate): string | null {
     return null
   const paid = result.encounter_summary?.payments_verified_cents || 0
   const source =
-    line.allowed_basis === 'payer_fee_schedule'
-      ? 'clinic payer fee reference'
-      : 'clinic contract rate'
+    line.allowed_basis === 'aetna_fee_schedule'
+      ? 'clinic Aetna fee reference'
+      : line.allowed_basis === 'payer_fee_schedule'
+        ? 'clinic payer fee reference'
+        : 'clinic contract rate'
   return `${money(calc.copay_cents)} copay + $0.00 deductible + 0% coinsurance = ${money(calc.patient_cents)} estimated patient share. ${money(line.allowed_cents)} ${source} = ${money(calc.patient_cents)} patient + ${money(calc.plan_cents)} estimated plan share. ${paid ? `Less ${money(paid)} already paid = ${money(amount)} to collect.` : `Collect ${money(amount)} before any verified prior payment; check the clinic ledger.`} Final responsibility follows the processed claim.`
 }
 
@@ -76,7 +80,10 @@ export function collectionAtVisitRow(
     return {
       label: 'Amount to collect at visit · verification pending',
       value: `${money(balance)} conditional planning amount · do not collect yet`,
-      detail: `If the office deductible applies: min(${money(officePlanning.allowed_cents)} clinic Aetna fee, ${money(officePlanning.deductible_remaining_cents)} remaining deductible, ${money(officePlanning.oop_remaining_cents)} remaining out-of-pocket) = ${money(officePlanning.deductible_applies_cents)} before recorded payments. If waived, ${officePlanning.coinsurance_percent}% coinsurance gives ${money(officePlanning.deductible_waived_cents)}. Confirm visit-date eligibility, provider network, deductible applicability, other coverage and prior payments before charging.`,
+      detail:
+        officePlanning.copay_cents != null
+          ? `${money(officePlanning.allowed_cents)} clinic Aetna fee reference = ${money(officePlanning.copay_cents)} estimated patient copay + ${money(officePlanning.plan_share_cents!)} estimated Aetna share. The Aetna share is not a patient charge. The payer echoed an earlier date; visit-date coverage, Medicare billing protection and prior payments still control collection.`
+          : `If the office deductible applies: min(${money(officePlanning.allowed_cents)} clinic Aetna fee, ${money(officePlanning.deductible_remaining_cents)} remaining deductible, ${money(officePlanning.oop_remaining_cents)} remaining out-of-pocket) = ${money(officePlanning.deductible_applies_cents)} before recorded payments. If waived, ${officePlanning.coinsurance_percent}% coinsurance gives ${money(officePlanning.deductible_waived_cents)}. Confirm visit-date eligibility, provider network, deductible applicability, other coverage and prior payments before charging.`,
       emphasis: true,
     }
   }

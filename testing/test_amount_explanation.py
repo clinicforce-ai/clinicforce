@@ -28,6 +28,20 @@ def test_identity_reconciliation_names_the_actual_payer():
     assert 'UHC' not in action
 
 
+def test_bound_payer_with_prior_day_echo_explains_date_instead_of_identity():
+    result = {'payer': 'Aetna', 'service_date': '2026-11-17',
+              'recovery': {'reason_code': 'identity_or_coverage_review'},
+              'identity': {'status': 'warning', 'match_version': 2,
+                           'binding': 'synthetic-binding',
+                           'reconciliation_rule': 'aetna_payer_demographics'},
+              'benefits': {'active': True, 'service_date_matches': False,
+                           'returned_service_dates': {'start': '2026-11-16'}}}
+    explanation = amount_explanation.build(result, {'amount_cents': None})
+    assert explanation['reason_code'] == 'payer_service_date_mismatch'
+    assert 'date' in explanation['sentence'].lower()
+    assert 'visit date' in explanation['sentence'].lower()
+
+
 def test_missing_identity_fields_name_the_actual_payer():
     result = {'payer': 'Blue Cross Blue Shield Tx',
               'identity': {'missing_fields': ['member_id', 'patient_demographics']}}

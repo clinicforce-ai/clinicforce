@@ -33,10 +33,12 @@ def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network
             return (f'the insurance search returned {count_label} but the payer-reported roles '
                     'are not yet tied to this patient and all active policies'), 'multiple_active_policies'
         if coordination.get('status') == 'primacy_conflict':
-            return (f'the insurance search returned {count_label} and UHC COB reported conflicting '
-                    'medical payer roles'), 'multiple_active_policies'
+            return (f'the insurance search returned {count_label} and {"UHC" if result.get("payer") in {"United Healthcare", "UnitedHealthcare"} else "Stedi"} COB reported conflicting medical payer roles'), 'multiple_active_policies'
         return (f'the insurance search returned {count_label} '
                 'and did not identify which pays first'), 'multiple_active_policies'
+    if (reason not in {'no_coverage_found', 'upstream_no_policies'} and payer_response_present and benefits.get('active') is True
+            and patient_benefits_bound(identity) and benefits.get('service_date_matches') is False):
+        return 'the payer response date differs from the scheduled visit date', 'payer_service_date_mismatch'
     if reason in {'identity_or_coverage_review', 'subscriber_relationship_conflict', 'returned_identity_or_coverage_mismatch'}:
         return 'the returned policy did not match the patient and subscriber details for this visit', 'policy_identity_mismatch'
     if reason == 'discovered_payer_not_routable' and not active_benefits:

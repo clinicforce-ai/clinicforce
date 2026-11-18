@@ -35,7 +35,13 @@ export function coveragePolicyStatus({
             ? 'Payer benefits returned · policy search outcome unknown'
             : 'Coverage check outcome unknown'
           : result?.recovery?.reason_code === 'multiple_active_policies'
-            ? 'Multiple active policies · payer order unknown'
+            ? result?.coordination?.status === 'primacy_reported'
+              ? 'Stedi COB reports payer roles · reconcile policies'
+              : benefits?.active === true &&
+                  benefits.service_date_matches !== false &&
+                  patientBenefitsBound
+                ? `${result.payer || 'Selected payer'} coverage active · payer order unverified`
+                : 'Multiple active policies · payer order unknown'
             : result?.recovery?.reason_code === 'same_policy_evidence_conflict'
               ? benefits?.active === true
                 ? 'Payer benefits returned · policy evidence conflicts'

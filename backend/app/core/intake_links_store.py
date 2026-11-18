@@ -247,6 +247,8 @@ def save_submitted_card_ocr(link_id: str, practice_id: str, extracted: dict, evi
               AND i.patient_id=l.expected_patient_id FOR UPDATE OF i""", (link_id, practice_id)).fetchone()
         if not row:
             return
+        if len(row["documents"]) != len(counts):
+            return  # Staff removed a file while background OCR was running.
         source_pages, offset = {}, 0
         for document, count in zip(row["documents"], counts):
             source_pages.update({page + offset: {"document_id": document["id"], "source_filename": document["filename"],

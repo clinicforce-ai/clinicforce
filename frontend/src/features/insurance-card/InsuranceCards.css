@@ -19,3 +19,19 @@
 .insurance-card-preview figure {
   margin: 1rem 0;
 }
+.insurance-card-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin: 0.5rem 0;
+}
+.insurance-card-delete {
+  color: #bd2542;
+  border: 1px solid #bd2542;
+  border-radius: 6px;
+  background: #fff;
+  padding: 0.5rem 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}

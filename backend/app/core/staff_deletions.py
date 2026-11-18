@@ -47,6 +47,8 @@ def _owned_keys(value: Any, practice_id: str, record_ids: list[str]) -> set[str]
 
 
 def delete_record(kind: str, record_id: str, actor: dict, intake_id: str | None = None) -> dict:
+    if kind == "document" and intake_id:
+        return delete_document(intake_id, record_id, actor)
     if kind not in {"patient", "check", "intake"} or (kind == "check" and not intake_id):
         raise ValueError("Choose a patient or saved insurance check.")
     practice_id = actor["practice_id"]
@@ -128,8 +130,43 @@ def delete_record(kind: str, record_id: str, actor: dict, intake_id: str | None 
             db.execute("""INSERT INTO staff_deletions (practice_id,kind,record_id,intake_id,actor_id,created_at,object_keys)
                 VALUES (%s,%s,%s,%s,%s,%s,%s::jsonb)""",
                 (practice_id, kind, record_id, intake_id, actor["id"], staff_store.now(), json.dumps(sorted(keys))))
-    # Record removal commits first. A failed S3 operation remains durably retryable
-    # through the same DELETE endpoint; never lose the only references to these keys.
+    return _cleanup_files(kind, record_id, actor, intake_id)
+
+
+def delete_document(intake_id: str, document_id: str, actor: dict) -> dict:
+    practice_id = actor["practice_id"]
+    with intake_links_store._connection() as db:
+        receipt = db.execute("SELECT * FROM staff_deletions WHERE practice_id=%s AND kind='document' AND record_id=%s",
+                             (practice_id, document_id)).fetchone()
+        if receipt and receipt["intake_id"] != intake_id:
+            raise LookupError("Card document not found")
+        if not receipt:
+            intake = db.execute("SELECT * FROM staff_intakes WHERE id=%s AND practice_id=%s FOR UPDATE",
+                                (intake_id, practice_id)).fetchone()
+            document = next((item for item in intake["documents"] if item.get("id") == document_id), None) if intake else None
+            if not document:
+                raise LookupError("Card document not found")
+            keys = _owned_keys(document, practice_id, [intake_id])
+            if document.get("object_key") not in keys:
+                raise ValueError("The card file is outside this clinic intake's storage path.")
+            documents = [item for item in intake["documents"] if item.get("id") != document_id]
+            fields = {key: value for key, value in intake["fields"].items()
+                      if intake["field_sources"].get(key) != "card_ocr"}
+            sources = {key: value for key, value in intake["field_sources"].items() if key in fields}
+            db.execute("""UPDATE staff_intakes SET documents=%s::jsonb,fields=%s::jsonb,field_sources=%s::jsonb,
+                ocr_fields='{}'::jsonb,ocr_evidence='{}'::jsonb,updated_at=%s,
+                events=events || %s::jsonb WHERE id=%s AND practice_id=%s""",
+                (json.dumps(documents), json.dumps(fields), json.dumps(sources), staff_store.now(),
+                 json.dumps([staff_store._event("Insurance card file deleted", actor)]), intake_id, practice_id))
+            db.execute("""INSERT INTO staff_deletions (practice_id,kind,record_id,intake_id,actor_id,created_at,object_keys)
+                VALUES (%s,'document',%s,%s,%s,%s,%s::jsonb)""",
+                (practice_id, document_id, intake_id, actor["id"], staff_store.now(), json.dumps(sorted(keys))))
+    return _cleanup_files("document", document_id, actor, intake_id)
+
+
+def _cleanup_files(kind: str, record_id: str, actor: dict, intake_id: str | None) -> dict:
+    practice_id = actor["practice_id"]
+    # Database removal commits first; failed S3 cleanup remains durably retryable.
     with staff_store._connection() as db:
         receipt = db.execute("SELECT object_keys FROM staff_deletions WHERE practice_id=%s AND kind=%s AND record_id=%s FOR UPDATE",
                              (practice_id, kind, record_id)).fetchone()

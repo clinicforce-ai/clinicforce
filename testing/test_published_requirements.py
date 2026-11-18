@@ -88,6 +88,33 @@ def case(payer, product, *codes, pos='11', day='2026-10-14', indication=None):
     return result, context
 
 
+def test_aetna_value_plus_99213_office_requires_no_referral_or_prior_authorization():
+    result, context = case('Aetna', 'Aetna Medicare Value Plus (PPO)', '99213', day='2026-11-17')
+    result['benefits']['plan_details'] = {
+        'names': ['Aetna Medicare Value Plus (PPO)'],
+        'group_number': '000003-TX', 'plan_number': '000003-TX000083'}
+    for kind in ('referral', 'authorization'):
+        assert evaluate(result, context, [])[kind]['status'] == 'Not required'
+    result['benefits'].update(service_date_matches=False,
+                              returned_service_dates={'start': '2026-11-16'})
+    for kind in ('referral', 'authorization'):
+        assert evaluate(result, context, [])[kind]['status'] == 'Not required'
+    for changed in ({'plans': ['Aetna Medicare Signature (PPO)']}, {'pos': '22'},
+                    {'service_date': '2026-11-18'}):
+        assert evaluate(result, {**context, **changed}, [])['authorization']['status'] != 'Not required'
+    other = deepcopy(result)
+    other['benefits']['plan_details']['plan_number'] = 'OTHER'
+    assert evaluate(other, context, [])['authorization']['status'] != 'Not required'
+    for changed in ({'units': 2}, {'modifiers': ['25']}):
+        other = deepcopy(result)
+        other['codes'][0].update(changed)
+        assert evaluate(other, context, [])['authorization']['status'] != 'Not required'
+    for code in ('99214', '95908'):
+        other, _ = case('Aetna', 'Aetna Medicare Value Plus (PPO)', code, day='2026-11-17')
+        other['benefits']['plan_details'] = result['benefits']['plan_details']
+        assert evaluate(other, context, [])['authorization']['status'] != 'Not required'
+
+
 def test_uhc_choice_epo_99203_office_requirements_follow_published_2026_rules():
     result, context = case('UnitedHealthcare', 'CHOICE EPO', '99203', day='2026-11-14')
     decision = evaluate(result, context, [])

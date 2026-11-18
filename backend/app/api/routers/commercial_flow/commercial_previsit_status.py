@@ -411,6 +411,9 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
             result['recovery']['coverage_status'] = 'REVIEW_REQUIRED'
             result['coverage_status'] = 'REVIEW_REQUIRED'
             result['recovery']['message'] = (
+                'The follow-up search returned no policies. The earlier payer response identifies this patient, '
+                'but its service date or coverage status does not establish this visit.'
+                if payer_identity_verified(identity) else
                 'The follow-up search returned no policies. The earlier payer response still contains active benefits, '
                 'but its patient and subscriber identity must match eCW before those amounts are used.')
     if case.get('previsit_cob'):

@@ -283,6 +283,7 @@ async def patient_cards(intake_id: str, request: Request):
     an insurance-card heading, are listed; government IDs are excluded.
     Embedded cards in larger PDFs are returned as card-only PDF previews.
     Each card names its upload or current eCW source;
+    ClinicForce uploads include their source intake ID for clinician deletion.
     the eCW preview may have changed since a saved estimate. A missing eCW card
     is reported even when a ClinicForce upload is also available.
     """
@@ -290,7 +291,7 @@ async def patient_cards(intake_id: str, request: Request):
     intake = await owned_intake(intake_id, staff)
     patient = intake.get('patient') or (intake.get('expected_patient') if intake.get('source') == 'patient_upload' else None)
     sources = await run_in_threadpool(staff_store.patient_card_intakes, staff['practice_id'], patient['id']) if patient else [intake]
-    cards = [{"id": item['id'], "title": item['filename'], "content_type": item['content_type'], "source": "clinicforce_upload",
+    cards = [{"id": item['id'], "intake_id": source['id'], "title": item['filename'], "content_type": item['content_type'], "source": "clinicforce_upload",
               "url": f"/api/staff/intakes/{quote(source['id'], safe='')}/documents/{quote(item['id'], safe='')}"}
              for source in sources for item in source['documents']]
     patient_id = (intake.get('patient') or {}).get('ecw_patient_id') or intake.get('fields', {}).get('ecw_patient_id')
@@ -362,6 +363,16 @@ async def delete_clinic_record(kind: str, record_id: str, request: Request, inta
 @router.delete("/intakes/{intake_id}")
 async def delete_unconfirmed_intake(intake_id: str, request: Request):
     return await delete_clinic_record("intake", intake_id, request, intake_id)
+
+
+@router.delete("/intakes/{intake_id}/documents/{document_id}", responses={
+    200: {"description": "Card reference and S3 original removed; the clinic patient and saved checks remain."},
+    202: {"description": "Card reference removed; S3 deletion is queued for retry."},
+    404: {"description": "Card document is not in this clinic intake."},
+})
+async def delete_card_document(intake_id: str, document_id: str, request: Request):
+    """Remove a ClinicForce card original, its card OCR and its S3 object; retry failed cleanup."""
+    return await delete_clinic_record("document", document_id, request, intake_id)
 
 
 @router.delete("/patients/{patient_id}")

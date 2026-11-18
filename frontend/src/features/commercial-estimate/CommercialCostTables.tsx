@@ -77,7 +77,9 @@ export default function CommercialCostTables({
           ...row,
           value: `${planning.coinsurance_percent}% in-network specialist office visit · prior-date payer response`,
           detail:
-            'The payer also returned a separate telemedicine rate; the planned visit is in person.',
+            planning.copay_cents != null
+              ? 'The reported specialist office copay sets the conditional patient share; zero coinsurance adds nothing.'
+              : 'The payer also returned a separate telemedicine rate; the planned visit is in person.',
         }
       if (
         row.label === 'Calculated Aetna share for this office visit' ||
@@ -86,11 +88,22 @@ export default function CommercialCostTables({
         return {
           ...row,
           label: 'Conditional patient share',
-          value: `${money(planning.deductible_applies_cents)} if deductible applies; ${money(planning.deductible_waived_cents)} if waived`,
+          value:
+            planning.copay_cents != null
+              ? money(planning.copay_cents)
+              : `${money(planning.deductible_applies_cents)} if deductible applies; ${money(planning.deductible_waived_cents)} if waived`,
           detail:
-            'The office-visit row does not establish whether the plan-wide deductible applies to this CPT.',
+            planning.copay_cents != null
+              ? `${money(planning.copay_cents)} reported copay + $0.00 deductible + 0% coinsurance. Prior-date planning only.`
+              : 'The office-visit row does not establish whether the plan-wide deductible applies to this CPT.',
         }
       return row
+    })
+  if (planning?.plan_share_cents != null && !model.supportedAmount)
+    visibleRows.push({
+      label: 'Estimated Aetna share',
+      value: money(planning.plan_share_cents),
+      detail: `${money(planning.allowed_cents)} clinic Aetna fee reference less ${money(planning.copay_cents!)} patient copay. This is paid by Aetna after an eligible claim, not collected from the patient.`,
     })
   return (
     <>
