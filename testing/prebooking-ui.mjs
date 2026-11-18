@@ -89,6 +89,7 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
 try {
   await page.goto(process.env.UI_URL || 'http://127.0.0.1:5182/?staff')
   await page.getByRole('button', { name: 'Check before booking' }).click()
+  await page.getByText(/Clinic provider and office used for pricing: Example Clinic/).waitFor()
   await page.getByLabel("Patient's first name").fill('Pat')
   await page.getByLabel("Patient's last name").fill('Example')
   await page.getByLabel("Patient's birth date").fill('1980-01-01')

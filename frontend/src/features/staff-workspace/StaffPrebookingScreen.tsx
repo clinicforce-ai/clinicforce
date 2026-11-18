@@ -47,6 +47,7 @@ export default function StaffPrebookingScreen({
   const [result, setResult] = useState<PrebookingEstimate | null>(null)
   const today = new Date().toLocaleDateString('en-CA')
   const nmct = ['primary', 'f378bc13-af1d-4ea5-bfbd-8cd102e42ddc'].includes(practiceId)
+  const selectedContext = contexts.find((context) => context.id === contextId)
   const payerNotListed =
     optionsState === 'ready' && payers.length === 0 && insurer.trim().length >= 2
 
@@ -442,6 +443,11 @@ export default function StaffPrebookingScreen({
             </label>
           </div>
         </details>
+        {contexts.length > 0 && (
+          <p className="staff-small staff-muted">
+            {`Clinic provider and office used for pricing: ${selectedContext?.label || 'None selected'}. Change it under Other details.`}
+          </p>
+        )}
         {plan && (
           <StaffPrebookingPlan
             plan={plan}
