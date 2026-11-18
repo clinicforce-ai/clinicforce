@@ -6,7 +6,7 @@ import type {
 
 const money = (cents: number | null | undefined) =>
   cents == null
-    ? 'Unavailable'
+    ? 'Not calculated'
     : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100)
 
 const benefitMoney = (cents: number | null | undefined) =>
@@ -124,7 +124,7 @@ export default function StaffPrebookingResult({
             ? 'Correct insurance details'
             : result.coverage.status === 'needs_review'
               ? 'No coverage answer'
-              : 'Price unavailable'
+              : 'Visit cost not calculated'
   const networkSource =
     result.network_status === 'unknown'
       ? null
@@ -199,7 +199,7 @@ export default function StaffPrebookingResult({
           </div>
           <div className="prebooking-cost-card is-patient">
             <span>Estimated patient share</span>
-            <strong>{patient || 'Unavailable from payer benefits'}</strong>
+            <strong>{patient || 'Not calculated'}</strong>
             <small>
               {patient
                 ? 'Not an amount to collect before the visit'
@@ -212,8 +212,8 @@ export default function StaffPrebookingResult({
         <div className="prebooking-unavailable" role="note">
           <strong>
             {allowedCostAvailable
-              ? 'Estimated patient share is unavailable from this check.'
-              : 'Insured visit price is unavailable from this check.'}
+              ? 'Estimated patient share not calculated.'
+              : 'Total insured visit cost not calculated.'}
           </strong>
           <span>{issueText(result.issues[0] || result.coverage.message)}</span>
         </div>
