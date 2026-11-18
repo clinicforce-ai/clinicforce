@@ -275,7 +275,8 @@ def test_out_of_network_office_pdf_pattern_names_returned_deductible():
         "dependent": {"name": {"person": {"firstName": "Pat", "lastName": "Example"}},
                       "dateOfBirth": "2000-01-01", "relationToSubscriber": "Child"},
         "plans": [{"name": "Synthetic PPO", "benefits": {
-            "statuses": [{"status": "ACTIVE_COVERAGE", "service": {"system": "STC", "value": "30"}}],
+            "statuses": [{"status": "ACTIVE_COVERAGE", "service": {"system": "STC", "value": "30"},
+                          "insuranceType": "PREFERRED_PROVIDER_ORGANIZATION_PPO"}],
             "coInsurance": [{**office, "percent": "0", "timePeriod": "VISIT"}],
             "deductible": [{**office, "amount": "4200", "timePeriod": "CALENDAR_YEAR"},
                            {**office, "amount": "4200", "timePeriod": "REMAINING"}]}}]}
@@ -296,6 +297,7 @@ def test_out_of_network_office_pdf_pattern_names_returned_deductible():
         quote = staff_prebooking._estimate_from_payer(network_participation.NMCT_PRACTICE_ID,
             details, context, PAYER, PROVIDER, payload, "2026-11-18", selected)
     assert quote["collection"]["amount_cents"] == 0
+    assert quote["plan_type"] == "PPO"
     assert quote["network_status"] == "unknown"
     assert "out-of-network office cost-sharing rows" in quote["issues"][0]
     assert "$4,200.00 remaining individual deductible" in quote["issues"][0]
@@ -307,6 +309,19 @@ def test_out_of_network_office_pdf_pattern_names_returned_deductible():
         in_network_rows = staff_prebooking._estimate_from_payer(network_participation.NMCT_PRACTICE_ID,
             details, context, PAYER, PROVIDER, payload, "2026-11-18", selected)
     assert not any("out-of-network office cost-sharing rows" in reason for reason in in_network_rows["issues"])
+
+
+def test_prebooking_plan_type_requires_one_active_medical_type():
+    status = {"status": "ACTIVE_COVERAGE", "service": {"system": "STC", "value": "30"},
+              "insuranceType": "HEALTH_MAINTENANCE_ORGANIZATION_HMO_MEDICARE_RISK"}
+    payload = {"plans": [{"benefits": {"statuses": [status]}}]}
+    assert prebooking.plan_type(payload) == "HMO"
+    status["insuranceType"] = "PREFERRED_PROVIDER_ORGANIZATION_PPO"
+    assert prebooking.plan_type(payload) == "PPO"
+    payload["plans"][0]["benefits"]["statuses"].append({**status, "insuranceType": "HEALTH_MAINTENANCE_ORGANIZATION_HMO"})
+    assert prebooking.plan_type(payload) is None
+    payload["plans"][0]["benefits"]["statuses"] = [{**status, "status": "INACTIVE_COVERAGE"}]
+    assert prebooking.plan_type(payload) is None
 
 
 def test_payer_suggestions_keep_stedi_ranked_medical_matches():

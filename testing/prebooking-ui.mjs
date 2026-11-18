@@ -49,7 +49,7 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
     body = copayOnly ? { coverage: { status: 'active_today', message: 'Synthetic active coverage.', coverage_start: null, coverage_end: null },
       payer: 'Example Health', checked_at: '2026-10-29T12:00:00Z', checked_on: '2026-10-29', check_ids: ['ec_synthetic'],
       patient_given_name: 'Pat', patient_family_name: 'Example', patient_birth_date: '1980-01-01', patient_address: null,
-      network_status: 'in_network', network_evidence: { source: 'clinic_library_contract', reason: 'Synthetic NMCT contract.' }, plan_name: 'Example PPO',
+      network_status: 'in_network', network_evidence: { source: 'clinic_library_contract', reason: 'Synthetic NMCT contract.' }, plan_name: 'Example PPO', plan_type: 'PPO',
       benefits: { copay_cents: 1500, coinsurance_percent: '0', deductible_annual_cents: null, deductible_remaining_cents: null,
         oop_annual_cents: null, oop_remaining_cents: 100000 },
       lines: [{ code: officeCode, units: 1, role: 'visit', service_type: '98', allowed_cents: null, patient_cents: null,
@@ -61,7 +61,7 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
       payer: 'Example Health', checked_at: '2026-10-29T12:00:00Z', checked_on: '2026-10-29', check_ids: ['ec_synthetic'],
       patient_given_name: 'Pat', patient_family_name: 'Example', patient_birth_date: '1980-01-01',
       patient_address: { line1: '100 Example Ave', line2: null, city: 'Albany', state: 'NY', postal_code: '12207', country: null },
-      network_status: 'in_network', network_evidence: { source: 'clinic_library_contract', reason: 'Synthetic NMCT contract.' }, plan_name: 'Example PPO',
+      network_status: 'in_network', network_evidence: { source: 'clinic_library_contract', reason: 'Synthetic NMCT contract.' }, plan_name: 'Example PPO', plan_type: 'PPO',
       benefits: { copay_cents: 2500, coinsurance_percent: '0', deductible_annual_cents: partial ? null : 100000, deductible_remaining_cents: partial ? null : 40000,
         oop_annual_cents: 300000, oop_remaining_cents: 120000 },
       lines: [{ code: officeCode, units: 1, role: 'visit', service_type: '98', allowed_cents: 10000, patient_cents: partial ? null : 2500,
@@ -76,7 +76,7 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
       payer: 'Example Health', checked_at: '2026-10-29T12:00:00Z', checked_on: '2026-10-29', check_ids: ['ec_synthetic'],
       patient_given_name: 'Pat', patient_family_name: 'Example', patient_birth_date: '1980-01-01',
       patient_address: { line1: '100 Example Ave', line2: null, city: 'Albany', state: 'NY', postal_code: '12207', country: null },
-      network_status: 'unknown', network_evidence: { reason: 'Contract scope unresolved.' }, plan_name: null, benefits: null,
+      network_status: 'unknown', network_evidence: { reason: 'Contract scope unresolved.' }, plan_name: null, plan_type: null, benefits: null,
       lines: [],
       allowed_total_cents: null, plan_total_cents: null,
       patient_min_cents: null, patient_max_cents: null,
@@ -137,6 +137,7 @@ try {
   await page.getByLabel('Member ID from insurance card').fill('SYNTHETIC2')
   await page.getByRole('button', { name: 'Check insurance and estimate visit' }).click()
   await page.getByText('Synthetic NMCT contract.').waitFor()
+  assert.match(await page.locator('.prebooking-status-row').innerText(), /Plan type\s+PPO/)
   assert.equal(checks, 3)
   assert.equal(plans, 1)
   const totals = await page.locator('.prebooking-cost-grid').innerText()

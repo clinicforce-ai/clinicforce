@@ -305,6 +305,7 @@ class PrebookingEstimateResponse(Model):
     network_status: Literal["in_network", "out_of_network", "unknown"]
     network_evidence: dict[str, Any] | None
     plan_name: str | None
+    plan_type: Literal["PPO", "HMO", "EPO", "POS"] | None = Field(description="Plan type reported on the active general-medical payer status; null if absent or conflicting, and never evidence of this provider's network participation")
     benefits: PrebookingEstimateTerms | None
     lines: list[PrebookingEstimateLine]
     allowed_total_cents: int | None = Field(description="Total matched contract-allowed cost for selected services; can be known while patient and plan shares remain null")

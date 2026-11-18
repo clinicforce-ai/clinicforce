@@ -99,7 +99,7 @@ export default function StaffPrebookingResult({
         ? 'Out of network'
         : result.coverage.status === 'payer_rejected'
           ? 'Cannot check member network'
-          : 'Network unavailable'
+          : 'NMCT participation not confirmed'
   const coverageLabel =
     result.coverage.status === 'active_today'
       ? 'Active for checked date'
@@ -164,6 +164,11 @@ export default function StaffPrebookingResult({
           <small>{result.coverage.message}</small>
         </div>
         <div>
+          <span>Plan type</span>
+          <strong>{result.plan_type || 'Not reported by insurer'}</strong>
+          {result.plan_type && <small>Reported for this member’s active medical plan.</small>}
+        </div>
+        <div>
           <span>NMCT network</span>
           <strong>{networkLabel}</strong>
           {networkSource && <small>Source: {networkSource}</small>}
@@ -177,8 +182,11 @@ export default function StaffPrebookingResult({
               {result.network_status === 'unknown' &&
               result.issues[0]?.startsWith('Benefits did not match')
                 ? 'Match the patient and member ID before using the clinic contract for this plan.'
-                : result.network_evidence?.reason ||
-                  'The check did not identify whether this NMCT provider is in network for the plan.'}
+                : result.network_status === 'unknown' &&
+                    result.network_evidence?.reason_code === 'product_link_missing'
+                  ? 'The insurer named this plan, but NMCT has not linked that exact plan to its contract for the selected provider and office.'
+                  : result.network_evidence?.reason ||
+                    'The insurer did not state whether this NMCT provider participates in this member’s plan. Benefit-row network labels describe plan rules, not provider participation.'}
             </small>
           )}
         </div>
