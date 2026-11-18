@@ -9,13 +9,145 @@ from fastapi import FastAPI, HTTPException
 from app.api.routers import staff
 from app.api.routers.staff_flow import staff_prebooking
 from app.api.schemas.staff import PrebookingEstimateResponse
-from app.insurance import network_participation, prebooking, stedi, stedi_payers
+from app.insurance import network_participation, prebooking, prebooking_reason, stedi, stedi_payers
 
 
 PAYER = {"stediId": "EXAMPLE", "displayName": "Example Health", "transactionSupport": {"eligibilityCheck": "SUPPORTED"}}
 PROVIDER = {"npi": "1234567893", "name": "Example Clinic"}
 PERSON = {"payer_id": "EXAMPLE", "given_name": "Pat", "family_name": "Example",
           "birth_date": "1980-01-01", "member_id": "MEM123"}
+
+
+def test_ai_reason_uses_only_structured_evidence_and_labels_inference():
+    reply = {"output": {"message": {"content": [{"toolUse": {
+        "name": "choose_prebooking_cause", "input": {"reason_code": "eligibility_terms_omitted"}}}]}}}
+    with patch.object(prebooking_reason.boto3, "client") as client:
+        client.return_value.converse.return_value = reply
+        reason = prebooking_reason.infer("missing_benefits", {
+            "coverage": "active", "payer_status": "MEM123",
+            "missing_terms": ["office copay", "coinsurance", "Pat"]})
+    assert reason.startswith("The insurer's response did not include office copay, coinsurance. ")
+    assert "Likely explanation (AI inference): " in reason
+    assert "cost-sharing terms" in reason
+    sent = client.return_value.converse.call_args.kwargs["messages"]
+    assert "MEM123" not in str(sent) and "Pat" not in str(sent)
+
+
+def test_ai_reason_failure_still_explains_what_the_evidence_suggests():
+    with patch.object(prebooking_reason.boto3, "client", side_effect=RuntimeError("offline")):
+        reason = prebooking_reason.infer("payer_rejected", {"payer_status": "REJECTED"})
+    assert reason.startswith("Likely explanation")
+    assert "member" in reason.lower()
+    assert "did not identify" in reason
+
+
+def test_ai_reason_discards_unstructured_model_text():
+    with patch.object(prebooking_reason.boto3, "client") as client:
+        client.return_value.converse.return_value = {"output": {"message": {"content": [
+            {"text": "The payer omitted a $50 copay."}]}}}
+        reason = prebooking_reason.infer("missing_benefits", {
+            "coverage": "active", "missing_terms": ["office copay"]})
+    assert "$50" not in reason
+    assert "Likely explanation (inference)" in reason
+
+
+def test_ai_reason_can_name_a_nonapplicable_benefit_without_assuming_zero_cost():
+    with patch.object(prebooking_reason.boto3, "client") as client:
+        client.return_value.converse.return_value = {"output": {"message": {"content": [
+            {"toolUse": {"name": "choose_prebooking_cause",
+                         "input": {"reason_code": "category_not_applicable"}}}]}}}
+        reason = prebooking_reason.infer("missing_benefits", {
+            "coverage": "active", "missing_terms": ["office copay"]})
+    assert "does not apply to this plan" in reason
+    assert "did not say the visit costs $0" in reason
+
+
+def test_prebooking_uses_verified_office_copay_when_rate_is_missing():
+    from copy import deepcopy
+    from app.api.routers import commercial_estimator
+    from test_collection_guidance import scenario
+    from testing.synthetic_policy import COPAY_POLICY
+
+    case = scenario(1500)
+    comparison = {"status": "matched", "binding": "synthetic-binding", "match_version": 2}
+    case["identity"] = comparison
+    case["benefits"].update(identity=comparison, service_date_matches=True,
+                            oop_remaining_cents=331000, coinsurance_percent="0")
+    case["price_range"].update(complete=False, patient_min_cents=None, patient_max_cents=None)
+    line = case["price_range"]["lines"][0]
+    line.update(allowed_cents=None, allowed_basis="clinic_contract", calculation=None,
+                rate_resolution={"status": "RATE_UNAVAILABLE"})
+    line["benefits"].update(copay_cents=1500, coinsurance_percent="0",
+        oop_remaining_cents=331000, copay_period="VISIT", copay_id="synthetic-office-copay",
+        reported_options=[{"id": "synthetic-office-copay", "kind": "copay",
+            "service_type_code": "98", "amount_cents": 1500, "network": "IN_NETWORK",
+            "time_period": "VISIT", "coverage_level": "INDIVIDUAL",
+            "payer_note": "PHYSICIAN OFFICE VISIT SPECIALIST"}])
+    selected = [{"id": "office", "code": "99203", "units": 1}]
+    with patch.object(staff_prebooking.commercial_store, "list_connections", return_value=[
+            {"stedi_payer_id": "EXAMPLE", "rules": {"collection_policy": COPAY_POLICY}}]):
+        result = staff_prebooking._prospective_collection(network_participation.NMCT_PRACTICE_ID,
+            "EXAMPLE", case["benefits"], comparison, case["price_range"], selected, None, False)
+    assert result["amount_cents"] == 1500
+    assert result["basis"] == "office_copay"
+    assert result["components"] is None
+
+    details = {**PERSON, "reason": "New patient office consultation", "visit_type": "new"}
+    selected = prebooking.validate_services([{"code": "99203", "units": 1}], "new", details["reason"])
+    payload = response()
+    payload["plans"][0]["name"] = "Example PPO"
+    context = {"billing_npi": PROVIDER["npi"], "rendering_npi": PROVIDER["npi"],
+               "location_id": "office-1", "place_of_service": "11"}
+
+    def office_copay_without_rate(result, practice_id, inputs, source, payer_id, benefits, **kwargs):
+        benefits.update({key: value for key, value in case["benefits"].items() if key != "identity"})
+        result["network_evidence"] = {"source": "clinic_library_contract",
+                                      "decision": "confirmed_participating"}
+        price = deepcopy(case["price_range"])
+        price["lines"][0]["id"] = selected[0]["id"]
+        result["price_range"] = price
+
+    with patch.object(commercial_estimator, "_attach_previsit_pricing",
+                      side_effect=office_copay_without_rate), \
+         patch.object(staff_prebooking.commercial_store, "list_connections", return_value=[
+             {"stedi_payer_id": "EXAMPLE", "rules": {"collection_policy": COPAY_POLICY}}]):
+        quote = staff_prebooking._estimate_from_payer(network_participation.NMCT_PRACTICE_ID,
+            details, context, PAYER, PROVIDER, payload, "2026-10-27", selected)
+    assert quote["collection"]["amount_cents"] == 1500
+    assert quote["allowed_total_cents"] is None
+    assert quote["patient_max_cents"] is None
+
+
+def test_prebooking_pdf_pattern_gives_zero_arrival_and_names_missing_clinic_rates():
+    from app.api.routers import commercial_estimator
+
+    details = {**PERSON, "reason": "Office visit and possible two-extremity needle EMG",
+               "visit_type": "new"}
+    lines = prebooking.validate_services([{"code": "99203", "units": 1},
+        {"code": "95861", "units": 1}], "new", details["reason"])
+    payload = response()
+    payload["plans"][0]["name"] = "Example PPO"
+    context = {"billing_npi": PROVIDER["npi"], "rendering_npi": PROVIDER["npi"],
+               "location_id": "office-1", "place_of_service": "11"}
+
+    def no_rates(result, practice_id, inputs, source, payer_id, benefits, **kwargs):
+        benefits.update(network_status="in_network", network_source="clinic_library_contract")
+        result["network_evidence"] = {"decision": "confirmed_participating",
+                                      "source": "clinic_library_contract"}
+        result["price_range"] = {"complete": False, "mode": "services", "lines": [
+            {"id": row["id"], "code": row["code"], "units": 1, "allowed_cents": None,
+             "rate_resolution": {"status": "RATE_UNAVAILABLE"}, "benefits": {},
+             "issues": [], "conditions": []} for row in lines]}
+
+    with patch.object(commercial_estimator, "_attach_previsit_pricing", side_effect=no_rates), \
+         patch.object(staff_prebooking.commercial_store, "list_connections", return_value=[]):
+        result = staff_prebooking._estimate_from_payer(network_participation.NMCT_PRACTICE_ID,
+            details, context, PAYER, PROVIDER, payload, "2026-10-27", lines)
+    assert result["collection"]["amount_cents"] == 0
+    assert result["collection"]["basis"] == "clinic_deferred_prebooking"
+    assert result["patient_max_cents"] is None
+    assert result["allowed_total_cents"] is None
+    assert any("no exact NMCT contract rate" in issue for issue in result["issues"])
 
 
 def test_payer_suggestions_keep_stedi_ranked_medical_matches():
@@ -145,6 +277,10 @@ def test_only_matching_current_medical_coverage_is_active():
     birth_result = prebooking.evaluate(birth_rejected, PERSON, "2026-10-27")
     assert birth_result["status"] == "payer_rejected"
     assert "subscriber birth date" in birth_result["message"]
+    assert "temporarily unavailable" in prebooking.evaluate(
+        {"errors": [{"code": "42"}]}, PERSON, "2026-10-27")["message"]
+    assert "clinic administrator" in prebooking.evaluate(
+        {"errors": [{"code": "41"}]}, PERSON, "2026-10-27")["message"]
     dependent = response()
     dependent["dependent"] = {"name": {"person": {"firstName": "Pat", "lastName": "Example"}},
                               "dateOfBirth": "1980-01-01"}
@@ -316,6 +452,8 @@ def test_estimate_route_checks_identity_and_services_before_pricing():
                  patch.object(staff_prebooking.stedi_financial, "credentials", return_value="synthetic-key"), \
                  patch.object(staff_prebooking.stedi_payers, "search_payer", side_effect=search), \
                  patch.object(stedi.Client, "check", AsyncMock(return_value={"outcome": "complete", "payload": payer_response})) as check, \
+                 patch.object(staff_prebooking.prebooking_reason, "infer", return_value=(
+                     "Likely explanation (AI inference): the insurer returned general coverage without naming one plan product.")) as infer, \
                  patch.object(commercial_estimator.commercial_store, "list_connections", return_value=[]), \
                  patch.object(library_network_exclusions, "applicable_exclusion", return_value=None), \
                  patch.object(staff.staff_store, "create_intake") as create_intake, \
@@ -334,6 +472,8 @@ def test_estimate_route_checks_identity_and_services_before_pricing():
                 assert result.json()["patient_max_cents"] is None
                 assert result.json()["collection"]["amount_cents"] is None
                 assert result.json()["network_status"] == "unknown"
+                assert any("Likely explanation (AI inference)" in issue for issue in result.json()["issues"])
+                assert infer.call_args.args[0] == "missing_benefits"
                 PrebookingEstimateResponse.model_validate(result.json())
                 assert check.await_count == 2
                 assert [call.args[0]["encounter"]["services"][0]["value"] for call in check.await_args_list] == ["30", "98"]
@@ -409,6 +549,40 @@ def test_payer_birth_date_rejection_is_explicit_and_stops_before_pricing():
     asyncio.run(run())
 
 
+def test_unknown_payer_rejection_includes_code_and_labeled_ai_hypothesis():
+    async def run():
+        app = FastAPI()
+        app.include_router(staff.router)
+        body = {**PERSON, "reason": "Office consultation", "visit_type": "new",
+                "selected_services": [{"code": "99203", "units": 1}]}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                     base_url="http://test", headers={"Origin": "http://test"}) as client:
+            with patch.object(staff, "require_staff", AsyncMock(return_value={
+                    "practice_id": "primary", "practice_name": "Example Clinic"})), \
+                 patch.object(staff_prebooking.clinic_store, "get_for_practice", return_value=PROVIDER), \
+                 patch.object(staff_prebooking.commercial_store, "list_networks", return_value=[]), \
+                 patch.object(staff_prebooking, "_today", return_value="2026-10-27"), \
+                 patch.object(staff_prebooking.stedi_financial, "credentials", return_value="synthetic-key"), \
+                 patch.object(staff_prebooking.stedi_payers, "search_payer", AsyncMock(return_value=PAYER)), \
+                 patch.object(stedi.Client, "check", AsyncMock(return_value={"outcome": "payer_error",
+                     "payload": {"errors": [{"code": "99"}]}})), \
+                 patch.object(staff_prebooking.prebooking_reason, "infer", return_value=(
+                     "Likely explanation (AI inference): the payer could not process the submitted policy.")) as infer, \
+                 patch.dict(os.environ, {"STEDI_EXECUTION_MODE": "commercial_pilot",
+                                      "STEDI_LIVE_ELIGIBILITY_ENABLED": "true"}):
+                reply = await client.post("/api/staff/prebooking-estimate/check", json=body)
+        assert reply.status_code == 200, reply.text
+        result = reply.json()
+        assert result["coverage"]["status"] == "payer_rejected"
+        assert "Insurer rejection code 99" in result["coverage"]["message"]
+        assert "Likely explanation (AI inference)" in result["coverage"]["message"]
+        assert result["collection"]["amount_cents"] == 0
+        assert "Likely explanation (AI inference)" in result["collection"]["reason"]
+        assert result["patient_max_cents"] is None
+        assert infer.call_args.args[1]["error_codes"] == ["99"]
+    asyncio.run(run())
+
+
 @patch.object(staff_prebooking.commercial_store, "list_connections", return_value=[])
 def test_prospective_amount_requires_member_binding_and_verified_network(_connections):
     from app.api.routers import commercial_estimator
@@ -454,6 +628,23 @@ def test_prospective_amount_requires_member_binding_and_verified_network(_connec
             approved = staff_prebooking._estimate_from_payer(network_participation.NMCT_PRACTICE_ID,
                 details, context, PAYER, PROVIDER, payload, "2026-10-27", lines)
             assert approved["collection"]["amount_cents"] == 2500
+            payer_dependent = response()
+            payer_dependent["plans"][0]["name"] = "Example PPO"
+            payer_dependent["subscriber"]["name"]["person"] = {"firstName": "Parent", "lastName": "Example"}
+            payer_dependent["subscriber"]["dateOfBirth"] = "1950-01-01"
+            payer_dependent["dependent"] = {"name": {"person": {"firstName": "Pat", "lastName": "Example"}},
+                "dateOfBirth": "1980-01-01", "relationToSubscriberCode": "19"}
+            assert prebooking.evaluate(payer_dependent, details, "2026-10-27")["status"] == "active_today"
+            dependent_estimate = staff_prebooking._estimate_from_payer(network_participation.NMCT_PRACTICE_ID,
+                details, context, PAYER, PROVIDER, payer_dependent, "2026-10-27", lines)
+            assert dependent_estimate["collection"]["amount_cents"] == 2500
+            assert dependent_estimate["network_status"] == "in_network"
+            payer_dependent["dependent"]["dateOfBirth"] = "1981-01-01"
+            mismatch = staff_prebooking._estimate_from_payer(network_participation.NMCT_PRACTICE_ID,
+                details, context, PAYER, PROVIDER, payer_dependent, "2026-10-27", lines)
+            assert mismatch["collection"]["amount_cents"] == 0
+            assert mismatch["patient_max_cents"] is None
+            assert mismatch["collection"]["basis"] == "clinic_deferred_prebooking"
         with patch.object(staff_prebooking.commercial_store, "list_connections", return_value=[]):
             no_policy = staff_prebooking._estimate_from_payer("clinic-1", details, context, PAYER,
                 PROVIDER, payload, "2026-10-27", lines)
@@ -479,6 +670,8 @@ def test_prospective_amount_requires_member_binding_and_verified_network(_connec
         no_member = staff_prebooking._estimate_from_payer(network_participation.NMCT_PRACTICE_ID, {**details, "member_id": ""},
             context, PAYER, PROVIDER, payload, "2026-10-27", lines)
         assert no_member["estimate_status"] == "needs_review"
+        assert no_member["network_status"] == "unknown"
+        assert no_member["issues"][0].startswith("Benefits did not match")
         assert no_member["patient_max_cents"] is None
         assert no_member["allowed_total_cents"] is None
 
@@ -528,6 +721,7 @@ def test_prospective_amount_requires_member_binding_and_verified_network(_connec
             details, context, PAYER, PROVIDER, payload, "2026-10-27", lines)
         assert mismatch["estimate_status"] == "needs_review"
         assert mismatch["plan_total_cents"] is None
+        assert any("did not add up to the visit total" in issue for issue in mismatch["issues"])
 
     def missing_rate(result, practice_id, inputs, source, payer_id, benefits, **kwargs):
         priced(result, practice_id, inputs, source, payer_id, benefits, **kwargs)

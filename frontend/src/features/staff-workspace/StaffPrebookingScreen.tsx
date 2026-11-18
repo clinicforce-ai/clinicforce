@@ -22,7 +22,13 @@ const empty: PrebookingDetails = {
   birth_date: '',
   member_id: '',
 }
-export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }) {
+export default function StaffPrebookingScreen({
+  onBack,
+  practiceId,
+}: {
+  onBack: () => void
+  practiceId: string
+}) {
   const [payers, setPayers] = useState<Payer[]>([])
   const [insurer, setInsurer] = useState('')
   const [optionsState, setOptionsState] = useState<'idle' | 'loading' | 'ready' | 'failed'>('idle')
@@ -40,6 +46,9 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
   const [selected, setSelected] = useState<Record<string, number>>({})
   const [result, setResult] = useState<PrebookingEstimate | null>(null)
   const today = new Date().toLocaleDateString('en-CA')
+  const nmct = ['primary', 'f378bc13-af1d-4ea5-bfbd-8cd102e42ddc'].includes(practiceId)
+  const payerNotListed =
+    optionsState === 'ready' && payers.length === 0 && insurer.trim().length >= 2
 
   useEffect(() => {
     getPrebookingContexts()
@@ -63,7 +72,9 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
         .catch(() => {
           if (active) {
             setOptionsState('failed')
-            setError('Insurance companies are temporarily unavailable.')
+            setError(
+              'ClinicForce did not receive the insurer list from Stedi. No insurer was checked.',
+            )
           }
         })
     }, 300)
@@ -186,6 +197,19 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
         <p className="staff-alert staff-error" role="alert">
           {error}
         </p>
+      )}
+      {nmct && !result && (error || payerNotListed) && (
+        <div className="prebooking-cost-card is-patient" role="status">
+          <span>Collect on arrival</span>
+          <strong>$0.00</strong>
+          <small>
+            {payerNotListed
+              ? 'Stedi did not list an insurer matching this search, so no payer benefit amount was obtained. '
+              : ''}
+            NMCT policy: collect $0 at arrival; bill after coverage and claim review. This does not
+            mean the visit costs $0.
+          </small>
+        </div>
       )}
       <form className="staff-panel" onSubmit={(event) => void check(event)} autoComplete="off">
         <h2>Patient and insurance</h2>

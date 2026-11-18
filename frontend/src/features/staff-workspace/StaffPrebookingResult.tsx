@@ -106,30 +106,36 @@ export default function StaffPrebookingResult({
       : result.coverage.status === 'inactive_today'
         ? 'Inactive for checked date'
         : result.coverage.status === 'payer_rejected'
-          ? 'Insurer rejected card details'
+          ? 'Insurer rejected inquiry'
           : 'Insurer gave no coverage answer'
   const resultLabel = priced
     ? result.estimate_status === 'conditional'
       ? 'Conditional estimate'
       : 'Estimate ready'
-    : allowedCostAvailable
-      ? 'Visit cost available'
-      : result.coverage.status === 'inactive_today'
-        ? 'Coverage inactive'
-        : result.coverage.status === 'payer_rejected'
-          ? 'Correct insurance details'
-          : result.coverage.status === 'needs_review'
-            ? 'No coverage answer'
-            : 'Price unavailable'
+    : result.collection.amount_cents != null
+      ? result.collection.basis === 'clinic_deferred_prebooking'
+        ? 'Arrival policy: $0'
+        : 'Arrival amount ready'
+      : allowedCostAvailable
+        ? 'Visit cost available'
+        : result.coverage.status === 'inactive_today'
+          ? 'Coverage inactive'
+          : result.coverage.status === 'payer_rejected'
+            ? 'Correct insurance details'
+            : result.coverage.status === 'needs_review'
+              ? 'No coverage answer'
+              : 'Price unavailable'
   const networkSource =
-    result.network_evidence?.product_network_source === 'signed_bluecard_agreement'
-      ? 'NMCT signed BlueCard agreement'
-      : result.network_evidence?.decision === 'in_network_contract_supported' ||
-          result.network_evidence?.source === 'clinic_library_contract'
-        ? 'NMCT clinic contract'
-        : result.network_evidence?.source === 'payer_participation_message'
-          ? 'Payer provider statement'
-          : null
+    result.network_status === 'unknown'
+      ? null
+      : result.network_evidence?.product_network_source === 'signed_bluecard_agreement'
+        ? 'NMCT signed BlueCard agreement'
+        : result.network_evidence?.decision === 'in_network_contract_supported' ||
+            result.network_evidence?.source === 'clinic_library_contract'
+          ? 'NMCT clinic contract'
+          : result.network_evidence?.source === 'payer_participation_message'
+            ? 'Payer provider statement'
+            : null
 
   return (
     <section
@@ -163,16 +169,27 @@ export default function StaffPrebookingResult({
           {networkSource && <small>Source: {networkSource}</small>}
           {result.coverage.status === 'payer_rejected' && (
             <small>
-              The insurer must accept the member details before this plan's network can be checked.
+              The insurer must complete eligibility before this plan's network can be checked.
             </small>
           )}
           {result.coverage.status === 'active_today' && (
             <small>
-              {result.network_evidence?.reason || 'No matching provider contract was found.'}
+              {result.network_status === 'unknown' &&
+              result.issues[0]?.startsWith('Benefits did not match')
+                ? 'Match the patient and member ID before using the clinic contract for this plan.'
+                : result.network_evidence?.reason ||
+                  'The check did not identify whether this NMCT provider is in network for the plan.'}
             </small>
           )}
         </div>
       </div>
+      {result.collection.amount_cents != null && (
+        <div className="prebooking-cost-card is-patient">
+          <span>Collect on arrival</span>
+          <strong>{money(result.collection.amount_cents)}</strong>
+          <small>{result.collection.reason}</small>
+        </div>
+      )}
       {allowedCostAvailable ? (
         <div className="prebooking-cost-grid">
           <div className="prebooking-cost-card">
@@ -190,24 +207,15 @@ export default function StaffPrebookingResult({
             </small>
           </div>
         </div>
-      ) : (
+      ) : null}
+      {!priced && (
         <div className="prebooking-unavailable" role="note">
-          <strong>No reliable visit price is available from this check.</strong>
-          {result.coverage.status === 'active_today' && (
-            <span>
-              {issueText(
-                result.issues[0] ||
-                  'The insurer or NMCT contract did not return enough information to calculate a price.',
-              )}
-            </span>
-          )}
-        </div>
-      )}
-      {priced && result.collection.amount_cents != null && (
-        <div className="prebooking-cost-card">
-          <span>Estimated check-in amount after booking</span>
-          <strong>{money(result.collection.amount_cents)}</strong>
-          <small>{result.collection.reason} Recheck the booked visit before collecting.</small>
+          <strong>
+            {allowedCostAvailable
+              ? 'Estimated patient share is unavailable from this check.'
+              : 'Insured visit price is unavailable from this check.'}
+          </strong>
+          <span>{issueText(result.issues[0] || result.coverage.message)}</span>
         </div>
       )}
       {priced && result.plan_total_cents != null && (

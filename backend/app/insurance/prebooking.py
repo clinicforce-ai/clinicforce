@@ -87,9 +87,19 @@ def evaluate(payload: dict, details: dict, service_date: str) -> dict:
             "72": "The insurer rejected the member ID. Check the full ID and prefix on the insurance card, then try again.",
             "73": "The insurer rejected the subscriber name. Check the name on the insurance card, then try again.",
             "75": "The insurer could not find the subscriber. Check the insurer, member ID and policyholder details, then try again.",
+            "62": "The insurer could not check coverage for the requested service date. Try again closer to the visit.",
+            "63": "The insurer could not check coverage for the requested service date. Try again closer to the visit.",
+            "65": "The insurer could not match the patient to this policy. Check the patient and policyholder details on the card.",
+            "67": "The insurer could not match the patient to this policy. Check the patient and policyholder details on the card.",
+            "76": "The insurer could not match the patient to this policy. Check the patient and policyholder details on the card.",
+            "42": "The insurer's eligibility service is temporarily unavailable. Try the inquiry again later.",
+            "80": "The insurer's eligibility service is temporarily unavailable. Try the inquiry again later.",
+            "41": "The insurer rejected this clinic's payer or provider access. The clinic administrator must review enrollment and the payer connection.",
+            "43": "The insurer rejected this clinic's payer or provider access. The clinic administrator must review enrollment and the payer connection.",
+            "79": "The insurer rejected this clinic's payer or provider access. The clinic administrator must review enrollment and the payer connection.",
         }
         result.update(status="payer_rejected", message=next(
-            (messages[code] for code in ("71", "72", "73", "75") if code in codes),
+            (messages[code] for code in ("71", "72", "73", "75", "62", "63", "65", "67", "76", "42", "80", "41", "43", "79") if code in codes),
             "The insurer rejected the submitted member details. Check the insurance card and try again."))
         return result
     if str(payload.get("status") or "").upper() in {"ERROR", "FAILED", "REJECTED"}:
@@ -146,7 +156,7 @@ def plan(reason: str, visit_type: str, suggestions: dict) -> dict:
         code = "99203" if visit_type == "new" else "99213"
         label = "new-patient" if visit_type == "new" else "returning-patient"
         groups.insert(0, {"label": "Office visit included in estimate",
-                          "description": "This is a starting price scenario; the clinician confirms the billed level.",
+                          "description": "This is a starting price scenario; the final billed level may differ.",
                           "selection_mode": "single", "codes": [{"code": code,
                                      "label": "Office visit",
                                      "reason": f"Planning baseline for a {label} office visit; the billed level can differ.",
