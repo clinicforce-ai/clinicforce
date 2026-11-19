@@ -10,6 +10,8 @@ def case_benefits(payload: dict, inputs: dict, source: dict, case: dict) -> dict
                  and recovery.get('verified_coverage'))
     if recovered:
         coverage.update(recovery['verified_coverage'])
+        if source.get('active_coverages', 0) > 1:
+            coverage['other_active_coverage'] = True
     requested = ((case.get('previsit') or {}).get('requested_service_types')
                  if payload.get('_service_payloads') else None) or _api._previsit_service_types(inputs)
     benefits = _api._previsit_benefits(payload, coverage, inputs['service_date'], requested, inputs=inputs, source=source)

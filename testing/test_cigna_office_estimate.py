@@ -724,6 +724,50 @@ def test_corroborated_cigna_member_suffix_qualifies_for_member_specific_rules():
     assert result['collection_guidance']['amount_cents'] is None
 
 
+def test_in_person_cigna_office_copay_uses_rendering_provider_role():
+    office = {'industryCode': '11', 'industry': 'Office'}
+    rows = [{'code': '1', 'serviceTypeCodes': ['30'],
+             'additionalInformation': [{'description': 'Provider is in network based on NPI ID provided in request'}]},
+            {'code': 'C', 'serviceTypeCodes': ['30'], 'benefitAmount': '4123.45',
+             'timeQualifierCode': '29', 'coverageLevelCode': 'IND', 'inPlanNetworkIndicatorCode': 'Y'},
+            {'code': 'G', 'serviceTypeCodes': ['30'], 'benefitAmount': '7234.56',
+             'timeQualifierCode': '29', 'coverageLevelCode': 'IND', 'inPlanNetworkIndicatorCode': 'Y'},
+            {'code': 'C', 'serviceTypeCodes': ['98'], 'benefitAmount': '0',
+             'timeQualifierCode': '23', 'inPlanNetworkIndicatorCode': 'Y',
+             'eligibilityAdditionalInformation': office},
+            {'code': 'A', 'serviceTypeCodes': ['98'], 'benefitPercent': '0',
+             'coverageLevelCode': 'IND', 'inPlanNetworkIndicatorCode': 'Y',
+             'eligibilityAdditionalInformation': office,
+             'additionalInformation': [{'description': 'PCP AND Specialist'}]},
+            *[{'code': 'B', 'serviceTypeCodes': ['98'], 'benefitAmount': amount,
+               'timeQualifierCode': '27', 'coverageLevelCode': 'IND',
+               'inPlanNetworkIndicatorCode': 'Y',
+               'eligibilityAdditionalInformation': office,
+               'additionalInformation': [{'description': label}]}
+              for label, amount in [('PCP', '35'), ('Specialist', '50')]]]
+    payload = {'provider': {'npi': '1111111111'},
+               'planStatus': [{'statusCode': '1', 'serviceTypeCodes': ['30', '98']}],
+               'planDateInformation': {'planBegin': '20260101', 'planEnd': '20261231'},
+               'benefitsInformation': rows}
+    common = {'service_date': '2026-11-09', 'procedure_code': '99203',
+              'office_visit': True, 'place_of_service': '11', 'provider_npi': '1111111111'}
+    specialist = commercial.normalize_stedi_271(payload, '98', False,
+        provider_specialties=['Neurology'], **common)
+    primary = commercial.normalize_stedi_271(payload, '98', False,
+        provider_specialties=['Family Medicine'], **common)
+    unknown = commercial.normalize_stedi_271(payload, '98', False,
+        provider_specialties=[], **common)
+    assert specialist['active'] is True
+    assert specialist['network_status'] == 'in_network'
+    assert specialist['copay_cents'] == 5000
+    assert specialist['deductible_applies'] is False
+    assert specialist['coinsurance_percent'] == '0'
+    assert specialist['deductible_remaining_cents'] == 412345
+    assert specialist['oop_remaining_cents'] == 723456
+    assert primary['copay_cents'] == 3500
+    assert unknown['copay_cents'] is None
+
+
 def test_cigna_oap_product_label_resolves_office_referral_rule():
     payload, inputs, source = example()
     payload['plans'][0]['name'] = 'C-24 TX NBN OAP'

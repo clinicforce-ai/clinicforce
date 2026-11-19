@@ -470,6 +470,46 @@ def test_united_healthcare_missing_insured_price_does_not_switch_to_cash():
 
 
 class RecoveryTest(IsolatedAsyncioTestCase):
+    async def test_cigna_card_recovers_active_policy_when_ecw_selected_another(self):
+        from app.api.routers import staff
+        from app.insurance import v1_sources
+        case, session, provider, response = setup()
+        inputs, source = case['previsit_context']['inputs'], case['previsit_context']['source']
+        inputs.update(group_number='OLD-GROUP', service_date='2026-11-09', reason='Migraine')
+        source.update(_patient_id='synthetic-patient', payer='Cigna', active_coverages=2)
+        case['previsit_discovery']['identity_binding'] = api._recovery_binding(inputs, source)
+        fields = {'member_name': 'Pat Example', 'member_id': 'NEW-ID',
+                  'group_number': 'NEW-GROUP', 'payer': 'Cigna'}
+        case['previsit_context']['result']['card_check'] = api._compare_card_hints(
+            {'status': 'read', 'count': 1, 'fields': fields}, inputs.copy(), source)
+        response.update(tradingPartnerServiceId='HGJLR', payer={'name': 'CHLIC'},
+                        subscriber={**response['subscriber'], 'memberId': 'NEW-ID',
+                                    'groupNumber': 'NEW-GROUP'},
+                        planDateInformation={'planBegin': '20260101', 'planEnd': '20261231'})
+        client = MagicMock(); client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=None)
+        client.post = AsyncMock(return_value=httpx.Response(200, json=response))
+        with patch.object(api.staff_store, 'patient_card_intakes', return_value=[]), \
+             patch.object(api.ecw_backend, 'insurance_cards', AsyncMock(return_value=[{'id': 'card:0', '_content': b'synthetic'}])), \
+             patch.object(staff, 'inspect_file', return_value=('image/png', 1)), \
+             patch.object(v1_sources, 'read_card_fields', return_value=(fields, {}, [1])), \
+             patch.object(api.httpx, 'AsyncClient', return_value=client), \
+             patch.object(api.stedi_payers, 'search_payer', AsyncMock(return_value={'stediId': 'HGJLR', 'displayName': 'Cigna'})), \
+             patch.object(api.object_store, 'put_staff_document', return_value='protected'), \
+             patch.object(api, '_save', side_effect=lambda value, *_: value):
+            await api._recover_previsit(case, session, provider)
+        assert client.post.await_count == 1
+        request = client.post.call_args.kwargs['json']
+        assert request['subscriber']['memberId'] == 'NEW-ID'
+        assert [service['value'] for service in request['encounter']['services']] == ['98', '30']
+        assert case['previsit_discovery']['outcome'] == 'recovered'
+        result = api._previsit_result(case)
+        assert result['coverage_status'] == 'VERIFIED'
+        assert result['payment_mode'] == 'insurance'
+        assert result['insurance_details']['member_id'] == 'NEW-ID'
+        assert result['insurance_details']['group_number'] == 'NEW-GROUP'
+        assert result['benefits']['active'] is True
+
     async def test_card_ocr_recovers_missing_policy_but_missing_rates_never_invent_price(self):
         from app.api.routers import staff
         from app.insurance import v1_sources

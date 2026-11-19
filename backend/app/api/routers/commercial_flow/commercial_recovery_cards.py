@@ -136,6 +136,11 @@ def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
         result['status'] = 'unverified'
         return result
     candidate = _api.stedi_discovery.card_candidate({**fields, 'payer': fields.get('payer') or source.get('payer')}, inputs, source)
+    cigna_card_policy = bool(card.get('count') == 1 and source.get('_patient_id')
+        and source.get('coverage_id') and name_matches
+        and (dob_matches or not card_dob and fields.get('group_number'))
+        and str(fields.get('payer') or '').casefold() == 'cigna'
+        and fields.get('member_id'))
     alternate_ecw_policy = bool(card.get('count') in {1, 2} and source.get('_patient_id')
         and name_matches and (not card_dob or dob_matches) and
         _card_matches_other_ecw_coverage(fields, source, str(inputs.get('service_date') or '')))
@@ -145,11 +150,12 @@ def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
         result['office_copay_cents'] = int(printed_copay[1]) * 100 + int(printed_copay[2] or 0)
     result['alternative_supported'] = bool(candidate and name_matches and
         (not card_dob or dob_matches) and not phcs_hpi_card and (
-            alternate_ecw_policy or patient_bound and (
+            cigna_card_policy or alternate_ecw_policy or patient_bound and (
                 bool(result['conflicts']) and dob_matches and group_matches or
                 payer_difference and member_matches and (group_matches or dob_matches))))
     if result['alternative_supported']:
         result['alternative_fingerprint'] = _api.hashlib.sha256(_api.json.dumps(fields, sort_keys=True).encode()).hexdigest()
+        result['cigna_card_policy'] = cigna_card_policy
     if result['conflicts']:
         result['status'] = 'conflict'
         return result
@@ -232,6 +238,7 @@ async def _recover_card(case: dict, session: dict, provider: dict) -> bool:
                 recovery['card_candidates'] = recovery['candidates']
                 if (len(recovery['candidates']) == 1 and
                         (context['source'].get('active_coverages', 0) <= 1 or
+                         (context.get('result') or {}).get('card_check', {}).get('cigna_card_policy') is True or
                          _card_matches_other_ecw_coverage(fields, context['source'],
                              str(context['inputs'].get('service_date') or '')) or
                          (context.get('result') or {}).get('card_check', {}).get('saved_policy_support')
