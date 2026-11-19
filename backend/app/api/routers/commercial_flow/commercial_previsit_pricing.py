@@ -108,7 +108,7 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
     if rules['provider_npi_conflict']:
         issues.append('The eCW rendering NPI conflicts with the selected visit provider; resolve it before pricing.')
     medical_names = payer_fees.fee_schedule_products(payer_name, benefits.get('plan_details'))
-    product_family = insurance_product.classify(medical_names, payer_id=payer_id)
+    product_family = 'original_medicare' if benefits.get('original_medicare') else insurance_product.classify(medical_names, payer_id=payer_id)
     medicare_plan = product_family == 'original_medicare' or product_family.startswith('medicare_advantage_')
     is_aetna = aetna_fees.is_aetna_payer(payer_name)
     schedule = payer_fees.schedule_for_service(payer_name, medical_names,
@@ -194,7 +194,6 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
             'reason': 'Estimated responsibility less verified payments received for this visit.',
             'payment_reference': payments['reference'], 'verified_at': payments.get('verified_at')}
     return priced, issues
-
 def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None = None, service_type: str | list[str] = "98",
                        *, inputs: dict | None = None, source: dict | None = None) -> dict:
     context = _api._benefit_context(inputs, source or {}) if inputs else {}
@@ -218,6 +217,7 @@ def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None =
         procedure_code=codes[0]['code'] if office_only and len(codes) == 1 else None,
         office_visit=office_only,
         office_service_types=_api._office_service_types('', source or {}), **context)
+    benefits['original_medicare'] = _api.stedi_payers.original_medicare_271(benefit_payload)
     if office_only and benefit_payload is payload:
         benefits = merge_linked_medical_oop(payload, benefits, service_date)
     if office_payload:

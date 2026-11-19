@@ -133,7 +133,7 @@ def test_booked_bilateral_hand_emg_uses_the_model_proposal_without_manual_select
     assert visit_estimate.is_emg_visit(booked)
     assert plan['recommended_ids'] == ['95908', '95886']
     assert plan['recommended_units'] == {'95908': 1, '95886': 2}
-    assert plan['method'] == 'llm' and plan['version'] == 19
+    assert plan['method'] == 'llm' and plan['version'] == 20
     assert '"appointment_type": "EMG Visit"' in model.converse.call_args.kwargs['messages'][0]['content'][0]['text']
     assert not visit_estimate.is_emg_visit({'reason': 'Bilateral hand'})
     assert not visit_estimate.is_emg_visit({'reason': 'Bilateral hand', 'appointment_type': 'Possible EMG'})
@@ -288,6 +288,17 @@ def test_new_patient_office_visit_uses_provisional_model_level():
     assert plan['recommended_ids'] == ['99204']
     assert any('provisional' in note for note in plan['assumptions'])
     model.converse.assert_called_once()
+
+
+def test_new_patient_office_visit_keeps_planning_code_when_model_is_unavailable():
+    available = [{'id': code, 'code': code, 'source': 'conditional office E/M alternative', 'units': 1}
+                 for code in ('99202', '99203', '99204', '99205')]
+    with patch.object(cpt_suggester.boto3, 'client', side_effect=RuntimeError('offline')):
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'Movement disorder; New Patient evaluation', 'visit_type': 'new'}, {}, available)
+    assert plan['recommended_ids'] == ['99203']
+    assert plan['method'] == 'appointment'
+    assert 'starting estimate' in plan['assumptions'][0]
 
 
 def test_established_office_visit_defaults_to_provisional_followup_when_model_is_unavailable():

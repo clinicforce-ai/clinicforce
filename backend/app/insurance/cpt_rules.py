@@ -14,6 +14,19 @@ NCS_STUDY_RANGES = {
 }
 
 
+def new_patient_office_fallback(reason: str, scheduled: list, emg: bool,
+                                choices: list[dict], by_code: dict) -> tuple | None:
+    """Keep one provisional E/M when an uncoded clinical reason names a new visit."""
+    if scheduled or emg or choices or '99203' not in by_code:
+        return None
+    label = re.search(r'\bnew\s+(?:patient|pt)\s+(?:evaluat\w*|consult\w*|assessment|visit)\b', reason, re.I)
+    if not label or not (reason[:label.start()] + reason[label.end():]).strip(' ;,-'):
+        return None
+    return ([{'code': '99203', 'units': 1}],
+            'Provisional new-patient office consultation for cost planning.', 'appointment',
+            ['CPT 99203 is a starting estimate; confirm new-patient status and documented medical decision making or qualifying time before billing.'])
+
+
 def tia_cta_office_scenario(inputs: dict, choices: list[dict], scheduled_office: list[dict], available: dict) -> bool:
     """Use moderate E/M only for the established TIA and planned CTA cost scenario."""
     return (inputs.get('visit_type') == 'established' and not scheduled_office and '99214' in available

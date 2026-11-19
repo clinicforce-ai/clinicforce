@@ -317,6 +317,55 @@ def test_original_medicare_office_collects_zero_without_zeroing_patient_liabilit
     assert collection_guidance.build(result)['amount_cents'] is None
 
 
+def test_texas_mac_part_b_office_reopens_insurance_and_collects_zero_without_price():
+    result = scenario()
+    result.pop('collection_policy')
+    result.update(payer='Medicare Texas Part B', stedi_payer={'id': '04412'},
+                  service_date='2026-11-19', payment_mode='cash',
+                  cash_fallback={'reason': 'older automatic quote'},
+                  codes=[{'id': 'office', 'code': '99203', 'units': 1}])
+    result['identity'] = {'status': 'matched', 'binding': 'synthetic', 'match_version': 2}
+    result['benefits'].update(identity=result['identity'], original_medicare=True,
+                              network_status='unknown', network_source=None,
+                              plan_details={'names': []})
+    result['price_range'].update(complete=False, patient_min_cents=None, patient_max_cents=None)
+    result['price_range']['lines'][0].update(calculation=None, allowed_cents=None)
+    case = {'previsit': {'request_state': 'complete'},
+            'previsit_context': {'result': result, 'source': {'plan': 'MB'},
+                                 'inputs': {'service_date': '2026-11-19'}}}
+    reopened = api._previsit_result(case)
+    assert reopened['payment_mode'] == 'insurance'
+    assert 'cash_fallback' not in reopened
+    assert reopened['collection_guidance']['amount_cents'] == 0
+    assert reopened['collection_guidance']['basis'] == 'claim_after_service'
+    case['visit_review'] = {'payment_mode': 'cash'}
+    assert api._previsit_result(case)['payment_mode'] == 'cash'
+
+
+def test_original_medicare_office_alternatives_defer_collection_with_unresolved_policy_order():
+    result = scenario()
+    result.pop('collection_policy')
+    result.update(payer='Medicare Texas Part B', stedi_payer={'id': '04412'},
+                  service_date='2026-10-13', payment_mode='insurance',
+                  recovery={'reason_code': 'multiple_active_policies', 'active_policy_count': 2},
+                  codes=[])
+    result['identity'] = {'status': 'matched', 'binding': 'synthetic', 'match_version': 2}
+    result['benefits'].update(identity=result['identity'], original_medicare=True,
+                              network_status='unknown', network_source=None,
+                              has_secondary=True, plan_details={'names': []})
+    result['price_range'].update(mode='alternatives', complete=False,
+                                 patient_min_cents=None, patient_max_cents=None,
+                                 lines=[{'id': code, 'code': code, 'units': 1,
+                                         'calculation': None, 'allowed_cents': None,
+                                         'benefits': {'active': True}}
+                                        for code in ('99202', '99203', '99204', '99205')])
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 0
+    assert guidance['basis'] == 'claim_after_service'
+    assert guidance['collection_rule']['mode'] == 'original_medicare_office_deferral'
+    assert encounter_summary.build({**result, 'collection_guidance': guidance})['collect_today_cents'] == 0
+
+
 def test_missing_price_does_not_request_an_already_approved_policy():
     result = scenario()
     result['price_range'].update(complete=False, patient_min_cents=None, patient_max_cents=None)

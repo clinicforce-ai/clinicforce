@@ -114,6 +114,10 @@ def oop_plan_association(row: dict, payload: dict) -> str:
     kind = coverage_kind(row, payload)
     if kind != 'unassigned':
         return kind
+    from app.insurance.stedi_payers import original_medicare_271
+    if (original_medicare_271(payload) and row.get('insuranceType') == 'MEDICARE_PART_B'
+            and '30' in (row.get('serviceTypeCodes') or [])):
+        return 'medical'
     index = row.get('plan_index')
     plans = payload.get('plans') or []
     notes = ' '.join(_benefit_notes([row.get('messages'), row.get('additionalInformation')])).upper()

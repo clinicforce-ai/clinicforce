@@ -37,8 +37,9 @@ def apply_original_medicare_deferral(result: dict, guidance: dict, source_errors
     payer_id = (result.get('stedi_payer') or {}).get('id')
     names = ((benefits.get('plan_details') or {}).get('names') or
              ((result.get('plan_details') or {}).get('stedi') or {}).get('names'))
-    if (original_medicare_route({'stediId': payer_id})
-            and classify(names, payer_id=payer_id) == 'original_medicare'
+    if ((benefits.get('original_medicare') is True or
+         original_medicare_route({'stediId': payer_id})
+         and classify(names, payer_id=payer_id) == 'original_medicare')
             and benefits.get('active') is True and benefits.get('service_date_matches') is not False
             and member_bound and not source_errors and not adverse
             and not benefits.get('coverage_status_conflict') and not benefits.get('coverage_dates_invalid')

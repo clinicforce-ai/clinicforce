@@ -203,7 +203,7 @@ def test_bluecard_ppo_office_referral_and_home_plan_authorization_are_distinct()
     ('BCBSTX', 'Blue Advantage HMO', '99203', 'Required', 'Verification required'),
     ('BCBSTX', 'Blue Choice PPO', 'J0585', 'Not required', 'Verification required'),
     ('BCBSTX', 'Participating out-of-state BlueCard/BCBS networks', '99203', 'Verification required', 'Verification required'),
-    ('Traditional Medicare', 'Original Medicare', '99203', 'Not required', 'Verification required'),
+    ('Traditional Medicare', 'Original Medicare', '99203', 'Not required', 'Not required'),
     ('Traditional Medicare', 'Original Medicare', '95910', 'Not required', 'Verification required'),
     ('UnitedHealthcare', 'Choice Plus', '95910', 'Not required', 'Verification required'),
 ])
@@ -224,6 +224,19 @@ def test_original_medicare_opd_pa_does_not_leak_to_physician_office():
     assert [line['authorization']['status'] for line in opd['procedures']] == ['Required', 'Required']
     office = evaluate(result, {**context, 'pos': '11'}, [])
     assert all(line['authorization']['status'] == 'Verification required' for line in office['procedures'])
+
+
+def test_original_medicare_networkless_office_em_needs_neither_referral_nor_pa():
+    result, context = case('Medicare Texas Part B', 'Original Medicare', '99203', pos='11')
+    result['benefits']['original_medicare'] = True
+    result['benefits']['network_status'] = 'unknown'
+    result['benefits']['plan_details'] = {'names': []}
+    context['plans'] = []
+    decisions = evaluate(result, context, [])
+    line = decisions['procedures'][0]
+    assert line['referral']['status'] == 'Not required'
+    assert line['authorization']['status'] == 'Not required'
+    assert line['authorization']['pa_approval'] == 'NOT APPLICABLE'
 
 
 def test_aetna_open_access_managed_choice_selected_office_and_ncs_rules():

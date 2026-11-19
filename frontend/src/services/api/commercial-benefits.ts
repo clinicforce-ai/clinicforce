@@ -1,4 +1,5 @@
 export type PrevisitBenefits = null | {
+  original_medicare?: boolean
   coverage_evidence?: {
     status: string
     reported_status: string

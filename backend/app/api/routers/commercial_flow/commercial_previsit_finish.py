@@ -160,7 +160,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     plan_key = _api.hashlib.sha256(_api.json.dumps([token, review.get('emg_required'), review.get('separate_em_planned'), source.get('recent_completed_appointments', []),
         [(row['id'], row.get('units')) for row in available]], sort_keys=True).encode()).hexdigest()
     prior_plan = case.get('previsit_plan') or {}
-    if (prior_plan.get('key') != plan_key or prior_plan.get('plan', {}).get('version') != 19
+    if (prior_plan.get('key') != plan_key or prior_plan.get('plan', {}).get('version') != 20
             or botox_review.is_botox_visit(inputs) and prior_plan.get('plan', {}).get('kind') != 'botox'
             or botox_review.is_botox_visit(inputs) and prior_plan.get('plan', {}).get('method') == 'clinician'
             or prior_plan.get('plan', {}).get('method') == 'unavailable'):
@@ -180,9 +180,12 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     route_payer = route_connections[0] if len(route_connections) == 1 else None
     united_healthcare = _api.commercial.is_united_healthcare_payer(
         result, {'displayName': route_payer.get('display_name')} if route_payer else None)
-    # eCW self-pay fields do not authorize an automatic UHC insurance-to-cash switch.
+    original_medicare = (result['benefits'].get('original_medicare') is True
+        or _api.stedi_payers.original_medicare_route({'stediId': payer_id})
+        or _api.stedi_payers.original_medicare_record(str(result.get('payer') or ''), str(source.get('plan') or '')))
+    # eCW self-pay fields do not override a recorded Medicare or UHC policy.
     result['payment_mode'] = review.get('payment_mode',
-        'insurance' if united_healthcare else
+        'insurance' if united_healthcare or original_medicare else
         'cash' if source.get('self_pay_recorded') or note_self_pay or _api.ecw_billing.cash_without_coverage(source) else 'insurance')
     result['ecw_saved_eligibility'] = {k: v for k, v in (source.get('saved_eligibility') or {}).items() if not k.startswith('_')}
     labels = {'refresh_context': 'Visit details', 'selected_ids': 'Services', 'confirmed_units': 'Service quantities', 'payment_mode': 'Payment method',
