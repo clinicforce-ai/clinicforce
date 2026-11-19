@@ -549,6 +549,57 @@ def test_oap_followup_collects_fixed_copay_without_cigna_allowed_rate():
     assert result['encounter_summary']['collect_today_cents'] == 6000
 
 
+def test_nmct_payer_confirmed_cigna_office_copay_is_collectible_without_route_policy():
+    payload, inputs, source = example()
+    payload['plans'][0]['name'] = 'Open Access Plus'
+    payload['plans'][0]['benefits']['coPayment'][1]['amount'] = '50'
+    inputs.update(visit_type='new', member_id=payload['subscriber']['memberId'])
+    source['payer'] = 'Cigna'
+    result = finish(payload, inputs, source, payer='Cigna', practice_id='primary',
+                    review={'selected_ids': ['99203:1']}, configured_connections=[])
+    assert result['benefits']['network_source'] == 'payer_participation_message'
+    assert result['benefits']['copay_cents'] == 5000
+    assert result['collection_guidance']['amount_cents'] == 5000
+    assert result['collection_guidance']['basis'] == 'cigna_refundable_office_copay'
+    assert result['encounter_summary']['collect_today_cents'] == 5000
+    paid = finish(payload, inputs, source, payer='Cigna', practice_id='primary',
+                  review={'selected_ids': ['99203:1'],
+                          'payments': {'reference': 'synthetic-receipt', 'amount_cents': 1500}},
+                  configured_connections=[])
+    assert paid['collection_guidance']['amount_cents'] == 3500
+
+    legacy = deepcopy(payload)
+    rows = commercial._stedi_entries(legacy)
+    for row in rows:
+        row.pop('plan_index', None)
+        if row['code'] == 'status':
+            row['code'] = '1'
+            row['serviceTypeCodes'] = ['30', '98']
+        places = row.pop('placesOfService', [])
+        if places:
+            row['eligibilityAdditionalInformationList'] = [
+                {'codeListQualifierCode': 'ZZ', 'industryCode': place['code']}
+                for place in places]
+    legacy.pop('plans')
+    legacy['benefitsInformation'] = rows
+    legacy['planStatus'] = [{'status': 'Active Coverage', 'statusCode': '1',
+                             'planDetails': 'Open Access Plus', 'serviceTypeCodes': ['30', '98']}]
+    flat = finish(legacy, inputs, source, payer='Cigna', practice_id='primary',
+                  review={'selected_ids': ['99203:1']}, configured_connections=[])
+    assert flat['collection_guidance']['amount_cents'] == 5000
+
+    lower_allowance = deepcopy(result)
+    lower_allowance['price_range']['lines'][0]['allowed_cents'] = 3000
+    assert collection_guidance.build(lower_allowance)['amount_cents'] is None
+
+    deferring = finish(payload, inputs, source, payer='Cigna', practice_id='primary',
+                       review={'selected_ids': ['99203:1']}, configured_connections=[{
+                           'stedi_payer_id': '62308', 'rules': {'collection_policy': {
+                               **COPAY_POLICY, 'mode': 'defer_to_claim'}}}])
+    assert deferring['collection_guidance']['amount_cents'] == 0
+    assert deferring['collection_guidance']['basis'] == 'claim_after_service'
+
+
 def test_attribution_metadata_does_not_cancel_active_cigna_coverage():
     payload, inputs, source = example()
     payload['plans'][0]['benefits']['statuses'].append({

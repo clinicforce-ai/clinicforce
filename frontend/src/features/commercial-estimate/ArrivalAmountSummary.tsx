@@ -475,8 +475,10 @@ export default function ArrivalAmountSummary({
         <p>Claim first. Patient responsibility follows the processed claim.</p>
       ) : model.guidance?.basis === 'cigna_refundable_office_copay' && model.amount ? (
         <p>
-          Refundable Cigna office copay advance; provider network and final share remain
-          unconfirmed.
+          Refundable Cigna office copay advance;{' '}
+          {result.benefits?.network_source === 'payer_participation_message'
+            ? 'the payer reports the submitted provider NPI in network, and the final share follows the claim.'
+            : 'provider network and final share remain unconfirmed.'}
         </p>
       ) : model.guidance?.collection_rule?.mode === 'bluecard_epo_neurology_office_copay' &&
         model.amount ? (

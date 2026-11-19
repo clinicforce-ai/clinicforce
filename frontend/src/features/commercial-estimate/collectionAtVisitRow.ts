@@ -479,8 +479,7 @@ export function collectionAtVisitRow(
   }
   if (result.collection_guidance?.basis === 'cigna_refundable_office_copay') {
     row.label = 'Refundable Cigna copay advance at visit'
-    row.detail =
-      'Current Stedi benefits report this POS 11 specialist office copay. Provider participation for the exact product is still unconfirmed. Apply the advance to the processed claim and refund any excess.'
+    row.detail = result.collection_guidance.reason
   }
   if (
     !model.cash &&

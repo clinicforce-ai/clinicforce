@@ -242,6 +242,11 @@ def office_copay_amount(result: dict, benefits: dict, price: dict, lines: list[d
         if not oop_met and _nmct_fixed_office_copay(result, benefits, price, lines, amount):
             guidance['collection_rule'] = {'mode': 'nmct_fixed_office_copay_advance',
                 'reference': 'Current member-bound Stedi office copay and NMCT Clinical Library contract'}
+    if amount is not None and not result.get('collection_policy'):
+        refundable = cigna_refundable_office_copay(
+            result, benefits, price, lines, guidance, assumptions)
+        if refundable is not None:
+            return refundable
     return amount if amount is not None else cigna_refundable_office_copay(
         result, benefits, price, lines, guidance, assumptions)
 
@@ -249,13 +254,17 @@ def office_copay_amount(result: dict, benefits: dict, price: dict, lines: list[d
 def cigna_refundable_office_copay(result: dict, benefits: dict, price: dict,
                                   lines: list[dict], guidance: dict,
                                   assumptions: list[str]) -> int | None:
-    """Collect one payer-reported office copay as a refundable advance when tier is unknown."""
+    """Collect one payer-reported office copay as a refundable clinic advance."""
     visit = result.get('appointment_context') or {}
     card = result.get('card_check') or {}
+    network = result.get('network_evidence') or {}
+    payer_verified = (verified_in_network(benefits)
+        and benefits.get('network_source') == 'payer_participation_message')
+    tier_unconfirmed = (network.get('decision') == 'lacking_applicable_network_evidence'
+        and benefits.get('network_status') == 'unknown')
     if (result.get('nmct_bcbstx_refundable_advance_enabled') is not True
             or str(result.get('payer') or '').casefold() != 'cigna'
-            or (result.get('network_evidence') or {}).get('decision') != 'lacking_applicable_network_evidence'
-            or benefits.get('network_status') != 'unknown'
+            or not (tier_unconfirmed or payer_verified)
             or visit.get('place_of_service') != '11'
             or office_role((visit.get('rendering_provider') or {}).get('roles') or []) != 'specialist'
             or card.get('status') in {'conflict', 'mismatch'} or card.get('conflicts')
@@ -276,6 +285,7 @@ def cigna_refundable_office_copay(result: dict, benefits: dict, price: dict,
             or terms.get('coinsurance_percent') not in {None, '0', '0.0', '0.00'}
             or terms.get('oop_remaining_cents') is not None and terms['oop_remaining_cents'] < copay
             or benefits.get('oop_remaining_cents') is not None and benefits['oop_remaining_cents'] < copay
+            or lines[0].get('allowed_cents') is not None and lines[0]['allowed_cents'] < copay
             or any(row.get('kind') == 'out_of_pocket' and row.get('amount_cents') == 0
                    and row.get('service_type_code') == '30' and row.get('time_period') in {'REMAINING', '29'}
                    and row.get('network') in {'IN_NETWORK', 'Y'}
@@ -294,8 +304,11 @@ def cigna_refundable_office_copay(result: dict, benefits: dict, price: dict,
     guidance.update(status='estimated', basis='cigna_refundable_office_copay',
         payer_reported_office_copay_cents=copay,
         collection_rule={'mode': 'cigna_refundable_office_copay', 'reference': 'Clinic-directed refundable Cigna office copay advance'},
-        reason='Collect the payer-reported specialist office copay as a refundable advance. Provider participation for this exact product is still unconfirmed; reconcile the processed claim and refund any excess.')
-    assumptions.append('The payer returned this in-network POS 11 specialist copay for the member. Provider network participation and the final patient liability remain unconfirmed.')
+        reason=('Collect the payer-reported specialist office copay as a refundable advance. Reconcile the processed claim and refund any excess.'
+                if payer_verified else
+                'Collect the payer-reported specialist office copay as a refundable advance. Provider participation for this exact product is still unconfirmed; reconcile the processed claim and refund any excess.'))
+    assumptions.append('The payer returned this in-network POS 11 specialist copay for the member. Final patient liability remains unconfirmed.' if payer_verified else
+        'The payer returned this in-network POS 11 specialist copay for the member. Provider network participation and the final patient liability remain unconfirmed.')
     return copay
 
 
