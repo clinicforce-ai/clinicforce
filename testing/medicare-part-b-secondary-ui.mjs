@@ -64,29 +64,36 @@ assert.match(table, /\$4,434\.28/)
 const primary = structuredClone(result)
 primary.payer = 'Medicare of Texas'
 primary.stedi_payer = { id: 'JDNSN', name: 'National Centers for Medicare & Medicaid Services' }
+primary.recovery = {}
 primary.benefits.has_secondary = false
 primary.benefits.medicare_part_b_secondary = null
 primary.benefits.copay_cents = null
-primary.benefits.deductible_annual_cents = 20000
-primary.benefits.deductible_remaining_cents = 15000
+primary.benefits.original_medicare = true
+primary.benefits.deductible_annual_cents = 28300
+primary.benefits.deductible_remaining_cents = 0
 primary.benefits.coinsurance_percent = '20'
+primary.benefits.has_secondary = false
 primary.price_range = { mode: 'services', complete: true,
-  patient_min_cents: 3800, patient_max_cents: 3800,
-  lines: [{ id: 'office', code: '99203', units: 1, allowed_cents: 10000,
-    allowed_basis: 'medicare_fee_schedule', calculation: { patient_cents: 3800,
-      plan_cents: 6200 }, benefits: { active: true, deductible_remaining_cents: 15000,
+  patient_min_cents: 2392, patient_max_cents: 2392,
+  lines: [{ id: 'office', code: '99203', units: 1, allowed_cents: 11960,
+    allowed_basis: 'medicare_fee_schedule', calculation: { patient_cents: 2392,
+      plan_cents: 9568 }, benefits: { active: true, deductible_remaining_cents: 0,
       coinsurance_percent: '20' } }] }
-primary.collection_guidance = { amount_cents: 0, status: 'zero_advance', basis: 'claim_after_service',
-  reason: 'Clinic policy collects no advance for a verified Original Medicare office visit.',
-  collection_rule: { mode: 'original_medicare_office_deferral', reference: 'Clinic policy' } }
-primary.encounter_summary = { collect_today_cents: 0, complete: true,
-  estimated_total_patient_min_cents: 3800, estimated_total_patient_max_cents: 3800 }
-const primaryModel = { ...model, supportedAmount: true, amountText: '$0.00' }
+primary.collection_guidance = { amount_cents: 2392, status: 'estimated', basis: 'anticipated_services',
+  services: [],
+  reason: 'Estimated 20% of the clinic-approved Medicare office fee after a met deductible.',
+  collection_rule: { mode: 'original_medicare_office_coinsurance', reference: 'Clinic Medicare schedule' } }
+primary.encounter_summary = { collect_today_cents: 2392, complete: true,
+  estimated_total_patient_min_cents: 2392, estimated_total_patient_max_cents: 2392 }
+const primaryModel = deriveCommercialEstimateView({ result: primary,
+  appointments: [], selectedVisit: null, busy: false, error: null,
+  readOnly: false, recovering: false })
+assert.equal(primaryModel.supportedAmount, true)
+assert.equal(primaryModel.amountText, '$23.92')
 const primaryTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
   { model: primaryModel, result: primary }))
 assert.match(primaryTable, /Amount to collect at visit/)
-assert.match(primaryTable, /\$0\.00/)
-assert.match(primaryTable, /\$38\.00/)
+assert.match(primaryTable, /\$23\.92/)
 assert.match(primaryTable, /20%/)
 assert.match(primaryTable, /Provider billing status/)
 assert.match(primaryTable, /Original Medicare has no plan network tier/)
@@ -100,13 +107,18 @@ texasPartB.price_range = { mode: 'services', complete: false, lines: [{
   id: 'office', code: '99203', units: 1, allowed_cents: null,
   benefits: { active: true, deductible_remaining_cents: 0, coinsurance_percent: '20' },
 }] }
-texasPartB.encounter_summary = { collect_today_cents: 0, complete: false }
+texasPartB.collection_guidance = { amount_cents: null, status: 'action_required',
+  basis: 'missing_collection_inputs', services: [], reason: 'The Medicare fee is unavailable.' }
+texasPartB.encounter_summary = { collect_today_cents: null, complete: false }
+const texasModel = deriveCommercialEstimateView({ result: texasPartB,
+  appointments: [], selectedVisit: null, busy: false, error: null,
+  readOnly: false, recovering: false })
 const texasTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
-  { model: primaryModel, result: texasPartB }))
+  { model: texasModel, result: texasPartB }))
 assert.match(texasTable, /Provider billing status/)
 assert.match(texasTable, /Original Medicare has no plan network tier/)
 assert.match(texasTable, /Amount to collect at visit/)
-assert.match(texasTable, /\$0\.00/)
+assert.doesNotMatch(texasTable, /Amount to collect at visit[^]*?\$0\.00/)
 assert.doesNotMatch(texasTable, /cash option|self-pay price/i)
 
 const texasAlternatives = structuredClone(texasPartB)
@@ -118,7 +130,10 @@ texasAlternatives.price_range = { mode: 'alternatives', complete: false,
     id: code, code, units: 1, allowed_cents: null, benefits: { active: true },
   })) }
 texasAlternatives.encounter_summary = { collect_today_cents: 0, complete: false }
-texasAlternatives.collection_guidance.services = []
+texasAlternatives.collection_guidance = { amount_cents: 0, status: 'zero_advance',
+  basis: 'claim_after_service', services: [],
+  reason: 'Multiple active policies need claim coordination.',
+  collection_rule: { mode: 'original_medicare_office_deferral', reference: 'Clinic policy' } }
 texasAlternatives.codes = []
 const alternativesModel = deriveCommercialEstimateView({ result: texasAlternatives,
   appointments: [], selectedVisit: null, busy: false, error: null,

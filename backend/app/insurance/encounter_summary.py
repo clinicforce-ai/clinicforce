@@ -82,7 +82,10 @@ def build(result: dict, review: dict | None = None) -> dict:
                 and type(line.get('allowed_cents')) is int and line['allowed_cents'] >= 0
                 and (line.get('rate_resolution') or {}).get('status') == 'RESOLVED'
                 and isinstance(line.get('calculation'), dict) for line in lines))
-    complete = priced and (cash or verified_in_network(benefits))
+    original_medicare_share = (benefits.get('original_medicare') is True
+        and price.get('mode') == 'services' and bool(lines)
+        and all(line.get('allowed_basis') == 'medicare_fee_schedule' for line in lines))
+    complete = priced and (cash or verified_in_network(benefits) or original_medicare_share)
     minimum = price.get('cash_min_cents' if cash else 'patient_min_cents') if complete else None
     maximum = price.get('cash_max_cents' if cash else 'patient_max_cents') if complete else None
     if not (type(minimum) is int and type(maximum) is int and 0 <= minimum <= maximum <= 100_000_000):
@@ -164,6 +167,7 @@ def build(result: dict, review: dict | None = None) -> dict:
     if (not cash and collect is not None and collect > 0 and not verified_in_network(benefits)
             and not independent_office_copay and not out_of_network_share
             and not out_of_network_office_copay and not proxy_advance
+            and not original_medicare_share
             and not (refundable_advance and not verified_out_of_network(benefits))):
         collect = None
     if guidance.get('basis') == 'office_copay' and components['copay_cents'] is None:

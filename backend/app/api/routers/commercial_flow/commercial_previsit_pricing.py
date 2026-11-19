@@ -13,10 +13,8 @@ from app.insurance import aetna_fees, botox_review, cpt_rules, fep_preferred, in
 from app.insurance.stedi_benefits.payer_order import primary_secondary_order
 from app.insurance.stedi_benefits.linked import merge_linked_medical_oop
 from app.api.routers.commercial_flow.commercial_previsit_medicare import bind as bind_medicare_part_b
-
 def _commercial_slot(appointment_id: str) -> str:
     return "commercial:" + _api.hashlib.sha256(appointment_id.encode()).hexdigest()
-
 def _previsit_service_types(inputs: dict) -> list[str]:
     """Ask for the booked categories, including explicitly combined care."""
     scheduled = [row['code'] for row in inputs.get('lines', []) if row.get('service_status') == 'scheduled' and row.get('code')]
@@ -110,6 +108,8 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
     medical_names = payer_fees.fee_schedule_products(payer_name, benefits.get('plan_details'))
     product_family = 'original_medicare' if benefits.get('original_medicare') else insurance_product.classify(medical_names, payer_id=payer_id)
     medicare_plan = product_family == 'original_medicare' or product_family.startswith('medicare_advantage_')
+    rules.update(original_medicare=product_family == 'original_medicare',
+                 cost_share='payer_returned' if product_family == 'original_medicare' else rules.get('cost_share'))
     is_aetna = aetna_fees.is_aetna_payer(payer_name)
     schedule = payer_fees.schedule_for_service(payer_name, medical_names,
                                                 str(inputs.get('service_date') or ''))
