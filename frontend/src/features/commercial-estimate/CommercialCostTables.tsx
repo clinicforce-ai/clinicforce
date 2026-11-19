@@ -2,6 +2,7 @@ import type { PrevisitEstimate } from '../../services/api/commercial-previsit'
 import CostBreakdownTable, { type CostBreakdownRow } from '../insurance-estimate/CostBreakdownTable'
 import { feeProxyFormula } from './coinsuranceFormula'
 import { money } from './format'
+import { uhcLppoOfficeScenario } from './uhcLppoOfficeScenario'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { uhcQmbOfficeRows } from './uhcQmbOfficeTable'
 
@@ -15,6 +16,8 @@ export default function CommercialCostTables({
   rows: CostBreakdownRow[]
 }) {
   const cash = model.cash
+  const lppo =
+    !cash && !model.previousEstimate && !model.calculating ? uhcLppoOfficeScenario(result) : null
   const proxy = result.fee_proxy_estimate
   const aetnaFamilyZero =
     result.collection_guidance?.amount_cents === 0 &&
@@ -154,6 +157,38 @@ export default function CommercialCostTables({
       value: money(planning.plan_share_cents),
       detail: `${money(planning.allowed_cents)} clinic Aetna fee reference less ${money(planning.copay_cents!)} patient copay, if covered in-network${planning.coinsurance_percent == null ? ' and the fixed copay is the only office cost share' : ''}. This is paid by Aetna after an eligible claim, not collected from the patient.`,
     })
+  const finalRows = lppo
+    ? visibleRows.map((row) => {
+        if (row.label === 'Total payer allowed')
+          return {
+            ...row,
+            value: `Not confirmed by UHC · ${money(lppo.fee)} clinic Medicare fee reference`,
+            detail:
+              'The clinic Medicare schedule is a planning reference, not a UnitedHealthcare allowance.',
+          }
+        if (row.label === 'Coinsurance')
+          return {
+            ...row,
+            value: `${lppo.percent}% reported · ${money(lppo.share)} provisional`,
+            detail: `${lppo.percent}% × ${money(lppo.fee)} clinic Medicare fee reference.`,
+          }
+        if (row.label === 'Estimated patient share')
+          return {
+            ...row,
+            value: `${money(lppo.share)} provisional`,
+            detail:
+              'The reported deductible has $0 remaining; the payer allowance and final claim share are unconfirmed.',
+          }
+        if (row.label === 'Amount to collect at visit')
+          return {
+            ...row,
+            label: 'Amount to collect at visit · provisional',
+            value: `${money(lppo.balance)} provisional · verify before charging`,
+            detail: `${lppo.percent}% × ${money(lppo.fee)} clinic Medicare fee reference = ${money(lppo.share)}${lppo.paid ? `; less ${money(lppo.paid)} already paid` : ''}. Reconcile the policy conflict, network, QMB protection and payer order before charging.`,
+          }
+        return row
+      })
+    : visibleRows
   return (
     <>
       {!cash &&
@@ -169,11 +204,12 @@ export default function CommercialCostTables({
       <CostBreakdownTable
         rows={
           !cash && !model.previousEstimate
-            ? uhcQmbOfficeRows(result, visibleRows) || visibleRows
-            : visibleRows
+            ? uhcQmbOfficeRows(result, finalRows) || finalRows
+            : finalRows
         }
         open={
           (model.supportedAmount ||
+            !!lppo ||
             !!planning ||
             result.collection_guidance?.basis === 'published_uhc_tx_qmb_office') &&
           !cash

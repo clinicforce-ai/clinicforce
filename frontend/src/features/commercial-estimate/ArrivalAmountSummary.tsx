@@ -13,6 +13,7 @@ import { humanaApprovedCollection } from './humanaApprovedCollection'
 import { cignaBtxOfficeScenario } from './cignaBtxOfficeScenario'
 import CignaBtxArrivalAmount from './CignaBtxArrivalAmount'
 import AetnaOfficeZeroArrival from './AetnaOfficeZeroArrival'
+import { uhcLppoOfficeScenario } from './uhcLppoOfficeScenario'
 
 export default function ArrivalAmountSummary({
   model,
@@ -41,6 +42,22 @@ export default function ArrivalAmountSummary({
             {result.collection_guidance.unresolved_service_issues.join('; ')}
           </p>
         ) : null}
+      </>
+    )
+  const lppo =
+    !model.cash && !model.previousEstimate && !model.calculating
+      ? uhcLppoOfficeScenario(result)
+      : null
+  if (lppo)
+    return (
+      <>
+        <span>Amount to collect at visit · provisional</span>
+        <strong role="status">{money(lppo.balance)}</strong>
+        <p>
+          {lppo.percent}% × {money(lppo.fee)} clinic Medicare fee reference
+          {lppo.paid ? ` less ${money(lppo.paid)} already paid` : ''}. Reconcile policy evidence,
+          network, QMB protection and payer order before charging.
+        </p>
       </>
     )
   if (

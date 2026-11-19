@@ -98,6 +98,7 @@ jobs:
           node testing/umr-choice-plus-cost-table.mjs
           node ../testing/tic-options-ui.mjs
           node ../testing/uhc-biopsy-target-ui.mjs
+          node ../testing/uhc-lppo-coinsurance-ui.mjs
           node testing/televisit-collection-ui.mjs
           node ../testing/healthselect-ma-televisit-ui.mjs
           node ../testing/cigna-office-collection-ui.mjs
