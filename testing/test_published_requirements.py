@@ -116,6 +116,26 @@ def test_aetna_value_plus_99213_office_requires_no_referral_or_prior_authorizati
         assert evaluate(other, context, [])['authorization']['status'] != 'Not required'
 
 
+@pytest.mark.parametrize('code', ['99203', '99213'])
+def test_aetna_medicare_esa_ppo_office_visit_needs_no_referral(code):
+    result, context = case('Aetna', 'Medicare (V01) ESA PPO Plan', code,
+                           day='2026-11-19')
+    result['benefits'].update(network_status='unknown', service_date_matches=False,
+                              returned_service_dates={'start': '2026-11-18'},
+                              plan_details={'names': ['Medicare (V01) ESA PPO Plan']})
+    context['plans'] = ['CI', 'Aetna Legacy (PPO)', 'Medicare (V01) ESA PPO Plan']
+    assert evaluate(result, context, [])['referral']['status'] == 'Not required'
+    assert evaluate(result, context, [])['authorization']['status'] != 'Not required'
+    for changed in ({'pos': '22'}, {'service_date': '2026-11-20'}):
+        assert evaluate(result, {**context, **changed}, [])['referral']['status'] != 'Not required'
+    other = deepcopy(result)
+    other['benefits']['plan_details']['names'] = ['Aetna Medicare HMO']
+    assert evaluate(other, context, [])['referral']['status'] != 'Not required'
+    other = deepcopy(result)
+    other['benefits']['service_date_matches'] = None
+    assert evaluate(other, context, [])['referral']['status'] != 'Not required'
+
+
 def test_uhc_choice_epo_99203_office_requirements_follow_published_2026_rules():
     result, context = case('UnitedHealthcare', 'CHOICE EPO', '99203', day='2026-11-14')
     decision = evaluate(result, context, [])
