@@ -118,6 +118,17 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
                      for row in commercial._stedi_entries(line_payload or {}))
         if medical_line:
             raw_benefits['authorization_signal'] = 'unknown'
+        if (rules.get('original_medicare') and clinical_role == 'consultation'
+                and code['code'] in {'99202', '99203', '99204', '99205',
+                                     '99212', '99213', '99214', '99215'}):
+            for kind in ('referral', 'authorization'):
+                if raw_benefits.get(kind + '_signal') in {None, 'unknown'}:
+                    raw_benefits[kind + '_signal'] = 'not_required'
+            raw_benefits['review_reasons'] = [reason for reason in raw_benefits.get('review_reasons', [])
+                if reason != 'Confirm the remaining individual out-of-pocket maximum.'
+                and not (raw_benefits.get('referral_signal') == 'not_required'
+                         and reason.startswith("Confirm the plan's referral requirement"))]
+            raw_benefits['requires_review'] = bool(raw_benefits['review_reasons'])
         raw_benefits['review_reasons'] = list(dict.fromkeys([*raw_benefits.get('review_reasons', []), *integrity]))
         raw_benefits['requires_review'] = bool(raw_benefits['review_reasons'])
         applied = resolve_requirements(raw_benefits, review, service_date, units)
@@ -201,7 +212,7 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
                                   'Verify the Aetna plan category and active fee for this code, modifier and visit.' if rules.get('aetna_schedule') else
                                   'Verify the payer plan category and active database fee for this code, modifier and visit.' if rules.get('payer_schedule') else
                                   'Verify the active clinic contract rate and exact plan mapping for this code, modifier and visit.')
-        if benefits.get('network_status') == 'unknown':
+        if benefits.get('network_status') == 'unknown' and not rules.get('original_medicare'):
             line['issues'].append('Verify provider participation for this plan and visit location.')
         if benefits.get('requires_review') and not benefits.get('review_reasons'):
             line['issues'].append('Saved payer evidence needs verification before pricing.')

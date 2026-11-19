@@ -1,5 +1,7 @@
 """Collection gates when a visit has a named secondary payer."""
 
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+
 from app.insurance.stedi_benefits.payer_order import verified_primary_order
 from app.insurance.stedi_payers import original_medicare_route
 from app.insurance.insurance_product import classify
@@ -28,6 +30,43 @@ def action(medicare_secondary: bool) -> str:
     return 'More than one plan may pay for this visit. The collection amount depends on how those plans coordinate benefits.'
 
 
+def original_medicare_office_share(result: dict, *, safe: bool, qmb_protected: bool) -> int | None:
+    """Return a supported Medicare-only, met-deductible office coinsurance estimate."""
+    benefits = result.get('benefits') or {}
+    price = result.get('price_range') or {}
+    lines = price.get('lines') or []
+    payer_id = (result.get('stedi_payer') or {}).get('id')
+    names = ((benefits.get('plan_details') or {}).get('names') or
+             ((result.get('plan_details') or {}).get('stedi') or {}).get('names'))
+    original = (benefits.get('original_medicare') is True or
+                original_medicare_route({'stediId': payer_id})
+                and classify(names, payer_id=payer_id) == 'original_medicare')
+    policy = result.get('collection_policy') if isinstance(result.get('collection_policy'), dict) else {}
+    line = lines[0] if len(lines) == 1 else {}
+    terms = line.get('benefits') or {}
+    allowed = line.get('allowed_cents')
+    patient = (line.get('calculation') or {}).get('patient_cents')
+    if not (safe and not qmb_protected and original and not benefits.get('has_secondary')
+            and (result.get('recovery') or {}).get('reason_code') != 'multiple_active_policies'
+            and policy.get('mode') != 'defer_to_claim'
+            and price.get('mode') == 'services' and price.get('complete') is True
+            and not price.get('conditional') and line.get('code') in {'99202', '99203', '99204', '99205',
+                                                                     '99212', '99213', '99214', '99215'}
+            and line.get('units') == 1 and line.get('allowed_basis') == 'medicare_fee_schedule'
+            and type(allowed) is int and allowed > 0 and type(patient) is int
+            and type(terms.get('deductible_remaining_cents')) is int
+            and terms['deductible_remaining_cents'] == 0
+            and terms.get('copay_cents') in {None, 0}
+            and price.get('patient_min_cents') == price.get('patient_max_cents') == patient):
+        return None
+    try:
+        percent = Decimal(str(terms.get('coinsurance_percent')))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+    expected = int((Decimal(allowed) / 5).quantize(Decimal('1'), rounding=ROUND_HALF_UP))
+    return patient if percent.is_finite() and percent == 20 and patient == expected else None
+
+
 def apply_original_medicare_deferral(result: dict, guidance: dict, source_errors: list,
                                      member_bound: bool, adverse: bool) -> None:
     """Defer collection for a verified Original Medicare office visit, preserving liability."""
@@ -47,6 +86,8 @@ def apply_original_medicare_deferral(result: dict, guidance: dict, source_errors
             and result.get('refresh_requires_selection') is not True
             and not result.get('eligibility_failure')
             and price.get('mode') in {'services', 'alternatives'} and lines
+            and (price.get('mode') == 'alternatives' or benefits.get('has_secondary')
+                 or (result.get('recovery') or {}).get('reason_code') == 'multiple_active_policies')
             and all(line.get('code') in {'99202', '99203', '99204', '99205',
                                          '99212', '99213', '99214', '99215'}
                     and line.get('units') == 1 for line in lines)):

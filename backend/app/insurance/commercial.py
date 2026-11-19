@@ -214,7 +214,11 @@ def estimate(lines: list[dict[str, Any]], benefits: dict[str, Any], rules: dict[
     if benefits.get("coverage_level") != "individual":
         raise CommercialError("A compatible individual benefit level is required for an automatic estimate.")
     out_of_network = benefits.get('network_status') == 'out_of_network'
-    if out_of_network:
+    original_medicare = rules.get('original_medicare') is True
+    if original_medicare:
+        if any(line.get('allowed_source') != 'medicare_fee_schedule' or not line.get('rate_id') for line in lines):
+            raise CommercialError('A sourced Medicare fee is required for every selected CPT.')
+    elif out_of_network:
         supported = {'payer_out_of_network', 'medicare_fee_schedule'}
         if (not verified_out_of_network(benefits) or rules.get('allowed_basis') not in supported or
                 any(line.get('allowed_source') != rules['allowed_basis'] or not line.get('rate_id') for line in lines)):
@@ -228,7 +232,7 @@ def estimate(lines: list[dict[str, Any]], benefits: dict[str, Any], rules: dict[
                                       ["The selected benefits contain an unresolved limit, authorization, referral, or payer review."]))
     if benefits.get('separate_copay_limit'):
         raise CommercialError('Separate copay and general out-of-pocket limits require a scoped copay advance or plan review.')
-    if _benefit_cents(benefits, 'oop_remaining_cents') == 0:
+    if not original_medicare and _benefit_cents(benefits, 'oop_remaining_cents') == 0:
         # Covered in-network services cannot exceed an exhausted patient cap.
         # These calculation inputs do not overwrite the returned benefit facts.
         benefits = {**benefits, 'deductible_remaining_cents': 0, 'coinsurance_percent': '0', 'copay_cents': 0}
@@ -253,7 +257,7 @@ def estimate(lines: list[dict[str, Any]], benefits: dict[str, Any], rules: dict[
         raise CommercialError("The estimation profile does not define its copay/coinsurance rule.")
     deductible_remaining = _benefit_cents(benefits, "deductible_remaining_cents")
     oop_remaining = _benefit_cents(benefits, "oop_remaining_cents")
-    if deductible_remaining is None or oop_remaining is None:
+    if deductible_remaining is None or (oop_remaining is None and not original_medicare):
         raise CommercialError("Remaining individual deductible and out-of-pocket values are required.")
     coinsurance_percent = benefits.get("coinsurance_percent")
     copay_cents = _benefit_cents(benefits, "copay_cents")
@@ -285,14 +289,14 @@ def estimate(lines: list[dict[str, Any]], benefits: dict[str, Any], rules: dict[
     copay = copay_cents if cost_share in {"copay", "cumulative"} else 0
     raw_patient = deductible + coinsurance_cents + copay
     allowed_share = min(allowed, raw_patient)
-    patient = min(allowed_share, oop_remaining)
+    patient = allowed_share if original_medicare else min(allowed_share, oop_remaining)
     return {
         "allowed_cents": allowed, "deductible_cents": deductible, "coinsurance_base_cents": remainder,
         "coinsurance_percent": str(coinsurance), "coinsurance_cents": coinsurance_cents,
         "copay_cents": copay, "allowed_cap_adjustment_cents": raw_patient - allowed_share,
         "oop_adjustment_cents": allowed_share - patient,
         "patient_cents": patient, "plan_cents": allowed - patient, "lines": explanation,
-        "cost_share": cost_share, "network_tier": 'out_of_network' if out_of_network else 'in_network',
+        "cost_share": cost_share, "network_tier": 'not_applicable' if original_medicare else 'out_of_network' if out_of_network else 'in_network',
         "possible_additional_out_of_network_charges_cents": None if out_of_network else 0,
         "calculation_version": "commercial-v1", "disclaimer": "Pre-service estimate only; final responsibility depends on services performed and payer adjudication." +
             (' For covered Medicare Advantage care, collect only plan-allowed cost sharing and apply member billing protections.'

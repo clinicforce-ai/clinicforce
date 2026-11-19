@@ -74,8 +74,7 @@ def build(result: dict, review: dict | None = None) -> dict:
             patient_message='Benefits will be checked closer to this appointment.', network='Check closer to visit',
             network_source='', requirements={kind: 'Check closer to visit' for kind in ('referral', 'authorization')})
         return guidance
-    if result.get('payment_mode') == 'cash':
-        return cash.build(result, review, guidance, price, lines)
+    if result.get('payment_mode') == 'cash': return cash.build(result, review, guidance, price, lines)
     identity = result.get('identity') or benefits.get('identity') or {}
     if zero_oop.apply(result, guidance, lines, planning): return guidance
     if guidance['network'] == 'Not reported' and lines and all(line.get('benefits', {}).get('network_independent') for line in lines):
@@ -131,6 +130,7 @@ def build(result: dict, review: dict | None = None) -> dict:
                 source_errors.append({'path': label + '.' + key, 'kind': 'invalid_calculation',
                                       'message': 'Invalid financial evidence: calculation returned an invalid amount.'})
     safe = safe and not source_errors
+    medicare_office_share = secondary_order.original_medicare_office_share(result, safe=bool(safe), qmb_protected=bool(qmb_protected))
     amount = None
     cigna_oap_televisit = False
     if safe and preview_zero_oop and verified_in_network(benefits) and not primary_secondary_copay:
@@ -165,7 +165,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         assumptions.extend(planning.get('assumptions') or [])
         guidance.update(status='estimated', basis='out_of_pocket_limit',
                         reason='The payer reports $0 remaining on the applicable in-network out-of-pocket limit for the selected covered services. No advance payment is needed.')
-    elif (amount is None and safe and not primary_secondary_copay and (verified_in_network(benefits) or benefits.get('network_status') == 'out_of_network')
+    elif (amount is None and safe and not primary_secondary_copay and (verified_in_network(benefits) or benefits.get('network_status') == 'out_of_network' or medicare_office_share is not None)
           and price.get('complete') and not price.get('conditional') and price.get('mode') != 'options'
           and (not unapproved_services or suggested_plan)):
         amount = price.get('patient_min_cents')
@@ -278,7 +278,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         policy_mode == 'collect_supported_advance' or
         fixed_copay and policy_mode == 'collect_verified_copay' or
         verified_out_of_network(benefits) and policy_mode == 'defer_to_claim'
-        and policy.get('allow_supported_oon_advance') is True)
+        and policy.get('allow_supported_oon_advance') is True) or medicare_office_share is not None
     calculated_in_network_advance = contract_advance_applies(
         benefits, price, lines, guidance['basis'], policy_approved, published_copay)
     if (amount is not None and amount > 0 and guidance['basis'] != 'ecw_billing_note'
@@ -303,6 +303,7 @@ def build(result: dict, review: dict | None = None) -> dict:
     if amount is not None and amount > 0 and calculated_in_network_advance:
         guidance['collection_rule'] = {'mode': 'calculated_in_network_advance',
                                        'reference': 'Selected CPTs, active clinic rates and member benefits'}
+    if amount is not None and amount > 0 and medicare_office_share is not None: guidance['collection_rule'] = {'mode': 'original_medicare_office_coinsurance', 'reference': 'Clinic-approved Medicare fee schedule and dated Part B benefit'}
     if amount is not None and amount > 0 and uhc_registration_copay:
         guidance['collection_rule'] = {'mode': 'uhc_choice_plus_registration_copay', 'reference': 'Current member-bound Choice Plus specialist office benefit and clinic network agreement'}
     elif amount is not None and amount > 0 and policy_approved and guidance['basis'] not in {'ecw_billing_note', 'cigna_refundable_office_copay'}:
@@ -471,8 +472,7 @@ def build(result: dict, review: dict | None = None) -> dict:
                 *[terms[key] for key in ('deductible_id', 'oop_id') if terms.get(key)]]))})
         for key in ('copay_limit_ids', 'deductible_waiver_ids', 'deductible_applicability_ids', 'family_oop_ids'):
             guidance['services'][-1]['selected_benefit_ids'].extend(terms.get(key) or [])
-        if guidance['basis'] == 'out_of_pocket_limit':
-            guidance['services'][-1]['patient_cents'] = 0
+        if guidance['basis'] == 'out_of_pocket_limit': guidance['services'][-1]['patient_cents'] = 0
     if guidance['basis'] == 'ecw_billing_note':
         guidance['patient_message'] = ('No payment is requested at arrival under the recorded eCW billing instruction. Final responsibility follows claim processing.'
             if note['kind'] == 'no_collection' else 'This advance uses the office copay recorded by the clinic. Additional services and final responsibility follow claim processing.')

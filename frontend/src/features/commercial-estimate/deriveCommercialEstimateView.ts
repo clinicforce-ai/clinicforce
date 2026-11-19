@@ -215,10 +215,12 @@ export function deriveCommercialEstimateView({
     outOfNetworkConfirmed &&
     (outOfNetworkAllowance ||
       ['office_copay', 'qmb_protection', 'bcbstx_proxy_advance'].includes(guidance?.basis || ''))
-  const refundableAdvance =
-    ['bcbstx_refundable_advance', 'cigna_refundable_office_copay'].includes(
+  const unconfirmedTierAdvance =
+    (['bcbstx_refundable_advance', 'cigna_refundable_office_copay'].includes(
       guidance?.basis || '',
-    ) && result?.encounter_summary?.collect_today_cents === guidance?.amount_cents
+    ) &&
+      result?.encounter_summary?.collect_today_cents === guidance?.amount_cents) ||
+    guidance?.collection_rule?.mode === 'original_medicare_office_coinsurance'
   const currentPayerAmount =
     benefits?.active === true &&
     benefits.service_date_matches !== false &&
@@ -228,7 +230,7 @@ export function deriveCommercialEstimateView({
     patientBenefitsBound &&
     ((!benefits.has_secondary && result?.recovery?.reason_code !== 'multiple_active_policies') ||
       guidance?.primary_secondary_copay === true) &&
-    (networkConfirmed || outOfNetworkCollection || independentOfficeCopay || refundableAdvance)
+    (networkConfirmed || outOfNetworkCollection || independentOfficeCopay || unconfirmedTierAdvance)
   const healthselectZeroArrival =
     result != null &&
     healthselectZero(result) &&

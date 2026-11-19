@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 from app.core import patient_store
 from app.core.patient_schema_insurance import initialize_insurance
-from app.insurance import medicare_fees
+from app.insurance import collection_guidance, encounter_summary, medicare_fees
 from app.api.routers import commercial_estimator as api
 
 
@@ -71,3 +71,36 @@ def test_live_visit_uses_medicare_database_fee_for_original_and_advantage(monkey
         assert priced['lines'][0]['allowed_basis'] == 'medicare_fee_schedule'
         assert priced['lines'][0]['allowed_cents'] == 18049
         assert priced['complete'] and priced['patient_max_cents'] == 3610
+
+
+def test_original_medicare_office_without_network_or_oop_returns_twenty_percent(monkeypatch):
+    def lookup(code, modifiers, units, *, service_date, place_of_service, provider_npi, patient_binding):
+        return {'id': 'synthetic-medicare-fee', 'code': code, 'modifier': '',
+                'allowed_cents': 11960, 'basis': 'medicare_fee_schedule',
+                'source_reference': 'Synthetic approved fee', 'effective_from': '2026-11-13',
+                'service_date': service_date, 'place_of_service': place_of_service,
+                'provider_npi': provider_npi, 'patient_binding': patient_binding}
+    monkeypatch.setattr(medicare_fees, 'estimate_rate', lookup)
+    identity = {'status': 'matched', 'binding': 'synthetic', 'match_version': 2}
+    benefits = {'active': True, 'original_medicare': True, 'has_secondary': False,
+        'service_date_matches': True, 'coverage_level': 'individual', 'identity': identity,
+        'network_status': 'unknown', 'deductible_remaining_cents': 0,
+        'coinsurance_percent': '20.0', 'copay_cents': None, 'oop_remaining_cents': None,
+        'referral_signal': 'unknown', 'authorization_signal': 'unknown',
+        'review_reasons': ['Confirm the remaining individual out-of-pocket maximum.',
+                           "Confirm the plan's referral requirement and, if required, that a referral is on file."],
+        'requires_review': True}
+    code = {'id': 'office', 'code': '99203', 'units': 1, 'modifiers': []}
+    price, issues = api._previsit_range('synthetic-clinic',
+        {'service_date': '2026-11-19', 'place_of_service': '11'},
+        {'rendering_provider': {'npi': '1234567890'}}, 'JDNSN', [code], benefits,
+        review={'selected_ids': ['office']})
+    assert not issues and price['complete']
+    assert price['lines'][0]['calculation']['patient_cents'] == 2392
+    result = {'payer': 'Original Medicare', 'stedi_payer': {'id': 'JDNSN'},
+              'benefits': benefits, 'identity': identity, 'price_range': price,
+              'codes': [code], 'selected_ids': ['office']}
+    guidance = collection_guidance.build(result)
+    summary = encounter_summary.build({**result, 'collection_guidance': guidance})
+    assert guidance['amount_cents'] == 2392
+    assert summary['collect_today_cents'] == 2392

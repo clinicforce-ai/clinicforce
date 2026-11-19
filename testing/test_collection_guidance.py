@@ -325,39 +325,61 @@ def test_patient_share_and_collection_policy_are_independent():
     assert encounter_summary.build({**result, 'collection_guidance': deferred})['estimated_total_patient_min_cents'] == 3800
 
 
-def test_original_medicare_office_collects_zero_without_zeroing_patient_liability():
-    result = scenario(3800)
+def test_original_medicare_only_office_collects_met_deductible_coinsurance():
+    result = scenario(2392)
     result.pop('collection_policy')
     result['stedi_payer'] = {'id': 'JDNSN'}
     result['identity'] = {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2}
-    result['benefits']['identity'] = result['identity']
+    result['benefits'].update(identity=result['identity'], original_medicare=True,
+        network_status='unknown', network_source=None, has_secondary=False)
+    result['price_range']['lines'][0].update(allowed_cents=11960,
+        allowed_basis='medicare_fee_schedule')
+    result['price_range']['lines'][0]['benefits'].update(
+        deductible_remaining_cents=0, copay_cents=None, coinsurance_percent='20',
+        requirements={kind: {'required': False, 'cleared': True}
+                      for kind in ('referral', 'authorization')})
     guidance = collection_guidance.build(result)
     summary = encounter_summary.build({**result, 'collection_guidance': guidance})
-    assert guidance['amount_cents'] == 0
-    assert guidance['basis'] == 'claim_after_service'
-    assert guidance['collection_rule']['mode'] == 'original_medicare_office_deferral'
-    assert summary['collect_today_cents'] == 0
-    assert summary['estimated_total_patient_min_cents'] == 3800
-    assert guidance['services'][0]['patient_cents'] is None
+    assert guidance['amount_cents'] == 2392
+    assert guidance['basis'] == 'anticipated_services'
+    assert guidance['collection_rule']['mode'] == 'original_medicare_office_coinsurance'
+    assert summary['collect_today_cents'] == 2392
+    assert summary['estimated_total_patient_min_cents'] == 2392
+    assert guidance['services'][0]['patient_cents'] == 2392
+    paid = collection_guidance.build(result, {'payments': {'reference': 'synthetic-receipt', 'amount_cents': 500}})
+    assert paid['amount_cents'] == 1892
+    for mutation in (
+        lambda value: value['benefits'].update(has_secondary=True),
+        lambda value: value.update(recovery={'reason_code': 'multiple_active_policies'}),
+        lambda value: value['benefits'].update(qmb_status='protected'),
+        lambda value: value['price_range']['lines'][0].update(allowed_cents=None),
+        lambda value: value['price_range']['lines'][0]['benefits'].update(coinsurance_percent='10'),
+        lambda value: value['price_range']['lines'][0]['benefits'].update(deductible_remaining_cents=None),
+    ):
+        blocked = deepcopy(result)
+        mutation(blocked)
+        assert collection_guidance.build(blocked)['amount_cents'] != 2392
     result['price_range']['mode'] = 'alternatives'
     result['price_range']['complete'] = False
     result['price_range']['lines'].append({**result['price_range']['lines'][0], 'id': 'office-alt', 'code': '99204'})
     assert collection_guidance.build(result)['amount_cents'] == 0
     result['price_range']['lines'].pop()
     result['price_range']['mode'] = 'services'
+    result['price_range']['complete'] = True
     result['benefits']['active'] = None
     assert collection_guidance.build(result)['amount_cents'] is None
     result['benefits']['active'] = True
     result['stedi_payer']['id'] = 'TPTWE'
-    assert collection_guidance.build(result)['amount_cents'] == 0
+    assert collection_guidance.build(result)['amount_cents'] == 2392
     result['benefits']['plan_details'] = {'names': ['Example Medicare Advantage PPO']}
+    result['benefits']['original_medicare'] = False
     assert collection_guidance.build(result)['amount_cents'] is None
     result['benefits'].pop('plan_details')
     result['stedi_payer']['id'] = 'EXAMPLE'
     assert collection_guidance.build(result)['amount_cents'] is None
 
 
-def test_texas_mac_part_b_office_reopens_insurance_and_collects_zero_without_price():
+def test_texas_mac_part_b_office_reopens_insurance_without_inventing_unpriced_share():
     result = scenario()
     result.pop('collection_policy')
     result.update(payer='Medicare Texas Part B', stedi_payer={'id': '04412'},
@@ -376,8 +398,8 @@ def test_texas_mac_part_b_office_reopens_insurance_and_collects_zero_without_pri
     reopened = api._previsit_result(case)
     assert reopened['payment_mode'] == 'insurance'
     assert 'cash_fallback' not in reopened
-    assert reopened['collection_guidance']['amount_cents'] == 0
-    assert reopened['collection_guidance']['basis'] == 'claim_after_service'
+    assert reopened['collection_guidance']['amount_cents'] is None
+    assert reopened['collection_guidance']['basis'] == 'missing_collection_inputs'
     case['visit_review'] = {'payment_mode': 'cash'}
     assert api._previsit_result(case)['payment_mode'] == 'cash'
 
