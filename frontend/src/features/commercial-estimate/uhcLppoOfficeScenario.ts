@@ -11,7 +11,7 @@ export function uhcLppoOfficeScenario(result: PrevisitEstimate) {
   const plan = result.plan_details?.stedi?.names || benefits?.plan_details?.names || []
   const percent = Number(terms?.coinsurance_percent)
   const fee = line?.allowed_cents
-  const identity = result.identity || benefits?.identity
+  const identity = result.identity
   const dates = benefits?.coverage_evidence
   const visitDateBound =
     benefits?.service_date_matches === true ||
@@ -39,7 +39,12 @@ export function uhcLppoOfficeScenario(result: PrevisitEstimate) {
     identity?.match_version !== 2 ||
     !identity.binding ||
     !['matched', 'reconciled', 'warning'].includes(identity.status || '') ||
-    (identity.status === 'warning' && result.identity?.policy_differences?.length) ||
+    (identity.status === 'warning' &&
+      identity.policy_differences?.length &&
+      !(
+        identity.reconciliation_rule === 'uhc_middle_name_variant' &&
+        identity.policy_differences.every((difference) => difference.field === 'subscriber_first')
+      )) ||
     !/united\s*health\s*care/i.test(result.payer || '') ||
     plan.length !== 1 ||
     !/^LPPO-UNITEDHEALTHCARE GROUP MEDICARE ADVANTAGE/i.test(plan[0]) ||

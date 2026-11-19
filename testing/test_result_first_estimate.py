@@ -123,6 +123,37 @@ def test_aetna_shortened_given_name_and_payer_dob_bind_one_self_policy():
         assert identity.compare(payer, {**coverage, **changed})['status'] == 'review'
 
 
+def test_uhc_middle_initial_reconciles_one_self_policy_without_hiding_differences():
+    coverage = {'patient_id': 'synthetic-patient', 'coverage_id': 'synthetic-policy',
+                'active_coverages': 1, 'subscriber_patient_linked': True,
+                'relationship': '18', 'payer_id': 'KMQTZ', 'member_id': 'SYN123456',
+                'patient_first': 'Jordan Lee', 'patient_last': 'Rivera',
+                'patient_birth_date': '1950-01-10', 'subscriber_first': 'Jordan Lee',
+                'subscriber_last': 'Rivera', 'subscriber_birth_date': '1950-01-10'}
+    payer = {'payerId': 'KMQTZ', 'subscriber': {'memberId': 'SYN123456',
+             'dateOfBirth': '1950-01-10', 'name': {'person': {
+                 'firstName': 'JORDAN', 'middleName': 'L', 'lastName': 'RIVERA'}},
+             'additionalInformation': {'group': {'number': 'SYN-GROUP'}}},
+             'plans': [{'name': 'LPPO-UNITEDHEALTHCARE GROUP MEDICARE ADVANTAGE (PPO)',
+                        'benefits': {'statuses': [{'status': 'ACTIVE_COVERAGE',
+                            'service': {'system': 'STC', 'value': '30'}}]}}]}
+    matched = identity.compare(payer, coverage)
+    assert matched['status'] == 'warning'
+    assert matched['reconciliation_rule'] == 'uhc_middle_name_variant'
+    assert {row['field'] for row in matched['differences']} == {'first_name'}
+    assert {row['field'] for row in matched['policy_differences']} == {'subscriber_first'}
+    assert identity.patient_benefits_bound(matched)
+    assert identity.payer_identity_verified(matched)
+    for changed in ({'member_id': 'OTHER'}, {'patient_birth_date': '1950-01-11'},
+                    {'patient_last': 'Other'}, {'active_coverages': 2},
+                    {'other_active_coverage': True},
+                    {'group_number': 'OTHER'}, {'subscriber_first': 'Other'}):
+        assert identity.compare(payer, {**coverage, **changed})['status'] == 'review'
+    wrong_middle = deepcopy(payer)
+    wrong_middle['subscriber']['name']['person']['middleName'] = 'Q'
+    assert identity.compare(wrong_middle, coverage)['status'] == 'review'
+
+
 def test_uhc_choice_plus_specialist_provider_role_copay_wins_over_generic_office_rows():
     scope = {'coverageLevel': 'INDIVIDUAL', 'network': {'indicator': 'IN_NETWORK'},
              'placesOfService': [{'code': '10'}]}
@@ -203,6 +234,40 @@ def test_saved_uhc_registration_response_rebinds_and_reprices_with_library_contr
              'status': 'staff_guidance_enabled'}
     saved_pricing.refresh_saved_network_pricing(result, case, 'primary', route, ('unknown', None))
     assert called and called[0][-1] == route
+
+
+def test_saved_uhc_office_middle_name_rebinds_from_protected_response_and_reprices(monkeypatch):
+    raw = json.dumps({'payerId': 'KMQTZ', 'subscriber': {'memberId': 'SYN123456'}}).encode()
+    case = {'previsit': {'request_state': 'complete'}, 'previsit_raw_object_key': 'synthetic-key',
+            'previsit_raw_sha256': hashlib.sha256(raw).hexdigest(),
+            'previsit_context': {'payer_id': 'KMQTZ', 'inputs': {'service_date': '2026-11-19',
+                'place_of_service': '11'}, 'source': {}}}
+    result = {'payer': 'United Healthcare', 'identity': {'status': 'review'},
+              'benefits': {'active': True, 'network_status': 'in_network',
+                           'network_source': 'clinic_library_contract'},
+              'price_range': {'lines': []}}
+    fresh = {'active': True, 'service_date_matches': True,
+             'network_status': 'in_network', 'network_source': 'clinic_library_contract',
+             'identity': {'status': 'warning', 'match_version': 2, 'binding': 'synthetic',
+                          'reconciliation_rule': 'uhc_middle_name_variant'}}
+    monkeypatch.setattr(saved_pricing._api.object_store, 'get_object_bytes', lambda _: raw)
+    monkeypatch.setattr(saved_pricing._api, '_case_benefits', lambda *_: fresh)
+    assert saved_pricing.refresh_saved_uhc_registration_benefits(result, case) is True
+    assert result['identity']['reconciliation_rule'] == 'uhc_middle_name_variant'
+    called = []
+    monkeypatch.setattr(saved_pricing.payer_fees, 'schedule_for_result', lambda _: None)
+    monkeypatch.setattr(saved_pricing, '_reprice_saved_new_network',
+                        lambda *args: called.append(args))
+    route = {'id': 'synthetic-route', 'display_name': 'United Healthcare'}
+    saved_pricing.refresh_saved_network_pricing(result, case, 'synthetic-clinic', route,
+        ('in_network', 'clinic_library_contract'), identity_refreshed=True)
+    assert called and called[0][-1] == route
+    tampered = deepcopy(case)
+    tampered['previsit_raw_sha256'] = '0' * 64
+    blocked = {'payer': 'United Healthcare', 'identity': {'status': 'review'},
+               'benefits': {'active': True}}
+    assert saved_pricing.refresh_saved_uhc_registration_benefits(blocked, tampered) is False
+    assert blocked['identity']['status'] == 'review'
 
 
 def test_payer_matched_dependent_does_not_trigger_repeat_policy_recovery():

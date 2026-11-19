@@ -64,6 +64,7 @@ export type CombinedEmgPlan = {
 export type PrevisitIdentity = {
   status: 'matched' | 'warning' | 'review' | 'reconciled'
   match_version?: number
+  reconciliation_rule?: string | null
   missing_fields?: string[]
   message?: string
   binding: string | null

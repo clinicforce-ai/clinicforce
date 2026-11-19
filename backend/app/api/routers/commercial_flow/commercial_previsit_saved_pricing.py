@@ -296,42 +296,45 @@ def refresh_saved_cigna_office_benefits(result: dict, case: dict, practice_id: s
     result.setdefault('appointment_context', {})['place_of_service'] = inputs['place_of_service']
 
 
-def refresh_saved_uhc_registration_benefits(result: dict, case: dict) -> None:
-    """Reproject a saved Choice Plus response after identity or OOP row fixes."""
+def refresh_saved_uhc_registration_benefits(result: dict, case: dict) -> bool:
+    """Reproject a saved UHC response after a corroborated identity or OOP fix."""
     context = case.get('previsit_context') or {}
     inputs = context.get('inputs') or {}
     old = result.get('benefits') or {}
     identity_review = (result.get('identity') or {}).get('status') == 'review'
     oop_conflict = bool(old.get('oop_remaining_conflict_ids'))
+    pos = inputs.get('place_of_service')
     if (str(result.get('payer') or '').casefold().replace(' ', '') != 'unitedhealthcare'
             or not (identity_review or oop_conflict)
             or old.get('active') is not True or old.get('has_secondary')
             or old.get('coverage_status_conflict') or old.get('source_errors')
             or case.get('previsit', {}).get('request_state') != 'complete'
-            or inputs.get('place_of_service') != '10'
+            or (pos != '10' and not (pos == '11' and identity_review))
             or not case.get('previsit_raw_object_key') or not case.get('previsit_raw_sha256')):
-        return
+        return False
     try:
         raw = _api.object_store.get_object_bytes(case['previsit_raw_object_key'])
         if _api.hashlib.sha256(raw).hexdigest() != case['previsit_raw_sha256']:
-            return
+            return False
         payload = _api.json.loads(raw)
         source = context.get('source') or {}
         fresh = _api._case_benefits(payload, inputs, source, case)
         matched = fresh.get('identity') or {}
-        if (identity_review and matched.get('reconciliation_rule') != 'payer_registration_variant'
+        expected_rule = 'uhc_middle_name_variant' if pos == '11' else 'payer_registration_variant'
+        if (identity_review and matched.get('reconciliation_rule') != expected_rule
                 or oop_conflict and fresh.get('oop_remaining_conflict_ids')
                 or not patient_plan_applies(fresh, matched, str(inputs.get('service_date') or ''))
                 or fresh.get('source_errors')):
-            return
+            return False
     except Exception:
-        return
+        return False
     result['benefits'] = fresh
     result['identity'] = matched
     current_plan = (result.get('plan_details') or {}).get('stedi') or {}
     if not current_plan.get('response_payer_name'):
         result.setdefault('plan_details', {})['stedi'] = {
             **current_plan, 'response_payer_name': _api.commercial.plan_details(payload).get('response_payer_name')}
+    return identity_review
 
 
 def restore_active_blue_cross_insurance(result: dict, case: dict) -> None:
@@ -454,7 +457,8 @@ def restore_saved_humana_hmo_product(result: dict, case: dict) -> None:
 
 
 def refresh_saved_network_pricing(result: dict, case: dict, practice_id: str,
-                                  route_payer: dict | None, prior_network: tuple) -> None:
+                                  route_payer: dict | None, prior_network: tuple,
+                                  identity_refreshed: bool = False) -> None:
     restore_saved_humana_hmo_product(result, case)
     benefits = result.get('benefits') or {}
     current_network = (benefits.get('network_status'), benefits.get('network_source'))
@@ -463,7 +467,7 @@ def refresh_saved_network_pricing(result: dict, case: dict, practice_id: str,
         'clinic_attested_phcs_roster'})
     payer_name = str((route_payer or {}).get('display_name') or result.get('payer') or '')
     is_schedule_payer = aetna_fees.is_aetna_payer(payer_name) or bool(payer_fees.schedule_for_result({**result, 'payer': payer_name}))
-    if network_changed or saved_fep_standard_office_needs_reprice(result) or is_schedule_payer:
+    if network_changed or identity_refreshed or saved_fep_standard_office_needs_reprice(result) or is_schedule_payer:
         payer_id = str((case.get('previsit_context') or {}).get('payer_id') or '')
         route = group_contract_support.eligibility_route(result, payer_id, route_payer)
         _reprice_saved_new_network(result, case, practice_id, route or route_payer)

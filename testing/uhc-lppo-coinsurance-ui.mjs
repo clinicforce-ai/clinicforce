@@ -11,6 +11,7 @@ async function load(path) {
 }
 const { default: CommercialCostBreakdown } = await load('../frontend/src/features/commercial-estimate/CommercialCostBreakdown.tsx')
 const { default: ArrivalAmountSummary } = await load('../frontend/src/features/commercial-estimate/ArrivalAmountSummary.tsx')
+const { deriveCommercialEstimateView } = await load('../frontend/src/features/commercial-estimate/deriveCommercialEstimateView.ts')
 const React = require('react')
 const { renderToStaticMarkup } = require('react-dom/server')
 
@@ -57,4 +58,21 @@ assert.doesNotMatch(table({ ...result, billing_protection: { status: 'qmb' } }),
 assert.doesNotMatch(table(result, { ...model, previousEstimate: true }), /\$19\.27/)
 assert.doesNotMatch(table({ ...result, benefits: { ...result.benefits, source_errors: [{ kind: 'invalid' }] } }), /\$19\.27/)
 assert.doesNotMatch(table({ ...result, recovery: { reason_code: 'multiple_active_policies' } }), /\$19\.27/)
+const payerNameVariant = { ...result, identity: {
+  match_version: 2, binding: 'synthetic-binding', status: 'warning',
+  reconciliation_rule: 'uhc_middle_name_variant',
+  differences: [{ field: 'first_name' }],
+  policy_differences: [{ field: 'subscriber_first' }],
+} }
+assert.match(table(payerNameVariant), /Amount to collect at visit · provisional.*\$19\.27/s)
+assert.match(renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
+  { result: payerNameVariant, model, partialCopay: null, visibleAmount: false })), /\$19\.27/)
+assert.doesNotMatch(table({ ...payerNameVariant, identity: {
+  ...payerNameVariant.identity, reconciliation_rule: undefined } }), /\$19\.27/)
+const inNetworkVariant = { ...payerNameVariant, benefits: { ...payerNameVariant.benefits,
+  network_status: 'in_network', network_source: 'clinic_library_contract' },
+  collection_guidance: { ...payerNameVariant.collection_guidance, services: [] } }
+const view = deriveCommercialEstimateView({ result: inNetworkVariant, appointments: [],
+  selectedVisit: '', busy: null, error: null, readOnly: true, recovering: false })
+assert.equal(view.networkLabel, 'In network')
 console.log('UHC LPPO office provisional coinsurance: $19.27 from $96.33 reference')

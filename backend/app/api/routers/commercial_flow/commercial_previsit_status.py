@@ -334,7 +334,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     suppress_saved_ambiguous_combined_zero_oop(result)
     refresh_saved_year_to_date_oop_candidate(result, case)
     upgrade_saved_biopsy_preview(result, case)
-    refresh_saved_uhc_registration_benefits(result, case)
+    uhc_identity_refreshed = refresh_saved_uhc_registration_benefits(result, case)
     refresh_saved_cigna_office_benefits(result, case, practice_id or '')
     availity = case.get('availity_visit_reference') or {}
     if (availity.get('evidence') and availity.get('context_token') == case['previsit_context'].get('context_token')
@@ -384,7 +384,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         prior_network = ((result.get('benefits') or {}).get('network_status'),
                          (result.get('benefits') or {}).get('network_source'))
         recheck_saved_network_evidence(result, case, practice_id, route_payer)
-        refresh_saved_network_pricing(result, case, practice_id, route_payer, prior_network)
+        refresh_saved_network_pricing(result, case, practice_id, route_payer, prior_network, uhc_identity_refreshed)
         _recheck_saved_payer_allowance(result, case, practice_id)
         refresh_saved_requirements(_api, result, case, practice_id)
         refresh_saved_cross_payer_planning(result, case, practice_id, route_payer)

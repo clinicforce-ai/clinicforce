@@ -21,6 +21,7 @@ import CommercialCashQuoteForm from './CommercialCashQuoteForm'
 import { AvailityArrivalAmount, AvailityVisitTable } from './AvailityVisitPlanning'
 import { availityVisitPlanning } from './availityVisitPlanning'
 import { cignaBtxOfficeScenario } from './cignaBtxOfficeScenario'
+import { uhcLppoOfficeScenario } from './uhcLppoOfficeScenario'
 import {
   pendingHumanaSpecialistCopay,
   supportedHumanaSpecialistAdvance,
@@ -84,6 +85,8 @@ export default function CommercialOverview({
     payerReportedPartialCents == null ? copay.cardOfficePlanningCopay(result, model) : null
   const combinedPlan = !cash && !previousEstimate ? result.combined_emg_plan : null
   const cignaBtxAdvance = cignaBtxOfficeScenario(result, model)
+  const lppoOffice =
+    !cash && !previousEstimate && !calculating ? uhcLppoOfficeScenario(result) : null
   const showSelectedRequirements = shouldShowSelectedRequirements(
     result,
     plannedCodes,
@@ -98,6 +101,7 @@ export default function CommercialOverview({
   )
   const visibleAmount =
     Boolean(amount) ||
+    lppoOffice != null ||
     cignaBtxAdvance != null ||
     combinedPlan != null ||
     provisionalAmount != null ||
@@ -363,14 +367,16 @@ export default function CommercialOverview({
               <summary>
                 {combinedPlan
                   ? 'How the planning amount was calculated'
-                  : amount
+                  : amount || lppoOffice
                     ? 'Why this amount?'
                     : 'Why this needs review'}
               </summary>
               <p>
                 {combinedPlan
                   ? `${money(combinedPlan.office_copay_cents)} office copay plus ${combinedPlan.coinsurance_percent}% of ${money(combinedPlan.diagnostic_allowed_cents)} diagnostic allowance. Final responsibility follows the processed claim.`
-                  : model.summaryExplanation}
+                  : lppoOffice
+                    ? `${lppoOffice.percent}% × ${money(lppoOffice.fee)} clinic Medicare fee reference gives ${money(lppoOffice.share)} before verified payments. The UHC allowance and final claim share remain unconfirmed; reconcile the separate policy conflict before charging.`
+                    : model.summaryExplanation}
               </p>
             </details>
           )}
