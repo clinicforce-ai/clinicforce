@@ -222,7 +222,7 @@ const unconfirmedCopay = { ...deposit,
     benefits: { active: true, copay_cents: 10000 } }] },
   collection_guidance: { amount_cents: 10000, status: 'estimated',
     basis: 'cigna_refundable_office_copay', payer_reported_office_copay_cents: 10000,
-    reason: 'Refundable payer copay; provider tier remains unconfirmed.', services: [] },
+    reason: 'Collect the payer-reported specialist office copay as a refundable advance. Provider participation for this exact product is still unconfirmed; reconcile the processed claim and refund any excess.', services: [] },
   encounter_summary: { collect_today_cents: 10000, estimated_total_patient_min_cents: null },
 }
 const derivedUnconfirmedCopay = deriveCommercialEstimateView({
