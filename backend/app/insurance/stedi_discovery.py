@@ -265,7 +265,8 @@ def inquiry_eligible(item: dict, inputs: dict, source: dict) -> bool:
     allowed = {'ADDITIONAL_IDENTITY_EVIDENCE_REQUIRED', 'ACTIVE_MEDICAL_COVERAGE_NOT_VERIFIED',
                'COVERAGE_DATE_NOT_VERIFIED'}
     return (not set(verification['reason_codes']) - allowed
-            or address_conflict_inquiry(item, inputs, source))
+            or address_conflict_inquiry(item, inputs, source)
+            or cigna_member_change_inquiry(item, inputs, source))
 
 
 def address_conflict_inquiry(item: dict, inputs: dict, source: dict) -> bool:
@@ -287,9 +288,31 @@ def address_conflict_inquiry(item: dict, inputs: dict, source: dict) -> bool:
     return 'PATIENT_ADDRESS_MISMATCH' in reasons and not reasons - allowed
 
 
+def cigna_member_change_inquiry(item: dict, inputs: dict, source: dict) -> bool:
+    """Use one active Cigna discovery member as an inquiry hint, never as benefit proof."""
+    identity = candidate_identity(item, inputs)
+    payer_name = (item.get('payer') or {}).get('name') or ''
+    if (not identity or identity['relationship'] != 'self' or not identity['address_conflict']
+            or identity['surname_typo'] or not identity.get('group_number')
+            or source.get('active_coverages') != 1 or normalized(source.get('payer')) != 'cigna'
+            or normalized(payer_name) not in {'chlic', 'cigna'}
+            or not inputs.get('member_id') or
+            normalized(inputs['member_id']) == normalized(identity['member_id'])):
+        return False
+    patient_dob = birth_date((inputs.get('patient') or {}).get('patient_birth_date'))
+    if (not patient_dob or not identity.get('subscriber_birth_date')
+            or birth_date(identity['subscriber_birth_date']) != patient_dob
+            or not active_medical(item, inputs, '30')):
+        return False
+    reasons = set(verify_candidate(item, inputs, source)['reason_codes'])
+    return 'PATIENT_ADDRESS_MISMATCH' in reasons and not reasons - {
+        'PATIENT_ADDRESS_MISMATCH', 'ADDITIONAL_IDENTITY_EVIDENCE_REQUIRED'}
+
+
 def payer_followup_confirms(discovered: dict, verified: dict, inputs: dict, source: dict) -> bool:
     """Bind a fresh member-specific 271 despite the discovery address conflict."""
-    if not address_conflict_inquiry(discovered, inputs, source):
+    cigna_member_change = cigna_member_change_inquiry(discovered, inputs, source)
+    if not (address_conflict_inquiry(discovered, inputs, source) or cigna_member_change):
         return False
     first = candidate_identity(discovered, inputs)
     second = candidate_identity(verified, inputs)
@@ -301,6 +324,9 @@ def payer_followup_confirms(discovered: dict, verified: dict, inputs: dict, sour
     required = ('member_id', 'subscriber_first', 'subscriber_last', 'subscriber_birth_date', 'relationship_code')
     if any(not first.get(key) or not second.get(key) or
            normalized(first[key]) != normalized(second[key]) for key in required):
+        return False
+    if cigna_member_change and (not second.get('group_number') or
+            normalized(first['group_number']) != normalized(second['group_number'])):
         return False
     return all(not first.get(key) or not second.get(key) or normalized(first[key]) == normalized(second[key])
                for key in ('group_number', 'plan_number'))

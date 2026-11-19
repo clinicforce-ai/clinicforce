@@ -151,13 +151,19 @@ async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict
                 case.update(await _api.run_in_threadpool(_api._save, case, session, 'subscriber-link-unresolved'))
                 return
             coverage = _api._discovered_coverage(inputs, source, item)
-        address_inquiry = bool(inquiry_only and not ecw_route and
-            _api.stedi_discovery.address_conflict_inquiry(item, inputs, source))
+        cigna_member_inquiry = bool(inquiry_only and not ecw_route
+            and discovery.get('identity_pathway') == 'cigna_member_followup'
+            and _api.stedi_discovery.cigna_member_change_inquiry(item, inputs, source))
+        address_inquiry = bool(inquiry_only and not ecw_route and (
+            _api.stedi_discovery.address_conflict_inquiry(item, inputs, source) or cigna_member_inquiry))
         api_key = _api.stedi_financial.credentials(session['practice_id'])
         payer_data = item.get('payer') or {}
         routes = []
+        payer_ids = [str(value) for value in (item.get('payerId'), payer_data.get('payorIdentification')) if value]
+        if cigna_member_inquiry and context.get('payer_id') in {'HGJLR', '62308'}:
+            payer_ids = [context['payer_id']]
         payer = selected_route or await _api.stedi_payers.search_payer(payer_data.get('name') or payer_data.get('lastName') or '',
-            [str(value) for value in (item.get('payerId'), payer_data.get('payorIdentification')) if value], api_key, candidates=routes)
+            payer_ids, api_key, candidates=routes)
         if not payer:
             if routes:
                 discovery.update(payer_routes=routes, route_source='returned_policy',
@@ -243,8 +249,10 @@ async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict
             session['practice_id'], case['id'], 'stedi-recovered-eligibility.json', saved_bytes, 'application/json')
         discovery['eligibility_sha256'] = _api.hashlib.sha256(saved_bytes).hexdigest()
         returned_identity = _api.stedi_discovery.candidate_identity(verified, inputs)
-        payer_confirmed = bool(address_inquiry and
-            _api.stedi_discovery.payer_followup_confirms(item, verified, inputs, source))
+        payer_confirmed = bool(address_inquiry
+            and _api.stedi_discovery.payer_followup_confirms(item, verified, inputs, source)
+            and (not cigna_member_inquiry or payer['stediId'] in {'HGJLR', '62308'}
+                 and verified.get('tradingPartnerServiceId') == payer['stediId']))
         identity_matches = False
         recorded = _api.insurance_identity.compare(verified, _api._coverage_snapshot(inputs, source))
         card_confirmed = bool(item.get('evidence_source') == 'insurance_card'
@@ -365,16 +373,21 @@ async def _start_previsit_recovery(case: dict, session: dict, provider: dict, ba
             candidates = (_api.stedi_discovery.candidates(payload, case['previsit_context']['inputs'],
                 case['previsit_context']['source']) if isinstance(payload, dict)
                 and payload.get('status') == 'COMPLETE' and not payload.get('errors') else [])
-            one = candidates[0] if len(candidates) == 1 else None
+            active = [row for row in candidates if row.get('active_medical')]
+            one = (active[0] if len(active) == 1 and _api.stedi_discovery.active_policy_count(
+                candidates, payload.get('items') or [], _api._previsit_service_types(
+                    case['previsit_context']['inputs'])) == 1 else None)
             item = (payload.get('items') or [])[one['index']] if one else None
         except Exception:
             one = item = None
-        if (one and item and one['active_medical'] and one['inquiry_eligible']
-                and _api.stedi_discovery.address_conflict_inquiry(
-                    item, case['previsit_context']['inputs'], case['previsit_context']['source'])):
+        inputs, source = case['previsit_context']['inputs'], case['previsit_context']['source']
+        cigna_member_inquiry = bool(item and _api.stedi_discovery.cigna_member_change_inquiry(item, inputs, source))
+        if (one and item and one['inquiry_eligible'] and (
+                _api.stedi_discovery.address_conflict_inquiry(item, inputs, source) or cigna_member_inquiry)):
             recovery.update(request_state='pending', stage='eligibility', outcome=None,
                 exhausted=False, selected_candidate_id=one['id'], candidates=candidates,
-                evidence_source='stedi_discovery')
+                evidence_source='stedi_discovery',
+                identity_pathway='cigna_member_followup' if cigna_member_inquiry else None)
             case = await _api.run_in_threadpool(_api._save, case, session, 'stedi-saved-candidate-inquiry-pending')
             background_tasks.add_task(_api._recheck_discovery_candidate, case, session, provider,
                 discovery_payload=payload, inquiry_only=True)

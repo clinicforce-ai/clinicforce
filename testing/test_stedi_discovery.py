@@ -1091,6 +1091,100 @@ class RecoveryTest(IsolatedAsyncioTestCase):
         await api._start_previsit_recovery(case, session, provider, tasks)
         assert len(tasks.tasks) == 1
 
+    async def test_saved_cigna_member_change_ignores_inactive_discovery_entries(self):
+        case, session, provider, discovered = setup()
+        inputs, source = case['previsit_context']['inputs'], case['previsit_context']['source']
+        inputs.update(member_id='OLD-ID', group_number='OLD-GROUP', reason='Migraine')
+        source.update(payer='Cigna', active_coverages=1)
+        case['previsit_context']['result']['payer'] = 'Cigna'
+        case['previsit_context']['payer_id'] = 'HGJLR'
+        discovered.update(payer={'name': 'CHLIC', 'payorIdentification': 'HGJLR'},
+                          tradingPartnerServiceId='HGJLR')
+        discovered['subscriber'].update(memberId='NEW-ID', groupNumber='NEW-GROUP',
+            address={'address1': '200 Prior St', 'city': 'Austin', 'state': 'TX', 'postalCode': '78702'})
+        discovered['benefitsInformation'].append({
+            'code': 'B', 'serviceTypeCodes': ['98'], 'benefitAmount': '50',
+            'timeQualifierCode': '27', 'coverageLevelCode': 'IND',
+            'inPlanNetworkIndicatorCode': 'Y',
+            'eligibilityAdditionalInformation': {'industryCode': '11', 'industry': 'Office'},
+            'additionalInformation': [{'description': 'Specialist'}]})
+        discovered['benefitsInformation'][0]['additionalInformation'] = [
+            {'description': 'Provider is in network based on NPI ID provided in request'}]
+        inactive = deepcopy(discovered)
+        inactive['payer'] = {'name': 'UnitedHealthcare'}
+        inactive['subscriber']['memberId'] = 'INACTIVE-ID'
+        inactive['benefitsInformation'] = [{'code': '6', 'serviceTypeCodes': ['30', '98'],
+                                            'name': 'Inactive Coverage'}]
+        other_inactive = deepcopy(inactive)
+        other_inactive['subscriber']['memberId'] = 'SECOND-INACTIVE-ID'
+        payload = {'status': 'COMPLETE', 'coveragesFound': 3,
+                   'items': [inactive, other_inactive, discovered]}
+        candidates = discovery.candidates(payload, inputs, source)
+        assert len(candidates) == 3
+        assert [row['active_medical'] for row in candidates] == [False, False, True]
+        assert discovery.cigna_member_change_inquiry(discovered, inputs, source)
+        for field, value in [('memberId', 'WRONG-ID'), ('groupNumber', 'WRONG-GROUP'),
+                             ('dateOfBirth', '19700101')]:
+            wrong = deepcopy(discovered)
+            wrong['subscriber'][field] = value
+            assert not discovery.payer_followup_confirms(discovered, wrong, inputs, source)
+        missing_group = deepcopy(discovered)
+        missing_group['subscriber'].pop('groupNumber')
+        assert not discovery.payer_followup_confirms(discovered, missing_group, inputs, source)
+        recovery = case['previsit_discovery']
+        recovery.update(request_state='complete', outcome='review_needed',
+            reason_code='identity_or_coverage_review', raw_object_key='protected',
+            candidate_version=5, checked_at=datetime.now(timezone.utc).isoformat(),
+            identity_binding=api._recovery_binding(inputs, source), candidates=candidates)
+        tasks = BackgroundTasks()
+        with patch.object(api.object_store, 'get_object_bytes', return_value=json.dumps(payload).encode()), \
+             patch.object(api, '_save', side_effect=lambda value, *_: value):
+            await api._start_previsit_recovery(case, session, provider, tasks)
+        assert len(tasks.tasks) == 1
+        assert recovery['identity_pathway'] == 'cigna_member_followup'
+        assert recovery['selected_candidate_id'] == candidates[2]['id']
+        with patch.object(api.stedi_payers, 'search_payer', AsyncMock(return_value={
+                 'stediId': 'HGJLR', 'displayName': 'Cigna'})) as route_lookup, \
+             patch.object(api, '_post_stedi_eligibility', AsyncMock(return_value=(
+                 httpx.Response(200), discovered, False))) as inquiry, \
+             patch.object(api.object_store, 'put_staff_document', return_value='protected'), \
+             patch.object(api, '_save', side_effect=lambda value, *_: value):
+            await api._recheck_discovery_candidate(case, session, provider,
+                discovery_payload=payload, inquiry_only=True)
+        request = inquiry.await_args.args[2]
+        assert route_lookup.await_args.args[1] == ['HGJLR']
+        assert request['subscriber']['memberId'] == 'NEW-ID'
+        assert [row['value'] for row in request['encounter']['services']] == ['98', '30']
+        assert recovery['outcome'] == 'recovered'
+        result = api._previsit_result(case)
+        assert result['coverage_status'] == 'VERIFIED'
+        assert result['payment_mode'] == 'insurance'
+        assert result['insurance_details']['member_id'] == 'NEW-ID'
+        assert result['benefits']['active'] is True
+        assert result['benefits']['copay_cents'] == 5000
+
+    async def test_saved_cigna_member_change_requires_one_active_policy(self):
+        case, session, provider, discovered = setup()
+        inputs, source = case['previsit_context']['inputs'], case['previsit_context']['source']
+        inputs['member_id'] = 'OLD-ID'
+        source['payer'] = 'Cigna'
+        discovered['payer'] = {'name': 'CHLIC'}
+        discovered['subscriber'].update(memberId='NEW-ID', groupNumber='NEW-GROUP',
+            address={'address1': '200 Prior St', 'city': 'Austin', 'state': 'TX', 'postalCode': '78702'})
+        other = deepcopy(discovered)
+        other['subscriber']['memberId'] = 'ANOTHER-ID'
+        payload = {'status': 'COMPLETE', 'coveragesFound': 2, 'items': [discovered, other]}
+        recovery = case['previsit_discovery']
+        recovery.update(request_state='complete', outcome='review_needed',
+            reason_code='identity_or_coverage_review', raw_object_key='protected',
+            candidate_version=5, checked_at=datetime.now(timezone.utc).isoformat(),
+            identity_binding=api._recovery_binding(inputs, source))
+        tasks = BackgroundTasks()
+        with patch.object(api.object_store, 'get_object_bytes', return_value=json.dumps(payload).encode()), \
+             patch.object(api, '_save', side_effect=lambda value, *_: value):
+            await api._start_previsit_recovery(case, session, provider, tasks)
+        assert not tasks.tasks
+
     async def test_address_conflict_followup_with_wrong_member_stays_in_review(self):
         _, _, _, discovered = setup()
         discovered['subscriber']['address'] = {
