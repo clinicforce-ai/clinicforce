@@ -9,14 +9,14 @@ from app.insurance.identity import generic_plan_label, payer_identity_verified
 from app.insurance.library_network_exclusions import product_kind
 from app.insurance.requirements.evidence import _key
 from app.insurance.requirements.aetna_choice_pos_ii import prior_date_office
-from app.insurance.requirements.aetna_value_plus import office_99213 as aetna_value_plus_office
+from app.insurance.requirements.aetna_value_plus import office_99213 as aetna_value_plus_office, esa_ppo_office_referral
 from app.insurance.requirements.uhc_choice_plus import UHC_TEXAS_CHOICE_PLUS_SOURCE, _uhc_choice_plus_referral
 from app.insurance.requirements.uhc_texas import decision as uhc_tx_qmb_office_decision, UHC_TX_MA_REFERRAL_SOURCE
 from app.insurance.requirements.fep_sources import FEP_PSHB_2026_SOURCE, FEP_STANDARD_2026_SOURCE
 from app.insurance.requirements import bcbstx_ppo
 BCBSTX_PAYER_NAMES = bcbstx_ppo.PAYER_NAMES
 # Saved estimates re-evaluate requirement decisions when a published rule changes.
-PUBLISHED_RULESET_VERSION = '2026-11-17-aetna-choice-office-99213-v22'
+PUBLISHED_RULESET_VERSION = '2026-11-18-aetna-esa-office-referral-v23'
 
 BLUECARD_PPO_REFERRAL_SOURCE = {
     'label': 'BCBSTX BlueCard provider manual, PPO definition',
@@ -203,6 +203,7 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
         identity, benefits, context, plans, codes, payer_names)
     prior_date_aetna_choice = prior_date_office(result, context, plans, codes)
     value_plus_office = aetna_value_plus_office(result, context, plans, codes)
+    esa_office_referral = kind == 'referral' and esa_ppo_office_referral(result, context, plans, codes)
     same_day_bcbstx_visit = bcbstx_ppo.same_day_visit(kind, result, benefits, context, codes, payer_names)
     same_day_uhc_lppo_office = (
         benefits.get('service_date_matches') is None
@@ -216,7 +217,7 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
     if (not codes or not '2026-01-01' <= day <= '2026-12-31'
             or benefits.get('active') is not True
             or not (stedi_cpt_authorization.visit_coverage_bound(benefits, day)
-                    or same_day_bcbstx_visit or same_day_uhc_lppo_office or prior_date_aetna_choice or value_plus_office)
+                    or same_day_bcbstx_visit or same_day_uhc_lppo_office or prior_date_aetna_choice or value_plus_office or esa_office_referral)
             or not (payer_identity_verified(identity) or bcbstx_plus_surname_warning)
             or not result.get('benefit_source')
             or not context.get('member_id')):
@@ -252,6 +253,8 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
             return rule('Not required', 'Choice POS II permits direct specialist office visits under the published product rule. Confirm the member terms and visit-date coverage.', AETNA_CHOICE_POS_II_SOURCE, check=True)
         code = next(iter(codes))
         return rule('Not required', f'Routine office CPT {code} is absent from Aetna’s November 2026 participating-provider precertification list. Confirm member or delegated exceptions.', AETNA_2026_OFFICE_PRECERT_SOURCE, check=True)
+    if esa_office_referral:
+        return rule('Not required', 'Aetna Medicare ESA PPO permits direct specialist office visits without a referral.', AETNA_MEDICARE_PPO_REFERRAL_SOURCE, check=not in_network or benefits.get('service_date_matches') is False)
     if value_plus_office:
         if kind == 'referral':
             return rule('Not required', 'Aetna Medicare PPO specialist office visits do not require a referral' + (' in the covered in-network scenario; provider tier remains unresolved.' if not in_network else '.'), AETNA_MEDICARE_PPO_REFERRAL_SOURCE, check=not in_network)
