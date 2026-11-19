@@ -44,6 +44,37 @@ def test_confirmed_individual_oop_zero_collects_zero_before_patient_type_rules(c
         assert collection_guidance.build(altered)['amount_cents'] is None
 
 
+def test_aetna_esa_office_zero_oop_collects_zero_despite_payer_date_echo():
+    result = scenario(4000)
+    result.update(payer='Aetna', service_date='2026-11-19',
+                  appointment_context={'place_of_service': '11'},
+                  codes=[{'id': 'office', 'code': '99213', 'units': 1, 'modifiers': []}],
+                  plan_details={'stedi': {'names': ['Medicare (V01) ESA PPO Plan']}})
+    result['price_range']['lines'][0]['code'] = '99213'
+    result['benefits'].update(identity=result['identity'], network_status='unknown',
+                              network_source=None, service_date_matches=False,
+                              returned_service_dates={'start': '2026-11-18'},
+                              plan_details={'names': ['Medicare (V01) ESA PPO Plan']},
+                              oop_remaining_cents=0, oop_id='synthetic-individual-oop')
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 0
+    assert guidance['basis'] == 'claim_after_service'
+    assert guidance['collection_rule']['mode'] == 'individual_oop_zero_deferral'
+    assert encounter_summary.build({**result, 'collection_guidance': guidance})['collect_today_cents'] == 0
+    assert 'Collect $0' in amount_explanation.build(result, guidance)['sentence']
+    for change in ({'plan_details': {'names': ['Aetna Medicare HMO']}},
+                   {'oop_remaining_cents': 100}, {'oop_id': None},
+                   {'network_status': 'out_of_network'}, {'historical_only': True}):
+        other = deepcopy(result)
+        other['benefits'].update(change)
+        assert collection_guidance.build(other)['amount_cents'] is None
+    for change in ({'payer': 'Humana'},
+                   {'appointment_context': {'place_of_service': '10'}},
+                   {'codes': [{'id': 'office', 'code': '95908', 'units': 1}]}):
+        other = {**result, **change}
+        assert collection_guidance.build(other)['amount_cents'] is None
+
+
 def test_aetna_prior_date_televisit_with_met_individual_oop_defers_check_in():
     result = scenario()
     result.pop('collection_policy')

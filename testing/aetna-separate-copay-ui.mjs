@@ -452,6 +452,23 @@ assert.match(medicareTable, /Conditional patient share.*\$50\.00/)
 assert.match(medicareTable, /Estimated Aetna share.*\$46\.33/)
 assert.match(medicareTable, /Amount to collect at visit.*\$50\.00 conditional planning amount/)
 assert.doesNotMatch(medicareTable, /\$46\.33 conditional planning amount/)
+const esaZero = {
+  ...medicareOffice,
+  plan_details: { stedi: { names: ['Medicare (V01) ESA PPO Plan'] } },
+  aetna_office_planning: null,
+  benefits: { ...medicareOffice.benefits, network_status: 'unknown',
+    service_date_matches: false, oop_remaining_cents: 0 },
+  collection_guidance: { amount_cents: 0, status: 'zero_advance',
+    basis: 'claim_after_service', reason: 'Collect $0 at check-in; submit the claim.', services: [] },
+  encounter_summary: { collect_today_cents: 0, payments_verified_cents: 0 },
+}
+const esaView = deriveCommercialEstimateView({ result: esaZero,
+  appointments: [], selectedVisit: null, busy: null, error: null, readOnly: true,
+  recovering: false })
+const esaTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+  { model: { ...medicareModel, ...esaView }, result: esaZero }))
+assert.match(esaTable, /Amount to collect at visit.*\$0\.00/)
+assert.doesNotMatch(esaTable, /\$50\.00 conditional planning amount/)
 const savedMedicare = { ...medicareOffice,
   aetna_office_planning: { ...medicareOffice.aetna_office_planning, coinsurance_percent: null } }
 const savedMedicareTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
