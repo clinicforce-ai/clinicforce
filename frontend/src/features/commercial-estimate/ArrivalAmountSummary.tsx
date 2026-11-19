@@ -62,13 +62,15 @@ export default function ArrivalAmountSummary({
     )
   if (
     model.supportedAmount &&
-    result.collection_guidance?.collection_rule?.mode === 'individual_oop_zero_deferral'
+    ['individual_oop_zero_deferral', 'bcbstx_plus_office_deferral'].includes(
+      result.collection_guidance?.collection_rule?.mode || '',
+    )
   )
     return (
       <>
         <span>Amount to collect at visit</span>
         <strong role="status">{money(0)}</strong>
-        <p>{result.collection_guidance.reason}</p>
+        <p>{result.collection_guidance?.reason}</p>
       </>
     )
   const humanaDecision = humanaApprovedCollection(result, model)

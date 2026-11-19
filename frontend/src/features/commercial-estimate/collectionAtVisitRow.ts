@@ -14,7 +14,6 @@ import {
   pendingHumanaSpecialistCopay,
   supportedHumanaSpecialistAdvance,
 } from './commercialCostState'
-
 function pricedOfficeCopayDetail(result: PrevisitEstimate): string | null {
   const price = result.price_range
   const line = price?.mode === 'services' && price.lines?.length === 1 ? price.lines[0] : null
@@ -420,7 +419,8 @@ export function collectionAtVisitRow(
                                                                     : result.collection_guidance
                                                                           ?.basis ===
                                                                         'claim_after_service'
-                                                                      ? 'Clinic policy defers collection until after the claim'
+                                                                      ? result.collection_guidance
+                                                                          .reason
                                                                       : undefined
                                                             : namedCollectionAction
                                                               ? collectionBlocker?.sentence

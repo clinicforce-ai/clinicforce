@@ -21,6 +21,46 @@ def scenario(amount=3800):
                     'requirements': {kind: {'required': 'unknown', 'cleared': False} for kind in ('referral', 'authorization')}}}]}}
 
 
+def test_bcbstx_plus_office_missing_balances_defers_collection_and_keeps_share_unknown():
+    result = scenario()
+    result.update(payer='Blue Cross Blue Shield Tx', stedi_payer={'id': 'QDTRP'},
+        service_date='2026-11-19', appointment_context={'place_of_service': '11'},
+        plan_details={'stedi': {'names': ['PREFERRED PROVIDER OPTION PLUS MEDICAL']}},
+        codes=[{'id': 'office', 'code': '99213', 'units': 1, 'modifiers': []}],
+        selected_ids=['office'])
+    result['benefits'].update(identity=result['identity'], service_date_matches=True,
+        deductible_annual_cents=400000, oop_annual_cents=750000,
+        deductible_remaining_cents=None, oop_remaining_cents=None,
+        coinsurance_percent='20.0')
+    result['price_range'].update(complete=False, patient_min_cents=None,
+        patient_max_cents=None, service_issues=[])
+    line = result['price_range']['lines'][0]
+    line.update(code='99213', allowed_cents=7615, allowed_basis='clinic_contract',
+        modifiers=[], calculation=None, rate_resolution={'status': 'RESOLVED'})
+    line['benefits'].update(active=True, network_status='in_network',
+        service_date_matches=True, copay_cents=None, coinsurance_percent='20.0',
+        deductible_remaining_cents=None, oop_remaining_cents=None)
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 0
+    assert guidance['collection_rule']['mode'] == 'bcbstx_plus_office_deferral'
+    assert guidance['services'][0]['patient_cents'] is None
+    assert '$15.23' in guidance['reason'] and '$76.15' in guidance['reason']
+    assert encounter_summary.build({**result, 'collection_guidance': guidance})['collect_today_cents'] == 0
+    assert '$15.23' in amount_explanation.build(result, guidance)['sentence']
+    for mutation in (
+        lambda value: value['plan_details']['stedi'].update(names=['ANOTHER PPO PRODUCT']),
+        lambda value: value['benefits'].update(has_secondary=True),
+        lambda value: value['benefits'].update(source_errors=[{'kind': 'invalid_source'}]),
+        lambda value: value['benefits'].update(service_date_matches=False),
+        lambda value: value['appointment_context'].update(place_of_service='10'),
+        lambda value: value['price_range']['lines'][0]['benefits'].update(copay_cents=2500),
+        lambda value: value['price_range']['lines'][0].update(allowed_cents=0),
+    ):
+        blocked = deepcopy(result)
+        mutation(blocked)
+        assert collection_guidance.build(blocked)['amount_cents'] is None
+
+
 @pytest.mark.parametrize('code,payer', [('99203', 'Aetna'), ('99213', 'Cigna'), ('99214', 'Humana')])
 def test_confirmed_individual_oop_zero_collects_zero_before_patient_type_rules(code, payer):
     result = scenario(4000)
