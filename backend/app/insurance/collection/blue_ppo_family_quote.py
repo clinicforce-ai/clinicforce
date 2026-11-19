@@ -7,7 +7,71 @@ OFFICE_CODES = {'99202', '99203', '99204', '99205', '99212', '99213', '99214', '
 DIAGNOSTIC_CODES = {'95908', '95886'}
 
 
+def _money(cents: int) -> str:
+    return f'${cents // 100:,}.{cents % 100:02d}'
+
+
+def _plus_office_deferral(result: dict, guidance: dict, *, safe: bool) -> None:
+    """Defer an unpriced Plus Medical office share without treating it as zero liability."""
+    benefits = result.get('benefits') or {}
+    price = result.get('price_range') or {}
+    lines = price.get('lines') or []
+    codes = result.get('codes') or []
+    policy = result.get('collection_policy') or {}
+    names = ((result.get('plan_details') or {}).get('stedi') or {}).get('names') or []
+    if (guidance.get('amount_cents') is not None or not safe
+            or str(result.get('payer') or '').casefold() != 'blue cross blue shield tx'
+            or names != ['PREFERRED PROVIDER OPTION PLUS MEDICAL']
+            or result.get('payment_mode') == 'cash' or result.get('reference_benefits')
+            or policy.get('mode') not in (None, 'collect_supported_advance')
+            or (result.get('appointment_context') or {}).get('place_of_service') != '11'
+            or price.get('mode') != 'services' or price.get('complete') is True
+            or price.get('service_issues') or len(lines) != 1 or len(codes) != 1
+            or result.get('selected_ids', [lines[0].get('id')]) != [lines[0].get('id')]
+            or benefits.get('active') is not True or not verified_in_network(benefits)
+            or benefits.get('has_secondary') or benefits.get('source_errors')
+            or benefits.get('deductible_remaining_cents') is not None
+            or benefits.get('oop_remaining_cents') is not None
+            or type(benefits.get('deductible_annual_cents')) is not int
+            or type(benefits.get('oop_annual_cents')) is not int
+            or benefits['deductible_annual_cents'] <= 0 or benefits['oop_annual_cents'] <= 0):
+        return
+    line, code = lines[0], codes[0]
+    terms = line.get('benefits') or {}
+    allowed = line.get('allowed_cents')
+    if (line.get('id') != code.get('id') or line.get('code') != code.get('code') != '99213'
+            or line.get('units') != code.get('units') or line.get('units') != 1
+            or line.get('modifiers') or code.get('modifiers')
+            or line.get('allowed_basis') != 'clinic_contract'
+            or (line.get('rate_resolution') or {}).get('status') != 'RESOLVED'
+            or type(allowed) is not int or not 0 < allowed <= 100_000_000
+            or terms.get('active') is not True or terms.get('network_status') != 'in_network'
+            or terms.get('service_date_matches') is False or terms.get('source_errors')
+            or terms.get('copay_cents') is not None or benefits.get('copay_cents') is not None
+            or terms.get('deductible_remaining_cents') is not None
+            or terms.get('oop_remaining_cents') is not None
+            or terms.get('deductible_applies') is not None
+            or str(terms.get('coinsurance_percent')) not in {'20', '20.0', '20.00'}
+            or any(row.get('kind') == 'copay' and row.get('service_type_code') in {'30', '98'}
+                   and row.get('network') in {'IN_NETWORK', 'Y'}
+                   and row.get('plan_association') in {None, 'medical'}
+                   for row in benefits.get('reported_options') or [])):
+        return
+    guidance.update(amount_cents=0, status='zero_advance', basis='claim_after_service',
+        reason=(f'Collect $0 at check-in and obtain a Blue Cross member-specific cost estimate or '
+                f'bill after the claim. The {_money(allowed)} office allowance is not the patient balance. '
+                f'Assuming no copay, if the office deductible is met or waived and at least '
+                f'{_money((allowed + 2) // 5)} remains before the out-of-pocket limit, 20% is '
+                f'{_money((allowed + 2) // 5)}; if the full allowance applies to an unmet office '
+                f'deductible and at least {_money(allowed)} remains before that limit, it is '
+                f'{_money(allowed)}. These are conditional examples, not amounts to collect today.'),
+        patient_message='No payment is requested at arrival. The patient share remains unknown until a payer estimate or processed claim.',
+        collection_rule={'mode': 'bcbstx_plus_office_deferral',
+                         'reference': 'Blue Cross Texas Patient Cost Estimator and clinic check-in deferral'})
+
+
 def apply(result: dict, guidance: dict, review: dict | None, assumptions: list[str], *, safe: bool) -> None:
+    _plus_office_deferral(result, guidance, safe=safe)
     benefits = result.get('benefits') or {}
     price = result.get('price_range') or {}
     lines = price.get('lines') or []

@@ -3,6 +3,8 @@ import { createRequire } from 'node:module'
 
 const require = createRequire(new URL('../frontend/package.json', import.meta.url))
 const { rolldown } = require('rolldown')
+const React = require('react')
+const { renderToStaticMarkup } = require('react-dom/server')
 const bundle = await rolldown({
   input: new URL('../frontend/src/features/commercial-estimate/collectionAtVisitRow.ts', import.meta.url).pathname,
 })
@@ -85,4 +87,56 @@ const missingRateRow = collectionAtVisitRow({ ...unmatchedPlan,
 }, model, { ...values, pendingBluecardCopay: null })
 assert.match(missingRateRow.value, /check plan-to-rate match/i)
 assert.match(missingRateRow.detail, /CPT 99203/)
-console.log('BlueCard office table: $60 pending; identity, payer-order, network, service, and payment guards passed')
+const plusDeferral = collectionAtVisitRow({
+  ...result,
+  price_range: { mode: 'services', lines: [{ id: 'office', code: '99213', units: 1,
+    allowed_cents: 7615, benefits: { active: true, network_status: 'in_network',
+      coinsurance_percent: '20.0' } }] },
+  collection_guidance: { amount_cents: 0, basis: 'claim_after_service',
+    collection_rule: { mode: 'bcbstx_plus_office_deferral' },
+    reason: 'Collect $0 at check-in. $15.23 and $76.15 are conditional examples.' },
+}, { ...model, supportedAmount: true }, { ...values, pendingBluecardCopay: null })
+assert.equal(plusDeferral.value, '$0.00')
+assert.match(plusDeferral.detail, /\$15\.23 and \$76\.15 are conditional examples/)
+async function load(path) {
+  const built = await rolldown({ input: new URL(path, import.meta.url).pathname,
+    plugins: [{ name: 'ignore-css', load(id) {
+      if (id.endsWith('.css')) return { code: 'export default {}', moduleType: 'js' }
+    } }],
+  })
+  const output = await built.generate({ format: 'esm' })
+  return import(`data:text/javascript;base64,${Buffer.from(output.output[0].code).toString('base64')}`)
+}
+const { deriveCommercialEstimateView } = await load('../frontend/src/features/commercial-estimate/deriveCommercialEstimateView.ts')
+const CommercialCostBreakdown = (await load('../frontend/src/features/commercial-estimate/CommercialCostBreakdown.tsx')).default
+const ArrivalAmountSummary = (await load('../frontend/src/features/commercial-estimate/ArrivalAmountSummary.tsx')).default
+const plusVisit = {
+  payer: 'Blue Cross Blue Shield Tx', service_date: '2026-11-19',
+  identity: { status: 'matched', binding: 'synthetic-plus-member', match_version: 2 },
+  selected_ids: ['office'], codes: [{ id: 'office', code: '99213', units: 1, modifiers: [] }],
+  plan_details: { stedi: { names: ['PREFERRED PROVIDER OPTION PLUS MEDICAL'] } },
+  benefits: { active: true, service_date_matches: true, network_status: 'in_network',
+    network_source: 'clinic_group_agreement', deductible_annual_cents: 400000,
+    oop_annual_cents: 750000, coinsurance_percent: '20.0' },
+  price_range: { mode: 'services', complete: false, lines: [{ id: 'office', code: '99213',
+    units: 1, modifiers: [], allowed_cents: 7615, allowed_basis: 'clinic_contract',
+    benefits: { active: true, network_status: 'in_network', coinsurance_percent: '20.0' } }] },
+  collection_guidance: { amount_cents: 0, status: 'zero_advance', basis: 'claim_after_service',
+    reason: 'Collect $0 at check-in. If the deductible is met, 20% is $15.23; if the full allowance applies to an unmet deductible, it is $76.15. These are conditional examples.',
+    collection_rule: { mode: 'bcbstx_plus_office_deferral' }, services: [] },
+  encounter_summary: { collect_today_cents: 0, complete: false, payments_verified_cents: 0 },
+}
+const plusModel = deriveCommercialEstimateView({ result: plusVisit, appointments: [],
+  selectedVisit: '', busy: null, error: '', readOnly: true, recovering: false })
+assert.equal(plusModel.supportedAmount, true)
+assert.equal(plusModel.amount, '$0.00')
+const plusTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+  { result: plusVisit, model: plusModel }))
+assert.match(plusTable, /Estimated patient share[\s\S]*Not fully calculated/)
+assert.match(plusTable, /Amount to collect at visit[\s\S]*\$0\.00/)
+assert.match(plusTable, /\$15\.23/)
+assert.match(plusTable, /\$76\.15/)
+const plusArrival = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
+  { result: plusVisit, model: plusModel, partialCopay: null, visibleAmount: true }))
+assert.match(plusArrival, /Amount to collect at visit[\s\S]*\$0\.00/)
+console.log('Blue office tables: $60 pending and Plus Medical $0 deferred with conditional examples')
