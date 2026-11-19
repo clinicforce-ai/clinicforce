@@ -64,10 +64,6 @@ export default function CommercialOverview({
     session,
   } = model
   const payerForAction = (!readOnly && result.stedi_payer?.name) || result.payer
-  const texasMedicareEnrollmentMissing =
-    /^Medicare(?: of)? (?:Texas|TX)(?: Part B)?$/i.test(result.payer?.trim() || '') &&
-    result.enrollment?.route === 'original_medicare_hets' &&
-    result.enrollment.status === 'MISSING'
   const plannedCodes =
     result.price_range?.mode === 'services'
       ? [...new Set(result.price_range.lines?.map((line) => line.code).filter(Boolean) || [])]
@@ -183,14 +179,6 @@ export default function CommercialOverview({
         )}
       </div>
       <CommercialCashQuoteForm model={model} result={result} />
-      {texasMedicareEnrollmentMissing && (
-        <p className="visit-notice medicare-enrollment-notice" role="status">
-          <strong>
-            ClinicForce does not have a matching Medicare eligibility transaction enrollment through
-            Stedi yet.
-          </strong>
-        </p>
-      )}
       <div className="overview-amounts">
         <div
           className={`arrival-total${!paidClaim && !availity && !visibleAmount && !calculating && !tooEarly ? ' is-blocked' : ''}`}

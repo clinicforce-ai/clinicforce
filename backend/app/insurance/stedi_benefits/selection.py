@@ -11,7 +11,7 @@ from app.insurance.stedi_benefits.fields import (
 )
 from app.insurance.cpt_rules import EMG_ADD_ONS, NCS_CODES, STANDALONE_EMG_CODES
 from app.insurance.provider_specialty import office_role
-from app.insurance.stedi_payers import ORIGINAL_MEDICARE_STEDI_IDS
+from app.insurance.stedi_payers import original_medicare_271
 
 
 @dataclass
@@ -72,6 +72,9 @@ def select_benefit_rows(payload: dict[str, Any], service_type_code: str,
             service_type_code = '98'
             entries = [row for row in entries if '98' not in (row.get('serviceTypeCodes') or []) or row in diagnostic_rows]
     office = office_visit or procedure_code in {str(n) for n in (*range(99202, 99206), *range(99212, 99216))}
+    if office and original_medicare_271(payload):
+        # Part A's inpatient deductible shares STC 30 with Part B office care.
+        entries = [row for row in entries if row.get('insuranceType') != 'MEDICARE_PART_A']
     # Choice Plus labels its specialist physician-office copay "Provider Role
     # OTHER" under BY. The generic 98 schedule includes other provider roles.
     if (office and place_of_service == '10' and str(payload.get('payerId') or '') in {'87726', 'KMQTZ'}
@@ -255,7 +258,7 @@ def select_benefit_rows(payload: dict[str, Any], service_type_code: str,
     selected_tier = 'out_of_network' if (negative_provider_ids or provider_out_of_network_verified) and not network_conflict else 'in_network'
     accepted_networks = ({'N', 'NO', 'OUT_OF_NETWORK', 'W', 'IN_AND_OUT_OF_NETWORK'} if selected_tier == 'out_of_network'
                          else {'Y', 'YES', 'IN_NETWORK', 'W', 'IN_AND_OUT_OF_NETWORK'})
-    cms_unqualified = str(payload.get('payerId') or '').upper() in ORIGINAL_MEDICARE_STEDI_IDS
+    cms_unqualified = original_medicare_271(payload)
     entries = [row for row in entries if relevant_service(row)
                and (_network_indicator(row) in accepted_networks or
                     not _network_indicator(row) and (cms_unqualified or

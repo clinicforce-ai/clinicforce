@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.insurance.stedi_benefits.fields import _benefit_notes, _network_indicator, _procedure, _stedi_cents, _stedi_entries, oop_plan_association, coverage_kind
-from app.insurance.stedi_payers import ORIGINAL_MEDICARE_STEDI_IDS
+from app.insurance.stedi_payers import original_medicare_271
 
 
 @dataclass
@@ -52,7 +52,7 @@ def select_cost_share_rows(entries: list[dict[str, Any]], payload: dict[str, Any
         service_waiver = (not level and row.get('code') == 'C' and specificity >= 2
                           and _stedi_cents(row.get('benefitAmount')) == 0
                           and str(row.get('timeQualifierCode') or row.get('timeQualifier') or '').upper() in {'', '23', 'CALENDAR_YEAR', '22', 'SERVICE_YEAR'})
-        cms_unqualified = str(payload.get('payerId') or '').upper() in ORIGINAL_MEDICARE_STEDI_IDS and not indicator
+        cms_unqualified = original_medicare_271(payload) and not indicator
         if (not individual and not shared_cost_share and not shared_service_waiver and not service_waiver and not (not level and row.get("code") in {"A", "B"})) or (indicator not in accepted_networks and not cms_unqualified) or not specificity:
             continue
         wanted.append((specificity, row))

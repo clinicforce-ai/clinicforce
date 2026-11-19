@@ -71,7 +71,6 @@ def _valid_visit_plan(proposal: dict, by_code: dict, inputs: dict) -> list[dict]
         raise _InvalidVisitPlan('Wrong patient status')
     return candidate
 
-
 def recommend_visit_plan(inputs: dict, source: dict, available: list[dict]) -> dict:
     """Choose an editable previsit scenario, never final coding or payer facts."""
     from app.insurance import botox_review, cpt_rules, visit_estimate
@@ -140,14 +139,14 @@ def recommend_visit_plan(inputs: dict, source: dict, available: list[dict]) -> d
                 'recommended_units': {by_code[row['code']]['id']: row['units'] for row in choices if row['units'] is not None},
                 'recommendation_basis': 'Biopsy planning scenario from the appointment reason.' if biopsy and not scheduled
                                         else 'Combined planned services from the scheduled appointment.',
-                'assumptions': assumptions, 'method': 'appointment', 'version': 19}
+                'assumptions': assumptions, 'method': 'appointment', 'version': 20}
     documented_ncs = [row for row in available if row.get('source') == 'eCW documented study count']
     if emg and not scheduled and len(documented_ncs) == 1:
         row = documented_ncs[0]
         return {**baseline, 'recommended_ids': [row['id']], 'recommended_units': {row['id']: 1},
                 'recommendation_basis': 'The current eCW visit reason states the nerve-study count.',
                 'assumptions': ['Needle muscle work is excluded unless separately documented.'],
-                'method': 'appointment', 'version': 19}
+                'method': 'appointment', 'version': 20}
     choices = [{'code': row['code'], 'units': row.get('units') or 1}
                for row in available if row['id'] in baseline['recommended_ids']
                and (not row['code'].startswith('J') or row.get('source') == 'eCW scheduled service' and row.get('units'))]
@@ -300,6 +299,8 @@ DBS follow-up alone supports no device code. Suggest 95970 only for documented a
         baseline['assumptions'] = [
             'CPT 99213 is a starting estimate; confirm patient status, visit modality, location, and documented medical decision making or qualifying time before billing.' if historical_televisit else
             'CPT 99213 is a starting estimate; confirm the documented medical decision making or qualifying time before billing.']
+    if fallback := cpt_rules.new_patient_office_fallback(reason, scheduled, emg, choices, by_code):
+        choices, basis, method, baseline['assumptions'] = fallback
     if cpt_rules.tia_cta_office_scenario(inputs, choices, scheduled_office, by_code):
         choices = [{**row, 'code': '99214'} if row['code'] == '99213' else row for row in choices]
         basis, method = 'Provisional established-patient TIA follow-up with planned CTA.', 'appointment'
@@ -310,9 +311,8 @@ DBS follow-up alone supports no device code. Suggest 95970 only for documented a
     choices.sort(key=lambda row: order.index(visit_estimate.clinical_group(row['code'])))
     baseline.update(recommended_ids=[by_code[row['code']]['id'] for row in choices],
                     recommended_units={by_code[row['code']]['id']: row['units'] for row in choices},
-                    recommendation_basis=basis, method=method, version=19)
+                    recommendation_basis=basis, method=method, version=20)
     return baseline
-
 
 def _history_televisit_baseline(context: str, prior_appointments: list[dict[str, Any]]) -> dict[str, Any]:
     """Keep a generic eCW televisit from becoming an empty clinician-review screen."""

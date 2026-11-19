@@ -65,7 +65,9 @@ export function networkRow(
   dsnpOffice: boolean,
   result: PrevisitEstimate,
 ): CostBreakdownRow {
-  const originalMedicare = ['CMS', 'JDNSN', 'TPTWE'].includes(result.stedi_payer?.id || '')
+  const originalMedicare =
+    result.benefits?.original_medicare === true ||
+    ['CMS', 'JDNSN', 'TPTWE'].includes(result.stedi_payer?.id || '')
   if (originalMedicare && result.benefits?.active === true) {
     return {
       label: 'Provider billing status',

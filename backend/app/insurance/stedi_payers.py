@@ -22,9 +22,37 @@ def original_medicare_route(payer: dict | None) -> bool:
             or str((payer or {}).get('stediId') or '').upper() in ORIGINAL_MEDICARE_STEDI_IDS)
 
 
+def original_medicare_271(payload: dict | None) -> bool:
+    """Recognize CMS Part B evidence when a Texas MAC ID is echoed as payerId."""
+    payload = payload or {}
+    payer_id = str(payload.get('payerId') or '').upper()
+    if payer_id in ORIGINAL_MEDICARE_STEDI_IDS:
+        return True
+    if payer_id != '04412':
+        return False
+    payer = payload.get('payer') or {}
+    name = payer.get('name') if isinstance(payer, dict) else None
+    if not isinstance(name, dict) or str(name.get('organization') or '').upper() != 'CMS':
+        return False
+    return any(row.get('insuranceType') == 'MEDICARE_PART_B'
+               and row.get('status') == 'ACTIVE_COVERAGE'
+               and isinstance(row.get('service'), dict)
+               and row['service'].get('value') == '30'
+               for plan in payload.get('plans') or [] if isinstance(plan, dict)
+               for benefits in [plan.get('benefits')] if isinstance(benefits, dict)
+               for row in benefits.get('statuses') or [] if isinstance(row, dict))
+
+
 def original_medicare_record(name: str, plan: str) -> bool:
     """Recognize the explicit eCW Part B record without using patient age."""
     return plan == 'MB' and bool(re.fullmatch(r'Medicare(?: of)? (?:Texas|TX)(?: Part B)?', name, re.I))
+
+
+def original_medicare_result(result: dict, source: dict) -> bool:
+    """Keep a recorded or response-proven Part B visit on the insurance path."""
+    return ((result.get('benefits') or {}).get('original_medicare') is True
+            or original_medicare_route({'stediId': (result.get('stedi_payer') or {}).get('id')})
+            or original_medicare_record(str(result.get('payer') or ''), str(source.get('plan') or '')))
 
 
 def enrollment_required(payer: dict | None) -> bool:

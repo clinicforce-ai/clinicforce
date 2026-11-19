@@ -16,7 +16,7 @@ from app.insurance.requirements.fep_sources import FEP_PSHB_2026_SOURCE, FEP_STA
 from app.insurance.requirements import bcbstx_ppo
 BCBSTX_PAYER_NAMES = bcbstx_ppo.PAYER_NAMES
 # Saved estimates re-evaluate requirement decisions when a published rule changes.
-PUBLISHED_RULESET_VERSION = '2026-11-18-aetna-esa-office-referral-v23'
+PUBLISHED_RULESET_VERSION = '2026-11-19-original-medicare-office-v24'
 
 BLUECARD_PPO_REFERRAL_SOURCE = {
     'label': 'BCBSTX BlueCard provider manual, PPO definition',
@@ -170,10 +170,10 @@ AETNA_2026_OFFICE_PRECERT_SOURCE = {
     'effective_from': '2026-11-01', 'effective_to': '2026-12-31',
 }
 MEDICARE_REFERRAL_SOURCE = {
-    'label': 'Medicare.gov Original Medicare specialist access',
+    'label': 'Medicare.gov Original Medicare specialist access and prior authorization guidance',
     'url': 'https://www.medicare.gov/basics/get-started-with-medicare/get-more-coverage/your-coverage-options/compare-original-medicare-medicare-advantage',
-    'source_version': 'Original Medicare coverage comparison, checked 2026-10-21',
-    'verified_at': '2026-10-21', 'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
+    'source_version': 'Original Medicare coverage comparison, checked 2026-11-19',
+    'verified_at': '2026-11-19', 'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
 }
 MEDICARE_OPD_PA_SOURCE = {
     'label': 'CMS Original Medicare hospital outpatient department botulinum toxin prior authorization program',
@@ -376,7 +376,7 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
         source = BCBSTX_PPO_99213_AUTH_SOURCE if code == '99213' else bcbstx_ppo.AUTH_SOURCE_99214
         return rule('Not required', f'Clinic-confirmed BCBSTX PPO rule: CPT {code} alone does not require prior authorization for an in-network physician-office visit.',
                     source, source_type='clinic_confirmation')
-    if len(exact) != 1:
+    if len(exact) != 1 and benefits.get('original_medicare') is not True:
         return None
     if product == 'humanavaluechoiceppoh7617057' and 'humana' in names:
         if kind == 'referral' and office and codes <= {'99202', '99203', '99204', '99205', '99212', '99213', '99214', '99215'}:
@@ -426,9 +426,14 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
                 return rule('Verification required', 'The Medicare Advantage list does not establish a procedure-code authorization answer here. Check the member and any delegated rules.', UHC_MA_2026_AUTH_SOURCE, check=True)
             source = UHC_MA_2026_AUTH_SOURCE if any(product_kind(plan) for plan in plans) else UHC_COMMERCIAL_2026_PA
             return rule('Verification required', 'The published code list does not establish authorization for this selected service and member. Check the exact product, code and any delegated rule.', source, check=True)
-    if {'traditionalmedicare', 'originalmedicare', 'medicare'} & names and product in {'originalmedicare', 'traditionalmedicare'}:
+    if (benefits.get('original_medicare') is True or
+            {'traditionalmedicare', 'originalmedicare', 'medicare'} & names
+            and product in {'originalmedicare', 'traditionalmedicare'}):
         if kind == 'referral':
             return rule('Not required', 'Original Medicare generally permits specialist visits without a PCP referral.', MEDICARE_REFERRAL_SOURCE)
+        if kind == 'authorization' and office and codes <= {'99202', '99203', '99204', '99205',
+                                                              '99212', '99213', '99214', '99215'} and str(context.get('pos') or '') == '11':
+            return rule('Not required', 'Routine physician-office E/M visits do not need Original Medicare prior authorization. Additional services require separate review.', MEDICARE_REFERRAL_SOURCE)
         if (kind == 'authorization' and str(context.get('pos') or '') in {'19', '22'}
                 and codes & {'J0585', '64612', '64615'}):
             return rule('Required', 'CMS requires prior authorization for this listed botulinum toxin code in a hospital outpatient department. Verify the member, service and approval; this rule does not apply to a physician office.', MEDICARE_OPD_PA_SOURCE, check=True)

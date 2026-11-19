@@ -41,6 +41,43 @@ def test_cms_271_networkless_part_b_terms_reach_saved_benefits():
     assert commercial['coinsurance_percent'] is None
 
 
+def test_texas_mac_cms_response_keeps_part_b_office_terms_separate_from_part_a():
+    from app.api.routers import commercial_estimator as api
+
+    service = lambda code: {'system': 'STC', 'value': code}
+    payload = {'payerId': '04412', 'payer': {'name': {'organization': 'CMS'}},
+        'subscriber': {'memberId': 'SYNTHETIC-MBI', 'dateOfBirth': '1950-01-01',
+            'name': {'person': {'firstName': 'Pat', 'lastName': 'Example'}},
+            'dates': {'service': {'start': '2026-11-19'}}},
+        'plans': [{'benefits': {
+            'statuses': [{'status': 'INACTIVE', 'service': service('88')},
+                         {'status': 'ACTIVE_COVERAGE', 'insuranceType': 'MEDICARE_PART_A', 'service': service('30')},
+                         {'status': 'ACTIVE_COVERAGE', 'insuranceType': 'MEDICARE_PART_B', 'service': service('30')},
+                         {'status': 'ACTIVE_COVERAGE', 'insuranceType': 'MEDICARE_PART_B', 'service': service('98')}],
+            'deductible': [{'amount': '1736', 'insuranceType': 'MEDICARE_PART_A',
+                            'coverageLevel': 'INDIVIDUAL', 'timePeriod': 'REMAINING', 'service': service('30')},
+                           {'amount': '283', 'insuranceType': 'MEDICARE_PART_B',
+                            'coverageLevel': 'INDIVIDUAL', 'timePeriod': 'CALENDAR_YEAR', 'service': service('30')},
+                           {'amount': '0', 'insuranceType': 'MEDICARE_PART_B',
+                            'coverageLevel': 'INDIVIDUAL', 'timePeriod': 'REMAINING', 'service': service('30')}],
+            'coInsurance': [{'percent': '0.2', 'insuranceType': 'MEDICARE_PART_B',
+                             'coverageLevel': 'INDIVIDUAL', 'timePeriod': 'VISIT', 'service': service('30')}]}}]}
+    coverage = {'active_coverages': 1, 'relationship': '18', 'member_id': 'SYNTHETIC-MBI',
+        'subscriber_first': 'Pat', 'subscriber_last': 'Example', 'subscriber_birth_date': '1950-01-01',
+        'patient_first': 'Pat', 'patient_last': 'Example', 'patient_birth_date': '1950-01-01'}
+    benefits = api._previsit_benefits(payload, coverage, '2026-11-19', ['98', '30'],
+        inputs={'reason': 'New patient evaluation', 'visit_type': 'new', 'service_date': '2026-11-19',
+                'place_of_service': '11', 'lines': [{'code': '99203', 'units': 1}]}, source={})
+    assert benefits['original_medicare'] is True
+    assert benefits['active'] is True
+    assert benefits['coverage_status_conflict'] is False
+    assert benefits['deductible_annual_cents'] == 28300
+    assert benefits['deductible_remaining_cents'] == 0
+    assert benefits['coinsurance_percent'] == '20.0'
+    assert benefits['network_status'] == 'unknown'
+    assert not api.stedi_payers.original_medicare_271({**payload, 'payer': {'name': {'organization': 'Other'}}})
+
+
 def _run(payer: dict, *, source: dict | None = None, enrollment: str = 'MISSING') -> tuple[dict, SimpleNamespace]:
     result = {'issues': [], 'payer': payer.get('displayName')}
     case = {'id': 'synthetic-case'}

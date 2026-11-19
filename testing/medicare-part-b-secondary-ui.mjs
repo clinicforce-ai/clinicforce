@@ -10,6 +10,7 @@ async function load(path) {
   return import(`data:text/javascript;base64,${Buffer.from(compiled.output[0].code).toString('base64')}`)
 }
 const { collectionAtVisitRow } = await load('../frontend/src/features/commercial-estimate/collectionAtVisitRow.ts')
+const { deriveCommercialEstimateView } = await load('../frontend/src/features/commercial-estimate/deriveCommercialEstimateView.ts')
 const { default: ArrivalAmountSummary } = await load('../frontend/src/features/commercial-estimate/ArrivalAmountSummary.tsx')
 const { default: CommercialCostBreakdown } = await load('../frontend/src/features/commercial-estimate/CommercialCostBreakdown.tsx')
 const React = require('react')
@@ -89,3 +90,43 @@ assert.match(primaryTable, /\$38\.00/)
 assert.match(primaryTable, /20%/)
 assert.match(primaryTable, /Provider billing status/)
 assert.match(primaryTable, /Original Medicare has no plan network tier/)
+
+const texasPartB = structuredClone(primary)
+texasPartB.stedi_payer.id = '04412'
+texasPartB.benefits.original_medicare = true
+texasPartB.benefits.deductible_annual_cents = 28300
+texasPartB.benefits.deductible_remaining_cents = 0
+texasPartB.price_range = { mode: 'services', complete: false, lines: [{
+  id: 'office', code: '99203', units: 1, allowed_cents: null,
+  benefits: { active: true, deductible_remaining_cents: 0, coinsurance_percent: '20' },
+}] }
+texasPartB.encounter_summary = { collect_today_cents: 0, complete: false }
+const texasTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+  { model: primaryModel, result: texasPartB }))
+assert.match(texasTable, /Provider billing status/)
+assert.match(texasTable, /Original Medicare has no plan network tier/)
+assert.match(texasTable, /Amount to collect at visit/)
+assert.match(texasTable, /\$0\.00/)
+assert.doesNotMatch(texasTable, /cash option|self-pay price/i)
+
+const texasAlternatives = structuredClone(texasPartB)
+texasAlternatives.service_date = '2026-10-13'
+texasAlternatives.benefits.has_secondary = true
+texasAlternatives.recovery = { reason_code: 'multiple_active_policies', active_policy_count: 2 }
+texasAlternatives.price_range = { mode: 'alternatives', complete: false,
+  lines: ['99202', '99203', '99204', '99205'].map(code => ({
+    id: code, code, units: 1, allowed_cents: null, benefits: { active: true },
+  })) }
+texasAlternatives.encounter_summary = { collect_today_cents: 0, complete: false }
+texasAlternatives.collection_guidance.services = []
+texasAlternatives.codes = []
+const alternativesModel = deriveCommercialEstimateView({ result: texasAlternatives,
+  appointments: [], selectedVisit: null, busy: false, error: null,
+  readOnly: false, recovering: false })
+assert.equal(alternativesModel.supportedAmount, true)
+assert.equal(alternativesModel.amountText, '$0.00')
+const alternativesTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+  { model: alternativesModel, result: texasAlternatives }))
+assert.match(alternativesTable, /Amount to collect at visit/)
+assert.match(alternativesTable, /\$0\.00/)
+assert.doesNotMatch(alternativesTable, /cash option|self-pay price/i)

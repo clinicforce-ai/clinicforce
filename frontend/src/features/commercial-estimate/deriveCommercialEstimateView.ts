@@ -356,9 +356,7 @@ export function deriveCommercialEstimateView({
             : tooEarly
               ? 'Too early to check'
               : cash
-                ? result?.payer?.trim().toLowerCase() === 'medicare of texas'
-                  ? 'Clinicforce is not yet enrolled for medicare of Texas'
-                  : 'Confirm clinic price'
+                ? 'Confirm clinic price'
                 : 'Insured amount unavailable'))
   const amountLabel = previousEstimate
     ? 'Previous estimate · needs recheck'

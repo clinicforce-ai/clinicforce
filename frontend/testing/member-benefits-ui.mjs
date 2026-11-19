@@ -864,7 +864,7 @@ try {
   const enrollmentMessage =
     'ClinicForce does not have a matching Medicare eligibility transaction enrollment through Stedi yet.'
   assert(
-    renderMedicareEnrollment('Medicare of Texas', {
+    !renderMedicareEnrollment('Medicare of Texas', {
       route: 'original_medicare_hets',
       status: 'MISSING',
     }).includes(enrollmentMessage),
@@ -1367,7 +1367,7 @@ try {
     })
   assert.equal(
     cashAmountModel('Medicare of Texas').amountText,
-    'Clinicforce is not yet enrolled for medicare of Texas',
+    'Confirm clinic price',
   )
   assert(
     renderToStaticMarkup(
@@ -1378,7 +1378,7 @@ try {
         visibleAmount: false,
       }),
     ).includes(
-      'class="amount-pending" role="status">Clinicforce is not yet enrolled for medicare of Texas',
+      'class="amount-pending" role="status">Confirm clinic price',
     ),
   )
   assert.equal(cashAmountModel('Other insurer').amountText, 'Confirm clinic price')
