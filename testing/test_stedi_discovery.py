@@ -1131,6 +1131,16 @@ class RecoveryTest(IsolatedAsyncioTestCase):
         missing_group = deepcopy(discovered)
         missing_group['subscriber'].pop('groupNumber')
         assert not discovery.payer_followup_confirms(discovered, missing_group, inputs, source)
+        modern = deepcopy(discovered)
+        modern['subscriber']['name'] = {'person': {'firstName': 'PAT', 'lastName': 'EXAMPLE'}}
+        modern['subscriber']['additionalInformation'] = {'group': {'number': 'NEW-GROUP'}}
+        for field in ('firstName', 'lastName', 'groupNumber'):
+            modern['subscriber'].pop(field)
+        modern['payer'] = {'name': {'organization': 'CHLIC'}}
+        modern['payerId'] = '62308'
+        modern.pop('tradingPartnerServiceId')
+        assert discovery.candidate_identity(modern, inputs)['group_number'] == 'NEW-GROUP'
+        assert discovery.payer_followup_confirms(discovered, modern, inputs, source)
         recovery = case['previsit_discovery']
         recovery.update(request_state='complete', outcome='review_needed',
             reason_code='identity_or_coverage_review', raw_object_key='protected',
@@ -1146,7 +1156,7 @@ class RecoveryTest(IsolatedAsyncioTestCase):
         with patch.object(api.stedi_payers, 'search_payer', AsyncMock(return_value={
                  'stediId': 'HGJLR', 'displayName': 'Cigna'})) as route_lookup, \
              patch.object(api, '_post_stedi_eligibility', AsyncMock(return_value=(
-                 httpx.Response(200), discovered, False))) as inquiry, \
+                 httpx.Response(200), modern, False))) as inquiry, \
              patch.object(api.object_store, 'put_staff_document', return_value='protected'), \
              patch.object(api, '_save', side_effect=lambda value, *_: value):
             await api._recheck_discovery_candidate(case, session, provider,
@@ -1184,6 +1194,101 @@ class RecoveryTest(IsolatedAsyncioTestCase):
              patch.object(api, '_save', side_effect=lambda value, *_: value):
             await api._start_previsit_recovery(case, session, provider, tasks)
         assert not tasks.tasks
+
+    async def test_rejected_cigna_followup_reuses_verified_saved_response(self):
+        case, session, provider, discovered = setup()
+        session['practice_id'] = 'primary'
+        inputs, source = case['previsit_context']['inputs'], case['previsit_context']['source']
+        inputs.update(member_id='OLD-ID', reason='Migraine')
+        source.update(payer='Cigna', active_coverages=1)
+        source['rendering_provider'] = {'npi': provider['rendering_npi'], 'roles': ['Neurology']}
+        case['previsit_context']['payer_id'] = 'HGJLR'
+        token = api._visit_context_token(inputs, source)
+        case['previsit_context']['context_token'] = token
+        case['previsit_context']['result']['context_token'] = token
+        case['previsit_context']['result']['codes'] = api._previsit_codes(inputs)
+        case['visit_review'] = {'context_token': token, 'selected_ids': ['99203:1']}
+        discovered.update(payer={'name': 'CHLIC', 'payorIdentification': 'HGJLR'})
+        discovered['provider'] = {'npi': provider['rendering_npi']}
+        discovered['benefitsInformation'][0]['planCoverageDescription'] = 'Open Access Plus'
+        discovered['subscriber'].update(memberId='NEW-ID', groupNumber='NEW-GROUP',
+            address={'address1': '200 Prior St', 'city': 'Austin', 'state': 'TX', 'postalCode': '78702'})
+        discovered['benefitsInformation'].append({
+            'code': 'B', 'serviceTypeCodes': ['98'], 'benefitAmount': '50',
+            'timeQualifierCode': '27', 'coverageLevelCode': 'IND',
+            'inPlanNetworkIndicatorCode': 'Y',
+            'eligibilityAdditionalInformationList': [{'industryCode': '11', 'industry': 'Office'}],
+            'placesOfService': [{'code': '11'}],
+            'additionalInformation': [{'description': 'Specialist'}]})
+        discovered['benefitsInformation'].extend([
+            {'code': 'C', 'serviceTypeCodes': ['98'], 'benefitAmount': '0',
+             'inPlanNetworkIndicatorCode': 'Y', 'timeQualifierCode': '23',
+             'eligibilityAdditionalInformation': {'industryCode': '11', 'industry': 'Office'}},
+            {'code': 'A', 'serviceTypeCodes': ['98'], 'benefitPercent': '0',
+             'coverageLevelCode': 'IND', 'inPlanNetworkIndicatorCode': 'Y',
+             'eligibilityAdditionalInformation': {'industryCode': '11', 'industry': 'Office'}}])
+        discovered['benefitsInformation'][0]['additionalInformation'] = [
+            {'description': 'Provider is in network based on NPI ID provided in request'}]
+        inactive = deepcopy(discovered)
+        inactive['payer'] = {'name': 'UnitedHealthcare'}
+        inactive['benefitsInformation'] = [{'code': '6', 'serviceTypeCodes': ['30', '98']}]
+        envelope = {'status': 'COMPLETE', 'items': [inactive, discovered]}
+        verified = deepcopy(discovered)
+        verified['subscriber']['name'] = {'person': {'firstName': 'PAT', 'lastName': 'EXAMPLE'}}
+        verified['subscriber']['additionalInformation'] = {'group': {'number': 'NEW-GROUP'}}
+        for field in ('firstName', 'lastName', 'groupNumber'):
+            verified['subscriber'].pop(field)
+        verified['payer'] = {'name': {'organization': 'CHLIC'}}
+        verified['payerId'] = '62308'
+        coverage = api._discovered_coverage(inputs, source, discovered)
+        request = api.stedi_request_body({'stedi_payer_id': 'HGJLR'}, provider, coverage,
+            inputs['service_date'], api._previsit_service_types(inputs), inquiry_only=True)
+        recovery = case['previsit_discovery']
+        recovery.update(request_state='complete', outcome='review_needed',
+            reason_code='returned_identity_or_coverage_mismatch', identity_pathway='cigna_member_followup',
+            identity_binding=api._recovery_binding(inputs, source), raw_object_key='discovery',
+            candidate_version=5,
+            eligibility_object_key='response', eligibility_sha256=api.hashlib.sha256(
+                json.dumps(verified).encode()).hexdigest(),
+            selected_candidate_id=discovery.candidates(envelope, inputs, source)[1]['id'],
+            eligibility_attempts=[{'request_object_key': 'request',
+                'fingerprint': api.hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()}])
+        objects = {'discovery': json.dumps(envelope).encode(), 'response': json.dumps(verified).encode(),
+                   'request': json.dumps(request).encode()}
+        rejected_case = deepcopy(case)
+        with patch.object(api.object_store, 'get_object_bytes', side_effect=objects.__getitem__), \
+             patch.object(api, '_save', side_effect=lambda value, *_: value), \
+             patch.object(api.staff_store, 'list_library', return_value=[]), \
+             patch.object(api, '_post_stedi_eligibility', AsyncMock()) as payer_request:
+            tasks = BackgroundTasks()
+            await api._start_previsit_recovery(case, session, provider, tasks)
+            assert recovery['request_state'] == 'pending'
+            assert len(tasks.tasks) == 1
+            await tasks()
+            result = api._previsit_result(case, session['practice_id'])
+        payer_request.assert_not_awaited()
+        assert recovery['outcome'] == 'recovered'
+        assert result['benefits']['copay_cents'] == 5000
+        assert result['collection_guidance']['amount_cents'] == 5000
+        assert result['collection_guidance']['basis'] == 'cigna_refundable_office_copay'
+
+        from app.api.routers.commercial_flow.commercial_recovery_saved import saved_cigna_followup
+        objects['response'] = json.dumps({**verified, 'payerId': 'WRONG'}).encode()
+        with patch.object(api.object_store, 'get_object_bytes', side_effect=objects.__getitem__):
+            assert await saved_cigna_followup(api, rejected_case, provider) is None
+            rejected_case['previsit_discovery']['eligibility_sha256'] = api.hashlib.sha256(objects['response']).hexdigest()
+            assert await saved_cigna_followup(api, rejected_case, provider) is None
+            wrong_group = deepcopy(verified)
+            wrong_group['subscriber']['additionalInformation']['group']['number'] = 'OTHER-GROUP'
+            objects['response'] = json.dumps(wrong_group).encode()
+            rejected_case['previsit_discovery']['eligibility_sha256'] = api.hashlib.sha256(objects['response']).hexdigest()
+            assert await saved_cigna_followup(api, rejected_case, provider) is None
+            objects['response'] = json.dumps(verified).encode()
+            rejected_case['previsit_discovery']['eligibility_sha256'] = api.hashlib.sha256(objects['response']).hexdigest()
+            second_active = deepcopy(discovered)
+            second_active['subscriber']['memberId'] = 'OTHER-MEMBER'
+            objects['discovery'] = json.dumps({'status': 'COMPLETE', 'items': [second_active, discovered]}).encode()
+            assert await saved_cigna_followup(api, rejected_case, provider) is None
 
     async def test_address_conflict_followup_with_wrong_member_stays_in_review(self):
         _, _, _, discovered = setup()
