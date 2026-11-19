@@ -143,6 +143,39 @@ def suppress_saved_ambiguous_combined_zero_oop(result: dict) -> None:
     result.pop('planning_estimate', None)
 
 
+def refresh_saved_year_to_date_oop_candidate(result: dict, case: dict) -> None:
+    """Remove an obsolete YTD ambiguity only after reopening the protected 271."""
+    benefits = result.get('benefits') or {}
+    candidates = benefits.get('oop_medical_candidate_ids') or []
+    options = {row.get('id'): row for row in benefits.get('reported_options') or []}
+    context = case.get('previsit_context') or {}
+    inputs = context.get('inputs') or {}
+    if (not candidates or any((options.get(key) or {}).get('time_period') != 'YEAR_TO_DATE'
+                              for key in candidates)
+            or benefits.get('oop_remaining_cents') != 0 or not benefits.get('oop_id')
+            or result.get('service_date') != inputs.get('service_date')
+            or case.get('previsit', {}).get('request_state') != 'complete'
+            or not case.get('previsit_raw_object_key') or not case.get('previsit_raw_sha256')):
+        return
+    try:
+        raw = _api.object_store.get_object_bytes(case['previsit_raw_object_key'])
+        if _api.hashlib.sha256(raw).hexdigest() != case['previsit_raw_sha256']:
+            return
+        fresh = _api._case_benefits(_api.json.loads(raw), inputs, context.get('source') or {}, case)
+    except Exception:
+        return
+    if (fresh.get('active') is not True or fresh.get('source_errors')
+            or fresh.get('oop_remaining_cents') != 0
+            or fresh.get('oop_id') != benefits['oop_id']
+            or fresh.get('oop_medical_candidate_ids')
+            or fresh.get('oop_remaining_conflict_ids')):
+        return
+    benefits['oop_medical_candidate_ids'] = []
+    if not benefits.get('oop_quarantined_ids'):
+        benefits['review_reasons'] = [reason for reason in benefits.get('review_reasons') or []
+            if reason != 'Separate medical and supplementary coverage was returned; unassigned out-of-pocket rows are retained but cannot set this medical visit’s limit.']
+
+
 def upgrade_saved_biopsy_preview(result: dict, case: dict) -> None:
     """Project the new follow-up suggestion onto an unedited saved biopsy preview."""
     context = case.get('previsit_context') or {}

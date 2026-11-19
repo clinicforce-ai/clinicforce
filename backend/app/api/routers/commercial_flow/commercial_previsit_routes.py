@@ -100,6 +100,10 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     collection_guidance.unconfirmed_zero_oop and withholds a positive advance.
     A linked, applicable zero balance can return basis out_of_pocket_limit
     and a $0 covered office-visit collection.
+    A separate year-to-date paid amount remains visible as payer evidence but
+    cannot block a sourced zero remaining individual balance merely because
+    its medical-plan association is unresolved. Saved reads recheck the
+    protected 271 checksum before clearing a legacy year-to-date blocker.
     A patient-bound office E/M response reporting Original Medicare Part B as
     secondary returns a $0 check-in advance under cms_msp_part_b_deferral,
     while preserving its copay and leaving final liability to the claims.

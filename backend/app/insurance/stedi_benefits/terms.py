@@ -89,7 +89,9 @@ def select_cost_share_rows(entries: list[dict[str, Any]], payload: dict[str, Any
             and anchor.get('inPlanNetworkIndicatorCode') == row.get('inPlanNetworkIndicatorCode')]
         return len(anchors) == 1
     oop_medical_candidate_ids = [row['evidence_path'] for row in oop_rows
-                                 if oop_plan_association(row, payload) == 'medical_candidate']
+                                 if oop_plan_association(row, payload) == 'medical_candidate'
+                                 and str(row.get('timeQualifierCode') or row.get('timeQualifier') or '').upper()
+                                     in {'23', 'CALENDAR_YEAR', '22', 'SERVICE_YEAR', 'CONTRACT', '29', 'REMAINING'}]
     oop_quarantined_ids = [row['evidence_path'] for row in oop_rows
                            if supplementary_present and oop_plan_association(row, payload) == 'unassigned'
                            and not paired_medical_remaining(row)]

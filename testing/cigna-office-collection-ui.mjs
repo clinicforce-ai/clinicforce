@@ -128,6 +128,27 @@ assert.match(zeroSummary, /Amount to collect at visit/)
 assert.match(zeroSummary, /\$0\.00/)
 assert.doesNotMatch(zeroSummary, /\$60\.00/)
 
+const uhcMetIndividualOop = { ...metIndividualOop,
+  payer: 'UnitedHealthcare',
+  plan_details: { stedi: { names: ['Synthetic Group Medicare Advantage PPO'] } },
+  benefits: { ...metIndividualOop.benefits, service_date_matches: true,
+    oop_annual_cents: 200000, oop_remaining_cents: 0 },
+  price_range: { ...metIndividualOop.price_range, complete: false,
+    lines: [{ ...metIndividualOop.price_range.lines[0], benefits: {
+      active: true, copay_cents: 0, coinsurance_percent: '20',
+      deductible_remaining_cents: 0, oop_remaining_cents: 0,
+    } }] },
+  fee_proxy_estimate: null, provisional_collection_target: null,
+}
+const uhcZeroView = deriveCommercialEstimateView({ result: uhcMetIndividualOop, appointments: [],
+  selectedVisit: null, busy: false, error: null, readOnly: false, recovering: false })
+assert.equal(uhcZeroView.supportedAmount, true)
+assert.equal(collectionAtVisitRow(uhcMetIndividualOop, uhcZeroView, { ...values,
+  cignaFeeProxy: false, feeProxy: null, proxyFormula: undefined }).value, '$0.00')
+assert.match(renderToStaticMarkup(React.createElement(ArrivalAmountSummary, {
+  model: uhcZeroView, result: uhcMetIndividualOop, partialCopay: null, visibleAmount: true,
+})), /\$0\.00/)
+
 const pending = collectionAtVisitRow({ ...result,
   collection_guidance: { amount_cents: null, status: 'action_required', basis: 'missing_collection_inputs' },
 }, { ...model, supportedAmount: false, amount: null }, values)
@@ -215,4 +236,4 @@ const unconfirmedRow = collectionAtVisitRow(unconfirmedCopay,
   { ...values, feeProxy: null, cignaFeeProxy: false })
 assert.equal(unconfirmedRow.value, '$100.00')
 assert.match(unconfirmedRow.detail, /Provider participation.*unconfirmed/)
-console.log('Cigna office collection: approved $60 copay wins over BCBS fee proxy; pending cases stay pending')
+console.log('Office collection: approved copay and met individual OOP render their supported visit amounts')

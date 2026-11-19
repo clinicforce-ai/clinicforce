@@ -4,6 +4,7 @@ The fixture keeps payer row scope and missing/conflicting fields; patient identi
 and exact accumulator amounts were removed or changed.
 """
 import json
+import hashlib
 from copy import deepcopy
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -15,6 +16,7 @@ from fastapi.testclient import TestClient
 from app.api.routers import commercial_estimator as api
 from app.api.routers.commercial_flow import commercial_previsit_pricing as pricing
 from app.api.routers.commercial_flow import commercial_previsit_status as status
+from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import refresh_saved_year_to_date_oop_candidate
 from app.insurance import amount_explanation, collection_guidance, commercial, encounter_summary, visit_estimate
 from app.insurance.collection.requirements import requirement_blocker
 from testing.synthetic_policy import ADVANCE_POLICY
@@ -23,6 +25,69 @@ from testing.synthetic_policy import ADVANCE_POLICY
 FIXTURES = json.loads((Path(__file__).parent / 'fixtures' / 'uhc_saved_response_projections.json').read_text())
 POLICY = {'mode': 'defer_to_claim', 'reference': 'approved clinic policy',
           'approved_by': 'administrator', 'approved_at': '2026-10-15T12:00:00Z'}
+
+
+def test_year_to_date_oop_row_does_not_block_sourced_zero_remaining_office_collection(monkeypatch):
+    """A historical paid-to-date value cannot compete with the remaining balance."""
+    def oop(amount: str, period: str, note: str) -> dict:
+        return {'service': {'system': 'STC', 'value': '30'},
+                'coverageLevel': 'INDIVIDUAL',
+                'network': {'indicator': 'IN_AND_OUT_OF_NETWORK'},
+                'insuranceType': 'PPO', 'timePeriod': period, 'amount': amount,
+                'messages': [note]}
+
+    raw = {'plans': [{'benefits': {
+        'statuses': [{'service': {'system': 'STC', 'value': '30'},
+                      'status': 'ACTIVE_COVERAGE',
+                      'planCoverageDescription': 'Synthetic Group Medicare Advantage PPO'}],
+        'outOfPocket': [oop('3000', 'CALENDAR_YEAR', 'INT MED AND RX'),
+                        oop('3000', 'YEAR_TO_DATE', 'COMBINED'),
+                        oop('0', 'REMAINING', 'INT MED AND RX')]}}]}
+    benefits = commercial.normalize_stedi_271(raw, '98', True,
+        service_date='2026-11-19', procedure_code='99213', place_of_service='11')
+    identity = {'status': 'matched', 'binding': 'synthetic-binding', 'match_version': 2}
+    benefits.update(identity=identity, network_status='in_network',
+                    network_source='clinic_library_contract')
+    result = {'payer': 'UnitedHealthcare', 'payment_mode': 'insurance',
+              'identity': identity, 'benefits': benefits,
+              'codes': [{'id': 'office', 'code': '99213', 'units': 1}],
+              'price_range': {'mode': 'services', 'complete': False,
+                              'lines': [{'id': 'office', 'code': '99213', 'units': 1,
+                                         'benefits': {'active': True}}]},
+              'issues': ['The active clinic rate for a selected CPT changed since this saved estimate was calculated.']}
+    assert benefits['oop_remaining_cents'] == 0
+    assert benefits['oop_id']
+    assert benefits['oop_medical_candidate_ids'] == []
+    assert len([row for row in benefits['reported_options']
+                if row['kind'] == 'out_of_pocket' and row['time_period'] == 'YEAR_TO_DATE']) == 1
+    fresh = deepcopy(benefits)
+    old = result['benefits']
+    old['oop_medical_candidate_ids'] = [next(row['id'] for row in old['reported_options']
+        if row['kind'] == 'out_of_pocket' and row['time_period'] == 'YEAR_TO_DATE')]
+    stale_reason = ('Separate medical and supplementary coverage was returned; '
+                    'unassigned out-of-pocket rows are retained but cannot set this medical visit’s limit.')
+    old.setdefault('review_reasons', []).append(stale_reason)
+    result['service_date'] = '2026-11-19'
+    raw_bytes = json.dumps(raw).encode()
+    case = {'previsit_context': {'inputs': {'service_date': '2026-11-19'}, 'source': {}},
+            'previsit': {'request_state': 'complete'},
+            'previsit_raw_object_key': 'synthetic-protected-response',
+            'previsit_raw_sha256': hashlib.sha256(raw_bytes).hexdigest()}
+    monkeypatch.setattr(api.object_store, 'get_object_bytes', lambda _: raw_bytes)
+    monkeypatch.setattr(api, '_case_benefits', lambda *_: fresh)
+    tampered = {**case, 'previsit_raw_sha256': 'wrong-hash'}
+    refresh_saved_year_to_date_oop_candidate(result, tampered)
+    assert old['oop_medical_candidate_ids']
+    assert collection_guidance.build(result)['amount_cents'] is None
+    refresh_saved_year_to_date_oop_candidate(result, case)
+    assert old['oop_medical_candidate_ids'] == []
+    assert stale_reason not in old['review_reasons']
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 0
+    assert guidance['basis'] == 'claim_after_service'
+    result['collection_guidance'] = guidance
+    assert encounter_summary.build(result)['collect_today_cents'] == 0
+    assert 'Collect $0' in amount_explanation.build(result, guidance)['sentence']
 
 
 def _synthetic_choice_plus_terms(*, waive_deductible: bool = True) -> dict:
