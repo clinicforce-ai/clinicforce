@@ -6,7 +6,7 @@ from app.insurance.network_participation import verified_in_network, verified_ou
 from app.insurance import aetna_office_planning, evidence_resolution, group_contract_support, payer_fees, published_plan_benefits
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence, recheck_saved_payer_message
-from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import guard_unresolved_telehealth, guard_telehealth_guidance, restore_active_blue_cross_insurance, restore_saved_published_product, restore_saved_humana_hmo_product, retain_conflicted_insurance, refresh_saved_aetna_identity, refresh_saved_cigna_office_benefits, refresh_saved_uhc_registration_benefits, refresh_saved_network_pricing, upgrade_saved_biopsy_preview, refresh_saved_cross_payer_planning, suppress_saved_ambiguous_combined_zero_oop
+from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import guard_unresolved_telehealth, guard_telehealth_guidance, restore_active_blue_cross_insurance, restore_saved_published_product, restore_saved_humana_hmo_product, retain_conflicted_insurance, refresh_saved_aetna_identity, refresh_saved_cigna_office_benefits, refresh_saved_uhc_registration_benefits, refresh_saved_network_pricing, refresh_saved_year_to_date_oop_candidate, upgrade_saved_biopsy_preview, refresh_saved_cross_payer_planning, suppress_saved_ambiguous_combined_zero_oop
 from app.api.routers.commercial_flow.commercial_previsit_requirements import refresh_saved_requirements
 from app.api.routers.commercial_flow.commercial_previsit_enrollment import _enrollment_failure
 from app.api.routers.commercial_flow.commercial_previsit_service_scope import retain_incomplete_service_evidence as _retain_incomplete_service_evidence
@@ -261,8 +261,7 @@ def _recheck_saved_clinic_pricing(result: dict, case: dict, practice_id: str) ->
         benefits.update(network_status='unknown', network_source=None)
         result['network_evidence'] = {'reason': reason}
     price.update(complete=False, patient_min_cents=None, patient_max_cents=None,
-                 allowed_min_cents=None, allowed_max_cents=None,
-                 plan_min_cents=None, plan_max_cents=None,
+                 allowed_min_cents=None, allowed_max_cents=None, plan_min_cents=None, plan_max_cents=None,
                  collection={'action': 'rerun', 'amount_cents': None, 'reason': reason})
     for line in clinic_lines:
         line.update(allowed_cents=None, unit_allowed_cents=None, calculation=None)
@@ -333,6 +332,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     result = _api.deepcopy(case['previsit_context']['result'])
     refresh_saved_aetna_identity(result, case)
     suppress_saved_ambiguous_combined_zero_oop(result)
+    refresh_saved_year_to_date_oop_candidate(result, case)
     upgrade_saved_biopsy_preview(result, case)
     refresh_saved_uhc_registration_benefits(result, case)
     refresh_saved_cigna_office_benefits(result, case, practice_id or '')
