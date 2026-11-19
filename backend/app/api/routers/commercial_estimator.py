@@ -180,6 +180,7 @@ from app.api.routers.commercial_flow.commercial_recovery_flow import (
     _discovered_coverage,
     _discovery_pricing_source,
     _accept_recovered_coverage,
+    _finish_saved_cigna_followup,
     _recheck_discovery_candidate,
     _start_previsit_recovery,
 )

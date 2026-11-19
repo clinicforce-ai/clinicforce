@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
+from app.api.routers.commercial_flow.commercial_recovery_saved import cigna_response_route, saved_cigna_followup
 
 
 def _original_medical_policy_established(case: dict) -> bool:
@@ -122,6 +123,21 @@ async def _accept_recovered_coverage(case: dict, session: dict, verified: dict, 
         case.pop('previsit_raw_sha256', None)  # Older reused objects have no recorded byte digest.
     case.update(await _api.run_in_threadpool(_api._save, case, session, 'stedi-coverage-recovered'))
     _api._recovery_event(case, session, 'eligibility', 'verified', reason='coverage_recovered', http_status=http_status)
+
+
+async def _finish_saved_cigna_followup(case: dict, session: dict, verified: dict, coverage: dict) -> None:
+    """Complete the already verified response after the staff request returns."""
+    recovery = case['previsit_discovery']
+    try:
+        recovery['identity_pathway'] = 'payer_eligibility_followup'
+        await _api.asyncio.wait_for(_api._accept_recovered_coverage(case, session, verified,
+            {'stediId': case['previsit_context']['payer_id'], 'displayName': 'Cigna'}, coverage), timeout=540)
+        _api._recovery_event(case, session, 'eligibility', 'reused', reason='saved_followup_verified')
+    except Exception:
+        recovery.update(request_state='complete', outcome='review_needed', stage='saved_followup_review',
+            reason_code='saved_followup_processing_failed',
+            selection_error='The saved payer response could not finish pricing. Review the saved check before another payer request.')
+        await _api.run_in_threadpool(_api._save, case, session, 'saved-cigna-followup-review')
 
 
 async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict, *, discovery_payload: dict | None = None,
@@ -251,8 +267,7 @@ async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict
         returned_identity = _api.stedi_discovery.candidate_identity(verified, inputs)
         payer_confirmed = bool(address_inquiry
             and _api.stedi_discovery.payer_followup_confirms(item, verified, inputs, source)
-            and (not cigna_member_inquiry or payer['stediId'] in {'HGJLR', '62308'}
-                 and verified.get('tradingPartnerServiceId') == payer['stediId']))
+            and (not cigna_member_inquiry or cigna_response_route(payer['stediId'], verified)))
         identity_matches = False
         recorded = _api.insurance_identity.compare(verified, _api._coverage_snapshot(inputs, source))
         card_confirmed = bool(item.get('evidence_source') == 'insurance_card'
@@ -356,6 +371,14 @@ async def _start_previsit_recovery(case: dict, session: dict, provider: dict, ba
         case = await _api.run_in_threadpool(_api._save, case, session, 'stedi-discovery-reconciling')
         background_tasks.add_task(_api._reconcile_saved_discovery, case, session)
         return _api._previsit_result(case, session['practice_id'])
+    if background_tasks is not None:
+        saved = await saved_cigna_followup(_api, case, provider)
+        if saved:
+            verified, coverage = saved
+            recovery.update(request_state='pending', stage='replaying_saved_eligibility', outcome=None)
+            case = await _api.run_in_threadpool(_api._save, case, session, 'saved-cigna-followup-pending')
+            background_tasks.add_task(_api._finish_saved_cigna_followup, case, session, verified, coverage)
+            return _api._previsit_result(case, session['practice_id'])
     # A new previsit POST may reuse one recent, patient-bound discovery result
     # for an eligibility inquiry. Reads never submit a payer transaction.
     if (background_tasks is not None and recovery.get('request_state') == 'complete'

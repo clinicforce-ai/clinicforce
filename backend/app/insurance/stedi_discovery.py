@@ -71,7 +71,7 @@ def parse_discovery_candidate(item: object) -> dict | None:
     return {'subscriber': {key: subscriber.get(key) or None for key in person_keys},
             'dependent': {key: dependent.get(key) or None for key in person_keys} if dependent else None,
             'member_id': subscriber.get('memberId') or None,
-            'group_number': subscriber.get('groupNumber') or (item.get('planInformation') or {}).get('groupNumber'),
+            'group_number': details.get('group_number'),
             'relationship': 'dependent' if dependent else 'self',
             'relationship_code': _dependent_relationship(dependent) if dependent else '18',
             'payer': (item.get('payer') or {}).get('name') or (item.get('payer') or {}).get('lastName'),
@@ -123,7 +123,7 @@ def candidate_identity(item: dict, inputs: dict) -> dict | None:
             'relationship': 'dependent' if dependent else 'self', 'address_matches': address_matches,
             'address_conflict': address_conflict,
             'relationship_code': _dependent_relationship(dependent) if dependent else '18',
-            'group_number': subscriber.get('groupNumber') or (item.get('planInformation') or {}).get('groupNumber'),
+            'group_number': commercial.plan_details(item).get('group_number'),
             'plan_number': subscriber.get('planNumber') or (item.get('planInformation') or {}).get('planNumber')}
 
 
