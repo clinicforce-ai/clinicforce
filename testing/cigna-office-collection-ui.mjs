@@ -236,4 +236,16 @@ const unconfirmedRow = collectionAtVisitRow(unconfirmedCopay,
   { ...values, feeProxy: null, cignaFeeProxy: false })
 assert.equal(unconfirmedRow.value, '$100.00')
 assert.match(unconfirmedRow.detail, /Provider participation.*unconfirmed/)
+const confirmedCopay = { ...result,
+  price_range: { ...result.price_range, lines: [{ ...result.price_range.lines[0], code: '99203' }] },
+  collection_guidance: { amount_cents: 5000, status: 'estimated',
+    basis: 'cigna_refundable_office_copay',
+    reason: 'Collect the payer-reported specialist office copay as a refundable advance. Reconcile the processed claim and refund any excess.' },
+  encounter_summary: { collect_today_cents: 5000, payments_verified_cents: 0 },
+}
+const confirmedRow = collectionAtVisitRow(confirmedCopay,
+  { ...model, amount: '$50.00', amountText: '$50.00' }, values)
+assert.equal(confirmedRow.value, '$50.00')
+assert.match(confirmedRow.detail, /Collect the payer-reported specialist office copay/)
+assert.doesNotMatch(confirmedRow.detail, /unconfirmed provider|participation.*unconfirmed/)
 console.log('Office collection: approved copay and met individual OOP render their supported visit amounts')
