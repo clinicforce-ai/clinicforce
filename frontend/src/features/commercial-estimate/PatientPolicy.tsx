@@ -244,7 +244,7 @@ export default function PatientPolicy({
                     result.card_check.failure_reason === 'ecw_no_matching_card_document'
                       ? uhcCard
                         ? 'eCW returned no insurance-card image. If your clinic has UHC Provider Portal access, open this member’s Eligibility record for the digital ID card, upload it here, and ask eCW to expose type 64290-0.'
-                        : 'At this estimate check, eCW returned no insurance-card document or image. Check the card in eCW and ask eCW to expose type 64290-0, or upload the card here and rerun the estimate.'
+                        : 'At this estimate check, no card was verified among the eCW FHIR documents returned for this patient. Check the card in eCW, or upload it here and rerun the estimate.'
                       : result.card_check.failure_reason === 'ecw_patient_unlinked'
                         ? 'No eCW patient was linked for card lookup. Link the patient or upload the card here.'
                         : 'No insurance card was available to compare with eCW before the payer check.',

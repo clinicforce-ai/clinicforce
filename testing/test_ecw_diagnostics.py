@@ -15,7 +15,8 @@ import pytest
 from fastapi import HTTPException
 from PIL import Image
 
-from app.insurance import ecw_backend as ecw
+from app.insurance import ecw_backend as ecw, golden
+from app.api.routers import commercial_estimator as api
 from app.logs.collection_audit import logger, request_id
 from app.main import app
 
@@ -118,6 +119,71 @@ def test_generic_ecw_patient_pdf_is_returned_only_when_its_bytes_are_a_card():
     asyncio.run(run())
 
 
+def test_unlabelled_scanned_card_with_standard_member_fields_is_previewed():
+    image = io.BytesIO()
+    Image.new('RGB', (400, 240), 'white').save(image, format='PNG')
+    with fitz.open() as pdf:
+        page = pdf.new_page()
+        page.insert_text((40, 40), 'Name: SAMPLE PATIENT\nMember ID: ABC123456\n'
+                         'Group Number: G12345\nPPO\nRxBIN: 123456')
+        page.insert_image(fitz.Rect(40, 90, 440, 330), stream=image.getvalue())
+        card_bytes = pdf.tobytes()
+    document = {'resourceType': 'DocumentReference', 'id': 'generic-card', 'status': 'current',
+                'subject': {'reference': 'Patient/synthetic'},
+                'type': {'coding': [{'system': 'http://loinc.org', 'code': '103140-0'}]},
+                'content': [{'attachment': {'contentType': 'application/pdf',
+                                           'data': base64.b64encode(card_bytes).decode()}}]}
+
+    def handler(request):
+        rows = [] if request.url.params.get('type') == '64290-0' else [document]
+        return httpx.Response(200, json={'resourceType': 'Bundle',
+                                         'entry': [{'resource': row} for row in rows]})
+
+    async def run():
+        with patch.object(ecw, 'settings', return_value=('client', 'https://ehr.example.test/fhir')), \
+             patch.object(ecw, '_access_token', AsyncMock(return_value='synthetic-token')):
+            cards = await ecw.insurance_cards('synthetic', transport=httpx.MockTransport(handler))
+            assert [item['id'] for item in cards] == ['generic-card:0']
+            data, mime = await ecw.insurance_cards('synthetic', document_id=cards[0]['id'],
+                                                   transport=httpx.MockTransport(handler))
+        assert (data, mime) == (card_bytes, 'application/pdf')
+    asyncio.run(run())
+
+
+def test_async_ecw_card_timeout_is_reported_as_timeout_before_payer_check():
+    session = {'practice_id': 'synthetic-practice', 'patient_id': 'synthetic-patient'}
+    with patch('app.api.routers.commercial_estimator.staff_store.patient_card_intakes', return_value=[]), \
+         patch.object(ecw, 'insurance_cards', AsyncMock(side_effect=asyncio.TimeoutError)):
+        result = asyncio.run(api._read_card_hints(session, 'synthetic-ecw'))
+    assert result['status'] == 'unavailable'
+    assert result['failure_reason'] == 'card_read_timeout'
+
+
+def test_ecw_generic_pdf_ocr_failure_does_not_claim_no_card():
+    image = io.BytesIO()
+    Image.new('RGB', (400, 240), 'white').save(image, format='PNG')
+    with fitz.open() as pdf:
+        page = pdf.new_page()
+        page.insert_image(page.rect, stream=image.getvalue())
+        payload = base64.b64encode(pdf.tobytes()).decode()
+    document = {'resourceType': 'DocumentReference', 'id': 'unknown', 'status': 'current',
+                'subject': {'reference': 'Patient/synthetic'},
+                'content': [{'attachment': {'contentType': 'application/pdf', 'data': payload}}]}
+
+    def handler(request):
+        rows = [] if request.url.params.get('type') else [document]
+        return httpx.Response(200, json={'resourceType': 'Bundle',
+                                         'entry': [{'resource': row} for row in rows]})
+
+    async def run():
+        with patch.object(ecw, 'settings', return_value=('client', 'https://ehr.example.test/fhir')), \
+             patch.object(ecw, '_access_token', AsyncMock(return_value='synthetic-token')), \
+             patch('app.insurance.golden._image_text', side_effect=golden.OCRServiceError('synthetic failure')):
+            with pytest.raises(ecw.EcwBackendError, match='discovery is incomplete'):
+                await ecw.insurance_cards('synthetic', transport=httpx.MockTransport(handler))
+    asyncio.run(run())
+
+
 def test_card_inside_ecw_patient_packet_returns_only_its_page():
     image = io.BytesIO()
     Image.new('RGB', (400, 240), 'white').save(image, format='PNG')
@@ -190,7 +256,7 @@ def test_unlabeled_scanned_card_with_participant_and_group_ids_is_listed():
                       'Participant ID#: ABC123456\nType of Coverage\nPharmacy Plan\nRxBIN: 123456')
         with patch.object(ecw, 'settings', return_value=('client', 'https://ehr.example.test/fhir')), \
              patch.object(ecw, '_access_token', AsyncMock(return_value='synthetic-token')), \
-             patch('app.insurance.golden._pdf_text', return_value=recognized):
+             patch('app.insurance.golden._image_text', return_value=recognized):
             cards = await ecw.insurance_cards('synthetic', transport=httpx.MockTransport(handler))
             assert [item['id'] for item in cards] == ['scanned:0']
             assert '_content' not in cards[0]
