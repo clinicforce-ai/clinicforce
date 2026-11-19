@@ -302,6 +302,33 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         source['coverage_records'][1]['status'] = 'inactive'
         self.assertFalse(_compare_card_hints(card, inputs.copy(), source)['alternative_supported'])
 
+    def test_patient_bound_cigna_card_can_check_a_different_member_policy(self):
+        from app.insurance.stedi_discovery import card_candidate, card_followup_confirms
+        inputs = {'service_date': '2026-11-09', 'member_id': 'X1111111101',
+                  'group_number': 'OLD', 'relationship': '18',
+                  'patient': {'patient_first_name': 'Pat', 'patient_last_name': 'Example',
+                              'patient_birth_date': '1980-01-02'},
+                  'subscriber': {'firstName': 'Pat', 'lastName': 'Example', 'birthDate': '1980-01-02'}}
+        source = {'payer': 'Cigna', '_patient_id': 'patient-1', 'coverage_id': 'old',
+                  'active_coverages': 2}
+        fields = {'payer': 'Cigna', 'member_name': 'Pat Example',
+                  'member_id': 'X2222222201', 'group_number': 'NEW'}
+        card = {'status': 'read', 'count': 1, 'fields': fields}
+        check = _compare_card_hints(card, inputs.copy(), source)
+        self.assertEqual(check['status'], 'conflict')
+        self.assertTrue(check['cigna_card_policy'])
+        self.assertTrue(check['alternative_supported'])
+        item = card_candidate(fields, inputs, source)
+        response = {'tradingPartnerServiceId': 'HGJLR', 'subscriber': {
+            'firstName': 'PAT', 'lastName': 'EXAMPLE', 'dateOfBirth': '19800102',
+            'memberId': 'X2222222201', 'groupNumber': 'NEW'}}
+        self.assertTrue(card_followup_confirms(item, response, inputs, 'HGJLR'))
+        for changed in ({'memberId': 'OTHER'}, {'groupNumber': 'OTHER'}, {'dateOfBirth': '19900101'}):
+            self.assertFalse(card_followup_confirms(item, {**response,
+                'subscriber': {**response['subscriber'], **changed}}, inputs, 'HGJLR'))
+        self.assertFalse(card_followup_confirms(item, response, inputs, 'OTHER'))
+        self.assertFalse(_compare_card_hints({**card, 'reference_only': True}, inputs.copy(), source)['alternative_supported'])
+
     def test_old_bound_uhc_response_and_card_allow_fresh_check_only(self):
         from app.api.routers import commercial_estimator as api
         inputs = {'service_date': '2026-11-09', 'member_id': 'SELECTED-1',

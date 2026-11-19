@@ -90,6 +90,12 @@ def select_benefit_rows(payload: dict[str, Any], service_type_code: str,
         # STC 98 is broad: a specialist telemedicine or ABA copay is not the
         # in-person office copay, even when the payer omits POS on that row.
         role = ' '.join(str(value).casefold() for value in (provider_specialties or []))
+        office_provider_role = office_role(provider_specialties or [])
+        if office_provider_role:
+            opposite = 'PCP' if office_provider_role == 'specialist' else 'Specialist'
+            entries = [row for row in entries if row.get('code') != 'B' or not any(
+                re.fullmatch(opposite, note.strip(), re.I)
+                for note in _benefit_notes([row.get('messages'), row.get('additionalInformation')]))]
         named_roles = {
             'nurse practitioners': r'\b(?:nurse practitioner|np|aprn)\b',
             'ob/gyn': r'\b(?:ob/?gyn|obstetric|gynecolog)\b',
