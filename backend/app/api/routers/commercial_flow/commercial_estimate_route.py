@@ -83,7 +83,6 @@ from app.api.routers.commercial_flow.commercial_previsit_appointment import load
 ))
 async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, background_tasks: _api.BackgroundTasks = None) -> dict:
     """Estimate suggested or edited visit CPTs from current eligibility and clinic prices.
-
     A confirmed patient's card read overlaps the eCW appointment read, while
     the card comparison still precedes any new paid eligibility request.
     A visit 31 calendar days away is eligible for checking unless a later hold applies.
