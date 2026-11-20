@@ -107,8 +107,48 @@ def test_bcbstx_plus_office_missing_balances_defers_collection_and_keeps_share_u
         lambda value: value['benefits'].update(has_secondary=True),
         lambda value: value['benefits'].update(source_errors=[{'kind': 'invalid_source'}]),
         lambda value: value['benefits'].update(service_date_matches=False),
+        lambda value: value['benefits'].update(deductible_annual_cents=None),
         lambda value: value['appointment_context'].update(place_of_service='10'),
         lambda value: value['price_range']['lines'][0]['benefits'].update(copay_cents=2500),
+        lambda value: value['price_range']['lines'][0].update(allowed_cents=0),
+    ):
+        blocked = deepcopy(result)
+        mutation(blocked)
+        assert collection_guidance.build(blocked)['amount_cents'] is None
+
+
+def test_bcbstx_plus_new_office_without_cost_share_terms_defers_check_in():
+    result = scenario()
+    result.update(payer='Blue Cross Blue Shield Tx', service_date='2026-11-20',
+        appointment_context={'place_of_service': '11'},
+        plan_details={'stedi': {'names': ['PREFERRED PROVIDER OPTION PLUS MEDICAL']}},
+        codes=[{'id': 'office', 'code': '99204', 'units': 1, 'modifiers': []}],
+        selected_ids=['office'])
+    result['benefits'].update(identity=result['identity'], service_date_matches=True,
+        deductible_remaining_cents=None, oop_remaining_cents=None)
+    result['price_range'].update(complete=False, patient_min_cents=None,
+        patient_max_cents=None, service_issues=[])
+    line = result['price_range']['lines'][0]
+    line.update(code='99204', allowed_cents=16000, allowed_basis='clinic_contract',
+        modifiers=[], calculation=None, rate_resolution={'status': 'RESOLVED'})
+    line['benefits'].update(active=True, network_status='in_network',
+        service_date_matches=True, copay_cents=None, coinsurance_percent=None,
+        deductible_remaining_cents=None, oop_remaining_cents=None,
+        deductible_applies=None)
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 0
+    assert guidance['collection_rule']['mode'] == 'bcbstx_plus_office_deferral'
+    assert guidance['services'][0]['patient_cents'] is None
+    assert 'cost-sharing terms' in guidance['reason']
+    assert encounter_summary.build({**result, 'collection_guidance': guidance})['collect_today_cents'] == 0
+    assert 'Collect $0' in amount_explanation.build(result, guidance)['sentence']
+
+    for mutation in (
+        lambda value: value['benefits'].update(has_secondary=True),
+        lambda value: value['benefits'].update(network_conflict=True),
+        lambda value: value['benefits'].update(source_errors=[{'kind': 'invalid_source'}]),
+        lambda value: value['price_range']['lines'][0]['benefits'].update(copay_cents=2500),
+        lambda value: value['price_range']['lines'][0]['benefits'].update(coinsurance_percent='20.0'),
         lambda value: value['price_range']['lines'][0].update(allowed_cents=0),
     ):
         blocked = deepcopy(result)

@@ -139,4 +139,27 @@ assert.match(plusTable, /\$76\.15/)
 const plusArrival = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
   { result: plusVisit, model: plusModel, partialCopay: null, visibleAmount: true }))
 assert.match(plusArrival, /Amount to collect at visit[\s\S]*\$0\.00/)
-console.log('Blue office tables: $60 pending and Plus Medical $0 deferred with conditional examples')
+const newOfficeVisit = {
+  ...plusVisit,
+  service_date: '2026-11-20',
+  codes: [{ id: 'office', code: '99204', units: 1, modifiers: [] }],
+  benefits: { ...plusVisit.benefits, deductible_annual_cents: null,
+    oop_annual_cents: null, coinsurance_percent: null },
+  price_range: { ...plusVisit.price_range, lines: [{
+    ...plusVisit.price_range.lines[0], code: '99204', allowed_cents: 16000,
+    benefits: { active: true, network_status: 'in_network', coinsurance_percent: null },
+  }] },
+  collection_guidance: { ...plusVisit.collection_guidance,
+    reason: 'Collect $0 at check-in; applicable cost-sharing terms were not returned for this CPT.' },
+}
+const newOfficeModel = deriveCommercialEstimateView({ result: newOfficeVisit, appointments: [],
+  selectedVisit: '', busy: null, error: '', readOnly: true, recovering: false })
+const newOfficeTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+  { result: newOfficeVisit, model: newOfficeModel }))
+assert.match(newOfficeTable, /Estimated patient share[\s\S]*Not fully calculated/)
+assert.match(newOfficeTable, /Amount to collect at visit[\s\S]*\$0\.00/)
+assert.match(newOfficeTable, /cost-sharing terms were not returned/)
+const newOfficeArrival = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
+  { result: newOfficeVisit, model: newOfficeModel, partialCopay: null, visibleAmount: true }))
+assert.match(newOfficeArrival, /Amount to collect at visit[\s\S]*\$0\.00/)
+console.log('Blue office tables: $60 pending and Plus Medical $0 deferred for established and new office visits')
