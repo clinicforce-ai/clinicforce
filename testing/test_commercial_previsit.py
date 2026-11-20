@@ -522,6 +522,55 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(unverified['status'], 'unverified')
         self.assertNotIn('cms_plan_id', unverified)
 
+    def test_new_mexico_ucard_keeps_published_oon_office_reference_with_duplicate_ecw_labels(self):
+        from app.insurance.v1_sources import card_fields
+        fields, _ = card_fields([(1, '''UnitedHealthcare UCard
+CASEY L EXAMPLE
+Member ID 987654321-00
+AARP Medicare Advantage from UHC NM-0006 (PPO)
+With Dental
+Group Number: 90833 H2406-091-000 Payer ID: LIFE1
+OptumCare Network New Mexico
+PCP $0 Specialist $50''')])
+        self.assertEqual(fields['member_name'], 'CASEY L EXAMPLE')
+        self.assertEqual(fields['cms_plan_id'], 'H2406-091')
+        self.assertEqual(fields['group_number'], '90833')
+        self.assertEqual(fields['payer_id'], 'LIFE1')
+        self.assertEqual(fields['specialist_copay'], '$50')
+        inputs = {'member_id': '987654321', 'group_number': '90833', 'service_date': '2026-11-20',
+                  'patient': {'patient_first_name': 'Casey', 'patient_last_name': 'Example',
+                              'patient_birth_date': '1980-01-02'}, 'subscriber': {}}
+        source = {'payer': 'Optum Care', '_patient_id': 'patient-1', 'active_coverages': 2,
+                  'coverage_records': [
+                      {'id': 'one', 'status': 'active', 'member_id': '987654321',
+                       'group_number': '90833', 'payer': ['Optum Care']},
+                      {'id': 'two', 'status': 'active', 'member_id': '987654321',
+                       'group_number': '90833', 'payer': ['UnitedHealthcare']}]}
+        card = {'status': 'read', 'count': 1, 'fields': fields}
+        check = _compare_card_hints(card, inputs.copy(), source)
+        self.assertEqual(check['status'], 'conflict')
+        self.assertEqual(check['published_oon_specialist_copay_cents'], 8500)
+        from app.insurance.commercial import is_united_healthcare_payer
+        self.assertTrue(is_united_healthcare_payer({'payer': 'Optum Care', 'card_check': check}))
+        self.assertEqual(inputs['member_id'], '987654321')
+        for changed in ({'cms_plan_id': 'H2406-090'}, {'payer_id': '87726'},
+                        {'member_id': 'OTHER-00'}, {'group_number': '99999'}):
+            self.assertNotIn('published_oon_specialist_copay_cents', _compare_card_hints(
+                {**card, 'fields': {**fields, **changed}}, inputs.copy(), source))
+        for changed in ({'member_id': 'ANOTHER'}, {'group_number': 'OTHER'},
+                        {'payer': ['Aetna']}):
+            other = {**source, 'coverage_records': [source['coverage_records'][0],
+                                                   {**source['coverage_records'][1], **changed}]}
+            self.assertNotIn('published_oon_specialist_copay_cents',
+                             _compare_card_hints(card, inputs.copy(), other))
+
+    def test_aaa_52_names_provider_plan_enrollment_without_declaring_inactive_coverage(self):
+        from app.insurance.commercial import eligibility_failure
+        failure = eligibility_failure({'errors': [{'code': '52'}]})
+        self.assertIn('provider', failure['title'].lower())
+        self.assertIn('NPI', failure['action'])
+        self.assertIn('not establish inactive coverage', failure['detail'])
+
     async def test_explicit_self_pay_skips_stedi_and_defaults_to_cash(self):
         await self._flow(date.today().isoformat(), self_pay=True)
 

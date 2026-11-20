@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
+from app.insurance import published_plan_benefits
 
 
 def _unique_ecw_member_conflict(card_check: dict, coverage: dict) -> bool:
@@ -61,6 +62,38 @@ def _card_matches_other_ecw_coverage(fields: dict, source: dict, service_date: s
     return len(matches) == 1
 
 
+def _nm_0006_card_reference(card: dict, fields: dict, source: dict, day: str,
+                            name_matches: bool, dob_matches: bool, card_dob: str | None) -> bool:
+    """Bind a public plan reference to one card and matching eCW labels, not eligibility."""
+    rule = published_plan_benefits.UHC_NM_0006_2026
+    if (card.get('reference_only') or card.get('count') not in {1, 2}
+            or not source.get('_patient_id') or not name_matches
+            or card_dob and not dob_matches
+            or fields.get('cms_plan_id') != 'H2406-091'
+            or fields.get('plan_name') != 'AARP Medicare Advantage from UHC NM-0006 (PPO)'
+            or fields.get('group_number') != '90833' or fields.get('payer_id') != 'LIFE1'
+            or not rule['effective_from'] <= day <= rule['effective_to']):
+        return False
+    normalized = _api.stedi_discovery.normalized
+    member = normalized(fields.get('member_id'))
+    records = [row for row in source.get('coverage_records') or []
+               if row.get('status', '').casefold() == 'active'
+               and (not (row.get('period') or {}).get('start') or str(row['period']['start'])[:10] <= day)
+               and (not (row.get('period') or {}).get('end') or day <= str(row['period']['end'])[:10])]
+    if len(records) not in {1, 2} or len(records) != source.get('active_coverages'):
+        return False
+    for row in records:
+        base = normalized(row.get('member_id'))
+        payers = row.get('payer') or []
+        if (not base or not (member == base or
+                            len(member) == len(base) + 2 and member.startswith(base) and member[-2:].isdigit())
+                or normalized(row.get('group_number')) not in {'', '90833'}
+                or not any('optum' in normalized(payer) or 'unitedhealth' in normalized(payer)
+                           for payer in payers)):
+            return False
+    return True
+
+
 def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
     """Fill absent eCW inquiry fields only when OCR names the linked patient/policy."""
     status = card['status']
@@ -116,6 +149,11 @@ def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
         _api.re.match(r'^\s*(?:PHCS|MultiPlan)\b', str(source.get('payer') or ''), _api.re.I) and
         fields.get('payer') == 'Health Plans Incorporated')
     result['patient_name_matches'] = bool(patient_bound and name_matches and (not card_dob or dob_matches))
+    if _nm_0006_card_reference(card, fields, source, str(inputs.get('service_date') or ''),
+                              name_matches, dob_matches, card_dob):
+        rule = published_plan_benefits.UHC_NM_0006_2026
+        result['published_oon_specialist_copay_cents'] = rule['out_of_network_office_specialist_copay_cents']
+        result['published_oon_source_url'] = rule['url']
     if result['patient_name_matches'] and fields.get('cms_plan_id'):
         result['cms_plan_id'] = fields['cms_plan_id']
         result['plan_name'] = fields.get('plan_name')

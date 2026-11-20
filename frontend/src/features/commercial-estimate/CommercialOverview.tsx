@@ -22,6 +22,7 @@ import { AvailityArrivalAmount, AvailityVisitTable } from './AvailityVisitPlanni
 import { availityVisitPlanning } from './availityVisitPlanning'
 import { cignaBtxOfficeScenario } from './cignaBtxOfficeScenario'
 import { uhcLppoOfficeScenario } from './uhcLppoOfficeScenario'
+import { uhcNmOfficeReference } from './uhcNmOfficeReference'
 import {
   pendingHumanaSpecialistCopay,
   supportedHumanaSpecialistAdvance,
@@ -79,6 +80,7 @@ export default function CommercialOverview({
   const humanaAdvance = supportedHumanaSpecialistAdvance(result, model)
   const cardPlanningCents =
     payerReportedPartialCents == null ? copay.cardOfficePlanningCopay(result, model) : null
+  const nmOfficeReference = uhcNmOfficeReference(result, model)
   const combinedPlan = !cash && !previousEstimate ? result.combined_emg_plan : null
   const cignaBtxAdvance = cignaBtxOfficeScenario(result, model)
   const lppoOffice =
@@ -108,7 +110,8 @@ export default function CommercialOverview({
     pendingBluecardCopay != null ||
     humanaCopay != null ||
     copay.aetnaPriorDateReferenceCopay(result, model) != null ||
-    cardPlanningCents != null
+    cardPlanningCents != null ||
+    nmOfficeReference != null
   const patientBenefitsBound = hasPatientBinding(result.identity)
   const networkWarnings = (result.network_evidence?.mismatch_warnings || []).filter(
     (warning) => !warning.toLowerCase().includes('billing tin is missing from the visit'),

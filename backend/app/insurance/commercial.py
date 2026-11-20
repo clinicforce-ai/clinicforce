@@ -52,6 +52,8 @@ def discard_stale_directory_payer(result: dict, current_payer_id: str | None) ->
 
 def is_united_healthcare_payer(result: dict, directory_payer: dict | None = None) -> bool:
     """Use the resolved payer route before an eCW product label."""
+    if (result.get('card_check') or {}).get('published_oon_specialist_copay_cents') == 8500:
+        return True  # Exact UHC New Mexico LIFE1 card was matched to this patient's eCW labels.
     saved_payer = result.get('stedi_payer') or {}
     saved_payer = saved_payer if isinstance(saved_payer, dict) else {}
     directory_payer = directory_payer if isinstance(directory_payer, dict) else {}
@@ -84,6 +86,9 @@ def eligibility_failure(payload: dict) -> dict:
     elif set(codes) & {'41', '43', '79'}:
         title = 'Payer or provider access needs attention'
         action = 'The clinic administrator should review the payer connection and provider enrollment before checking again.'
+    elif '52' in codes:
+        title = 'Provider-plan enrollment needs attention'
+        action = 'Confirm the rendering NPI and visit date sent to the payer. If both are correct, contact Optum Care to resolve provider enrollment before checking again.'
     elif validation:
         title = 'ClinicForce could not submit a valid request'
         action = 'The integration needs correction; this is not an inactive-coverage result.'

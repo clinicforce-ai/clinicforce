@@ -153,6 +153,19 @@ def card_fields(pages: list[tuple[int, str]]) -> tuple[dict, dict]:
             add('payer', 'UnitedHealthcare', page, 'HealthSelect Medicare Advantage PPO Plan · Payer ID: 87726')
             if match := re.search(r'\bSpec\s+(\$\s*\d+(?:\.\d{2})?)\b', joined, re.I):
                 add('specialist_copay', match[1].replace(' ', ''), page, match[0])
+        if (plan := re.search(r'\bAARP\s+Medicare\s+Advantage\s+from\s+UHC\s+NM-0006\s*\(PPO\)', joined, re.I)):
+            if route := re.search(r'\bGroup\s+Number:\s*(90833)\s+(H2406-091-000)\s+Payer\s+ID:\s*(LIFE1)\b', joined, re.I):
+                add('plan_name', 'AARP Medicare Advantage from UHC NM-0006 (PPO)', page, plan[0])
+                add('cms_plan_id', 'H2406-091', page, route[2])
+                add('group_number', route[1], page, route[0])
+                add('payer_id', route[3].upper(), page, route[0])
+                for index, line in enumerate(lines):
+                    if index and re.fullmatch(r'Member\s+ID\s*:?\s*[A-Z0-9-]{3,40}', line, re.I):
+                        name = lines[index - 1]
+                        if re.fullmatch(r'[A-Z][A-Z\s\x27-]{3,80}', name) and len(name.split()) in {2, 3, 4}:
+                            add('member_name', name, page, name)
+                if match := re.search(r'\bSpecialist\s+(\$\s*\d+(?:\.\d{2})?)\b', joined, re.I):
+                    add('specialist_copay', match[1].replace(' ', ''), page, match[0])
         hpi = re.search(r"Health\s+Plans,?\s+Inc\.?\s*\(HPI\)", joined, re.I)
         if hpi:
             add("payer", "Health Plans Incorporated", page, hpi[0])
