@@ -96,6 +96,7 @@ jobs:
           node testing/uhc-saved-projection-ui.mjs
           node testing/umr-choice-plus-collection-ui.mjs
           node testing/umr-choice-plus-cost-table.mjs
+          node testing/uhc-choice-plus-zero-office-ui.mjs
           node ../testing/tic-options-ui.mjs
           node ../testing/uhc-biopsy-target-ui.mjs
           node ../testing/uhc-lppo-coinsurance-ui.mjs
