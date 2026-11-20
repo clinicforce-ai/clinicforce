@@ -3,6 +3,7 @@ import CommercialCalculationDetail from './CommercialCalculationDetail'
 import CommercialCoverageDetail from './CommercialCoverageDetail'
 import CommercialServicesDetail from './CommercialServicesDetail'
 import CommercialOverview from './CommercialOverview'
+import CommercialInsurerIdentity from './CommercialInsurerIdentity'
 import {
   ArrowLeft,
   ArrowRight,
@@ -13,7 +14,7 @@ import {
   ShieldCheck,
 } from 'lucide-react'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
-import { range, memberSource, visitDate, visitTime } from './format'
+import { range, visitDate, visitTime } from './format'
 import { usePaidClaimFinancials } from './usePaidClaimFinancials'
 
 export default function CommercialEstimateView({
@@ -246,18 +247,13 @@ export default function CommercialEstimateView({
           <div>
             <dt>Insurance</dt>
             <dd>
-              {result.payer ||
-                (result.recovery?.candidates?.length === 1
-                  ? `${result.recovery.candidates[0].payer || 'Unknown payer'} · returned policy`
-                  : result.recovery?.candidates?.length
-                    ? `${result.recovery.candidates.length} policy suggestions`
-                    : 'Not returned')}
-              {result.payer && <small>Insurer source: {memberSource(payerSource)}</small>}
-              <small>{planName}</small>
-              {planSource && <small>Plan source: {planSource}</small>}
-              {!!secondaryPayers.length && (
-                <small>Secondary eCW policy: {secondaryPayers.join(' · ')}</small>
-              )}
+              <CommercialInsurerIdentity
+                result={result}
+                planName={planName}
+                planSource={planSource}
+                payerSource={payerSource}
+                secondaryPayers={secondaryPayers}
+              />
               {result.card_check?.supplementary_plan && (
                 <small>
                   Supplement card: {result.card_check.supplementary_plan} ·{' '}

@@ -22,7 +22,7 @@ import { AvailityArrivalAmount, AvailityVisitTable } from './AvailityVisitPlanni
 import { availityVisitPlanning } from './availityVisitPlanning'
 import { cignaBtxOfficeScenario } from './cignaBtxOfficeScenario'
 import { uhcLppoOfficeScenario } from './uhcLppoOfficeScenario'
-import { uhcNmOfficeReference } from './uhcNmOfficeReference'
+import { uhcNmCardPlan, uhcNmOfficeReference } from './uhcNmOfficeReference'
 import {
   pendingHumanaSpecialistCopay,
   supportedHumanaSpecialistAdvance,
@@ -64,7 +64,9 @@ export default function CommercialOverview({
     anticipatedService,
     session,
   } = model
-  const payerForAction = (!readOnly && result.stedi_payer?.name) || result.payer
+  const payerForAction = uhcNmCardPlan(result)
+    ? 'Optum Care (UnitedHealthcare delegated administrator)'
+    : (!readOnly && result.stedi_payer?.name) || result.payer
   const plannedCodes =
     result.price_range?.mode === 'services'
       ? [...new Set(result.price_range.lines?.map((line) => line.code).filter(Boolean) || [])]
@@ -442,6 +444,9 @@ export default function CommercialOverview({
               </small>
             ) : (
               networkExplanation && <small>{networkExplanation}</small>
+            )}
+            {uhcNmCardPlan(result) && networkLabel === 'Not determined' && (
+              <small>The plan's in-network copay does not confirm this clinic participates.</small>
             )}
             {!paidClaim && !availity && result?.network_evidence?.product_source && (
               <small>Contract plan lookup: {result.network_evidence.product_source}</small>

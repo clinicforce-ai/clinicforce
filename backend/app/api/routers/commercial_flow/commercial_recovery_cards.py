@@ -152,6 +152,7 @@ def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
     if _nm_0006_card_reference(card, fields, source, str(inputs.get('service_date') or ''),
                               name_matches, dob_matches, card_dob):
         rule = published_plan_benefits.UHC_NM_0006_2026
+        result['published_inn_specialist_copay_cents'] = rule['in_network_office_specialist_copay_cents']
         result['published_oon_specialist_copay_cents'] = rule['out_of_network_office_specialist_copay_cents']
         result['published_oon_source_url'] = rule['url']
     if result['patient_name_matches'] and fields.get('cms_plan_id'):

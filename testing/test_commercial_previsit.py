@@ -550,6 +550,7 @@ PCP $0 Specialist $50''')])
         check = _compare_card_hints(card, inputs.copy(), source)
         self.assertEqual(check['status'], 'conflict')
         self.assertEqual(check['published_oon_specialist_copay_cents'], 8500)
+        self.assertEqual(check['published_inn_specialist_copay_cents'], 5000)
         unread_name = {**fields}
         unread_name.pop('member_name')
         self.assertEqual(_compare_card_hints({**card, 'fields': unread_name}, inputs.copy(), source)
