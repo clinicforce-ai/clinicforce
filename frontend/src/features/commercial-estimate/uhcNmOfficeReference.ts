@@ -7,6 +7,8 @@ export function uhcNmOfficeReference(result: PrevisitEstimate, model: Commercial
   const line = lines.length === 1 ? lines[0] : null
   const copay = card?.published_oon_specialist_copay_cents
   const paid = result.encounter_summary?.payments_verified_cents || 0
+  const appointmentPos = result.appointment_context?.place_of_service
+  const networkPos = result.network_evidence?.place_of_service
   const insuredAmount =
     result.collection_guidance?.amount_cents != null &&
     !(result.cash_fallback && result.collection_guidance?.basis === 'practice_cash_price')
@@ -17,7 +19,9 @@ export function uhcNmOfficeReference(result: PrevisitEstimate, model: Commercial
     insuredAmount ||
     result.billing_note?.kind === 'no_collection' ||
     result.telehealth ||
-    result.network_evidence?.place_of_service !== '11' ||
+    (!appointmentPos && !networkPos) ||
+    (appointmentPos != null && appointmentPos !== '11') ||
+    (networkPos != null && networkPos !== '11') ||
     result.billing_protection?.status === 'qmb' ||
     result.benefits?.qmb_status === 'protected' ||
     (result.benefits?.copay_cents != null && result.benefits.copay_cents !== copay) ||

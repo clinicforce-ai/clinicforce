@@ -50,7 +50,7 @@ async def _read_card_hints(session: dict, patient_id: str | None, *, allow_pendi
             return {'status': 'unavailable', 'fields': {}, 'count': len(contents), 'failure_reason': 'card_too_large'}
         for content in contents:
             await _api.run_in_threadpool(inspect_file, content)
-        fields, evidence, _ = await _api.asyncio.wait_for(_api.asyncio.to_thread(v1_sources.read_card_fields, contents), timeout=20)
+        fields, evidence, _ = await _api.asyncio.wait_for(_api.asyncio.to_thread(v1_sources.read_card_fields, contents), timeout=35)
         if submitted_member_id and not fields.get('member_id'):
             fields['member_id'] = submitted_member_id
         return {'status': 'read', 'fields': fields, 'evidence': evidence, 'count': len(contents),

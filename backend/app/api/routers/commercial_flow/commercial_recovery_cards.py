@@ -67,7 +67,7 @@ def _nm_0006_card_reference(card: dict, fields: dict, source: dict, day: str,
     """Bind a public plan reference to one card and matching eCW labels, not eligibility."""
     rule = published_plan_benefits.UHC_NM_0006_2026
     if (card.get('reference_only') or card.get('count') not in {1, 2}
-            or not source.get('_patient_id') or not name_matches
+            or not source.get('_patient_id') or (fields.get('member_name') and not name_matches)
             or card_dob and not dob_matches
             or fields.get('cms_plan_id') != 'H2406-091'
             or fields.get('plan_name') != 'AARP Medicare Advantage from UHC NM-0006 (PPO)'
