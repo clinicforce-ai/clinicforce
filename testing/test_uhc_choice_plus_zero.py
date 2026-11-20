@@ -1,8 +1,9 @@
 """Synthetic UHC office response shape; no patient details or payer payloads."""
 import pytest
 
-from app.insurance import amount_explanation, collection_guidance, commercial, encounter_summary, visit_estimate
+from app.insurance import amount_explanation, collection_guidance, commercial, encounter_summary, network_product_roster, visit_estimate
 from app.api.routers import commercial_estimator
+from app.api.routers.commercial_flow import commercial_previsit_network_guard as guard
 from app.api.routers.commercial_flow import commercial_previsit_status as status
 
 
@@ -87,10 +88,69 @@ def test_choice_plus_followup_with_mixed_vision_rows_defers_check_in(checked_at)
     assert summary['estimated_total_patient_min_cents'] is None
 
 
+def test_choice_plus_pos_label_uses_clinic_roster_and_defers_followup(monkeypatch):
+    result = estimate(code='99213', mixed_vision=True, network='unknown')
+    result['benefits']['service_date_matches'] = True
+    seen = []
+    def matching(practice, payer, product, day):
+        seen.append((payer, product, day))
+        return {'product_name': 'CHOICE PLUS', 'source_reference': 'synthetic-clinic-attestation'} if (
+            payer, product, day) == ('uhc', 'choiceplus', result['service_date']) else None
+    monkeypatch.setattr(network_product_roster.commercial_store, 'matching_network_product', matching)
+    source = {'payer_plan_bound': True, 'payer_plan_names': ['POS CHOICE PLUS'],
+              'rendering_provider': {'npi': '1234567893'}, 'billing_provider': {},
+              'location_id': 'office-1'}
+    inputs = {'service_date': result['service_date'], 'place_of_service': '11',
+              'rendering_provider': {'npi': '1234567893'}}
+    assert network_product_roster.apply(result, result['benefits'], 'primary',
+                                        result['payer'], inputs, source)
+    assert result['benefits']['network_status'] == 'in_network'
+    assert result['benefits']['network_source'] == 'clinic_product_roster'
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 0
+    assert guidance['basis'] == 'claim_after_service'
+    assert guidance['collection_rule']['mode'] == 'uhc_choice_plus_family_oop_deferral'
+    assert seen == [('uhc', 'choiceplus', result['service_date'])]
+
+
+def test_saved_choice_plus_unknown_tier_rechecks_roster_and_defers_followup(monkeypatch):
+    result = estimate(code='99213', mixed_vision=True, network='unknown')
+    result['benefits']['service_date_matches'] = True
+    monkeypatch.setattr(guard.staff_store, 'list_library', lambda *_: [])
+    monkeypatch.setattr(guard, 'scoped_admin_nonparticipation', lambda *_: None)
+    monkeypatch.setattr(guard.commercial_store, 'matching_network_product',
+                        lambda _practice, payer, product, _day: {
+                            'product_name': 'CHOICE PLUS',
+                            'source_reference': 'synthetic-clinic-attestation'}
+                        if (payer, product) == ('uhc', 'choiceplus') else None)
+    source = {'payer_plan_bound': True, 'payer_plan_names': ['POS CHOICE PLUS'],
+              'rendering_provider': {'npi': '1234567893'}, 'billing_provider': {},
+              'location_id': 'office-1'}
+    inputs = {'service_date': result['service_date'], 'place_of_service': '11',
+              'rendering_provider': {'npi': '1234567893'}}
+    case = {'previsit_context': {'inputs': inputs, 'source': source}}
+    guard.recheck_saved_network_evidence(result, case, 'primary', None)
+    assert result['benefits']['network_status'] == 'in_network'
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 0
+    assert guidance['basis'] == 'claim_after_service'
+
+
+def test_choice_plus_followup_unknown_tier_defers_collection_without_claiming_liability():
+    result = estimate(code='99213', mixed_vision=True, network='unknown')
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 0
+    assert guidance['basis'] == 'claim_after_service'
+    assert guidance['collection_rule']['mode'] == 'uhc_choice_plus_family_oop_deferral'
+    assert result['benefits']['network_status'] == 'unknown'
+    assert 'Provider network' in guidance['reason']
+    assert encounter_summary.build({**result, 'collection_guidance': guidance})['estimated_total_patient_min_cents'] is None
+
+
 @pytest.mark.parametrize('change', [
     'positive_individual_oop', 'positive_family_oop', 'positive_family_deductible',
     'positive_office_copay',
-    'positive_specialist_copay', 'unverified_network', 'stale_check',
+    'positive_specialist_copay', 'out_of_network', 'stale_check',
     'wrong_product', 'different_plan_row', 'secondary_coverage', 'card_conflict', 'second_service',
 ])
 def test_choice_plus_followup_deferral_requires_matching_evidence(change):
@@ -114,8 +174,8 @@ def test_choice_plus_followup_deferral_requires_matching_evidence(change):
     elif change == 'positive_specialist_copay':
         next(row for row in benefits['reported_options'] if row.get('kind') == 'copay'
              and row.get('service_type_code') == '96' and row.get('network') == 'IN_NETWORK')['amount_cents'] = 100
-    elif change == 'unverified_network':
-        benefits['network_status'] = 'unknown'
+    elif change == 'out_of_network':
+        benefits['network_status'] = 'out_of_network'
     elif change == 'stale_check':
         result['checked_at'] = '2026-11-09T15:00:00Z'
     elif change == 'wrong_product':

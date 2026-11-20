@@ -48,6 +48,16 @@ try {
   assert.match(headline, /Amount to collect at visit/)
   assert.match(headline, /\$0\.00/)
   assert.doesNotMatch(headline, /Check CPT prices|Verify network/)
+  const unknown = { ...result, benefits: { ...benefits, network_status: 'unknown', network_source: null } }
+  const unknownModel = deriveCommercialEstimateView({ result: unknown, appointments: [], selectedVisit: '',
+    busy: null, error: '', readOnly: true, recovering: false })
+  const unknownTable = renderToStaticMarkup(React.createElement(Table, { model: unknownModel, result: unknown }))
+  const unknownHeadline = renderToStaticMarkup(React.createElement(Headline, {
+    model: unknownModel, result: unknown, partialCopay: null, visibleAmount: true,
+  }))
+  assert.match(unknownTable, /Amount to collect at visit<\/th><td><span>\$0\.00/)
+  assert.match(unknownHeadline, /\$0\.00/)
+  assert.doesNotMatch(unknownHeadline, /Verify network|Check CPT prices/)
   console.log('Choice Plus 99213 shows a $0 check-in advance while the CPT rate is missing')
 } finally {
   await server.close()

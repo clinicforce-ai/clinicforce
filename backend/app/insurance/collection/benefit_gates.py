@@ -86,7 +86,9 @@ def uhc_choice_plus_zero_candidate(result: dict) -> bool:
             and card.get('independent_ecw_check') is not True
             and not card.get('conflicts') and not card.get('differences')
             and result.get('refresh_requires_selection') is not True
-            and patient_benefits_bound(identity) and verified_in_network(benefits)
+            and patient_benefits_bound(identity)
+            and (verified_in_network(benefits)
+                 or mixed_vision_followup and benefits.get('network_status') == 'unknown')
             and office_copays and all(row.get('amount_cents') == 0 for row in office_copays)
             and (code != '99213' or all(row.get('amount_cents') == 0 for row in specialist_copays))
             and family_deductibles and all(row.get('amount_cents') == 0 for row in family_deductibles))
@@ -100,11 +102,12 @@ def apply_uhc_choice_plus_family_oop_deferral(result: dict, guidance: dict, *,
         return
     code = (result['price_range']['lines'][0]['code'])
     mixed_vision = code == '99213' and (result.get('benefits') or {}).get('family_oop_zero_applies') is not True
+    network_note = ('Provider network is unconfirmed. ' if not verified_in_network(result.get('benefits') or {}) else '')
     guidance.update(amount_cents=0, status='zero_advance', basis='claim_after_service',
         reason=(f'Collect $0 at check-in for the proposed CPT {code} office visit. UHC reports a $0 office copay '
-                'and $0 remaining on in-network individual and family out-of-pocket rows, but their medical '
-                'applicability is unconfirmed alongside a vision plan. Confirm coverage and the applicable '
-                'medical limit; final responsibility follows the claim.' if mixed_vision else
+                'and $0 remaining on in-network individual and family out-of-pocket rows. '
+                f'{network_note}Medical applicability is unconfirmed alongside a vision plan; '
+                'final responsibility follows the claim.' if mixed_vision else
                 f'Collect $0 at check-in for the proposed CPT {code} office visit. UHC reports a $0 office copay '
                 'and $0 remaining on the family in-network deductible and out-of-pocket maximum. '
                 'The BCBS Texas fee is a price reference, not a UHC allowance. Confirm that the performed '
