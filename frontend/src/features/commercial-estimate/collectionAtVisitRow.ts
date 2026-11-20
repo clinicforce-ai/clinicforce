@@ -3,6 +3,7 @@ import type { CostBreakdownRow } from '../insurance-estimate/CostBreakdownTable'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { feeProxyFormula } from './coinsuranceFormula'
 import { money } from './format'
+import { zeroCollectionRow } from './zeroCollectionRow'
 import type { bluecardOfficeDeductibleScenario } from './bluecardOfficeDeductibleScenario'
 import { cignaBtxOfficeScenario } from './cignaBtxOfficeScenario'
 import { healthselectOfficeBiopsy, healthselectZero } from './healthselectRows'
@@ -75,18 +76,8 @@ export function collectionAtVisitRow(
   const officePlanning = result.aetna_office_planning
   const officeOnly = officeOnlyCollectionRow(result, model.supportedAmount)
   if (officeOnly) return officeOnly
-  if (
-    (result.collection_guidance?.collection_rule?.mode === 'aetna_office_individual_oop_deferral' ||
-      (model.supportedAmount &&
-        result.collection_guidance?.collection_rule?.mode === 'individual_oop_zero_deferral')) &&
-    result.collection_guidance.amount_cents === 0
-  )
-    return {
-      label: 'Amount to collect at visit',
-      value: money(0),
-      detail: result.collection_guidance.reason,
-      emphasis: true,
-    }
+  const zero = zeroCollectionRow(result, model)
+  if (zero) return zero
   if (officePlanning?.status === 'planning_only' && officePlanning.collectable === false) {
     const balance = Math.max(
       0,

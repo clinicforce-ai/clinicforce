@@ -21,6 +21,61 @@ def scenario(amount=3800):
                     'requirements': {kind: {'required': 'unknown', 'cleared': False} for kind in ('referral', 'authorization')}}}]}}
 
 
+def test_bcbstx_botox_met_family_oop_defers_check_in_without_a_priced_cpt():
+    result = scenario()
+    result.update(payment_mode='insurance', payer='Blue Cross Blue Shield Tx',
+        stedi_payer={'id': 'QDTRP'}, service_date='2026-11-20', checked_at='2026-11-19T12:00:00Z',
+        requested_service_types=['98', '30'], appointment_context={'place_of_service': '11'},
+        plan_details={'stedi': {'names': ['PREFERRED PROVIDER OPTION MEDICAL']}},
+        service_plan={'kind': 'botox', 'recommended_ids': []}, service_selection_status='preview',
+        codes=[], selected_ids=[], botox_review={}, separate_em_planned=False)
+    result['benefits'].update(identity=result['identity'], network_source='clinic_group_agreement',
+        service_date_matches=True, family_oop_remaining_cents=0, has_secondary=False,
+        reported_options=[
+            {'id': 'injection-coinsurance', 'kind': 'coinsurance', 'service_type_code': 'BY',
+             'coverage_level': 'INDIVIDUAL', 'network': 'IN_NETWORK', 'places_of_service': ['11'],
+             'plan_association': 'medical', 'payer_note': 'INJECTIONS - PROFESSIONAL', 'percent': '0'},
+            {'id': 'family-deductible', 'kind': 'deductible', 'service_type_code': '30',
+             'coverage_level': 'FAMILY', 'network': 'IN_NETWORK', 'time_period': 'REMAINING',
+             'plan_association': 'medical', 'payer_note': 'INJECTIONS - PROFESSIONAL', 'amount_cents': 0},
+            {'id': 'family-oop', 'kind': 'out_of_pocket', 'service_type_code': '30',
+             'coverage_level': 'FAMILY', 'network': 'IN_NETWORK', 'time_period': 'REMAINING',
+             'plan_association': 'medical', 'payer_note': 'INJECTIONS - PROFESSIONAL', 'amount_cents': 0}])
+    result['price_range'].update(complete=False, patient_min_cents=None, patient_max_cents=None,
+                                 lines=[], service_issues=['No billable CPT is selected.'])
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 0
+    assert guidance['basis'] == 'claim_after_service'
+    assert guidance['collection_rule']['mode'] == 'bcbstx_botox_family_oop_deferral'
+    assert encounter_summary.build({**result, 'collection_guidance': guidance})['collect_today_cents'] == 0
+    assert 'Collect $0' in amount_explanation.build(result, guidance)['sentence']
+    payer_did_not_echo_date = deepcopy(result)
+    payer_did_not_echo_date['benefits']['service_date_matches'] = None
+    assert collection_guidance.build(payer_did_not_echo_date)['amount_cents'] == 0
+    for mutation in (
+        lambda value: value['benefits']['reported_options'][2].update(amount_cents=100),
+        lambda value: value['benefits']['reported_options'][2].update(plan_association='unassigned'),
+        lambda value: value['benefits']['reported_options'].append({
+            'kind': 'out_of_pocket', 'service_type_code': '30', 'coverage_level': 'INDIVIDUAL',
+            'network': 'IN_NETWORK', 'time_period': 'REMAINING', 'plan_association': 'medical',
+            'payer_note': 'INJECTIONS - PROFESSIONAL', 'amount_cents': 100}),
+        lambda value: value['benefits']['reported_options'].append({
+            'kind': 'copay', 'service_type_code': 'BY', 'coverage_level': 'INDIVIDUAL',
+            'network': 'IN_NETWORK', 'places_of_service': ['11'],
+            'payer_note': 'INJECTIONS - PROFESSIONAL', 'amount_cents': 2000}),
+        lambda value: value['benefits'].update(has_secondary=True),
+        lambda value: value['benefits'].update(network_conflict=True),
+        lambda value: value['benefits'].update(service_date_matches=False),
+        lambda value: value.update(checked_at='2026-09-01T12:00:00Z'),
+        lambda value: value['benefits'].update(source_errors=[{'kind': 'invalid_source'}]),
+        lambda value: value['plan_details']['stedi'].update(names=['OTHER PRODUCT']),
+        lambda value: value.update(separate_em_planned=True),
+    ):
+        blocked = deepcopy(result)
+        mutation(blocked)
+        assert collection_guidance.build(blocked)['amount_cents'] is None
+
+
 def test_bcbstx_plus_office_missing_balances_defers_collection_and_keeps_share_unknown():
     result = scenario()
     result.update(payer='Blue Cross Blue Shield Tx', stedi_payer={'id': 'QDTRP'},

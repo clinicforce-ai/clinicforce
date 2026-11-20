@@ -11,6 +11,9 @@ try {
   const { default: ArrivalAmountSummary } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/ArrivalAmountSummary.tsx',
   )
+  const { deriveCommercialEstimateView } = await server.ssrLoadModule(
+    '/src/features/commercial-estimate/deriveCommercialEstimateView.ts',
+  )
   const result = {
     service_date: '2026-10-29', payer: 'Synthetic Blue Plan', reason: 'Botox received from pharmacy',
     benefits: { active: true, network_status: 'in_network', reported_options: [] },
@@ -38,6 +41,32 @@ try {
     model, result, partialCopay: null, visibleAmount: true,
   }))
   assert(summary.includes('$26.23') && summary.includes('Confirm the coding'))
+
+  const zeroResult = {
+    ...result, botox_preview: null, price_range: { mode: 'services', complete: false,
+      lines: [], service_issues: ['No billable CPT is selected.'] },
+    identity: { status: 'matched', binding: 'synthetic-binding', match_version: 2 },
+    benefits: { ...result.benefits, network_source: 'clinic_group_agreement',
+      service_date_matches: null, family_oop_remaining_cents: 0 },
+    collection_guidance: { amount_cents: 0, status: 'zero_advance', basis: 'claim_after_service',
+      reason: 'Collect $0.00 at check-in for the planned office injection; final responsibility follows the processed claim.',
+      collection_rule: { mode: 'bcbstx_botox_family_oop_deferral' }, services: [] },
+    encounter_summary: { collect_today_cents: 0 },
+    payment_explanation: { sentence: 'Collect $0.00 at check-in for the planned office injection.',
+      reason_code: 'collection_deferred' },
+  }
+  const zeroModel = deriveCommercialEstimateView({ result: zeroResult, appointments: [],
+    selectedVisit: null, busy: false, error: null, readOnly: false, recovering: false })
+  assert.equal(zeroModel.supportedAmount, true)
+  assert.equal(zeroModel.amountText, '$0.00')
+  const zeroMarkup = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+    { model: zeroModel, result: zeroResult }))
+  assert(zeroMarkup.includes('Amount to collect at visit'))
+  assert(zeroMarkup.includes('$0.00'))
+  assert(zeroMarkup.includes('No CPTs selected'))
+  const zeroSummary = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
+    { model: zeroModel, result: zeroResult, partialCopay: null, visibleAmount: true }))
+  assert(zeroSummary.includes('Amount to collect at visit') && zeroSummary.includes('$0.00'))
   console.log('Botox provisional collection UI: passed')
 } finally {
   await server.close()
