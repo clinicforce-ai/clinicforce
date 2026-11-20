@@ -1,5 +1,6 @@
 import type { PrevisitEstimate } from '../../services/api/commercial-estimator'
 import { patientBenefitsBound } from './identityBinding'
+import { uhcNmCardPlan } from './uhcNmOfficeReference'
 
 export function payerPlanDisplay(result: PrevisitEstimate | null) {
   const referenceNames = result?.reference_only
@@ -19,6 +20,7 @@ export function payerPlanDisplay(result: PrevisitEstimate | null) {
     result.benefits.published_plan_rule?.url ===
       'https://ers.texas.gov/retirees/health-benefits/healthselect-medicare-advantage'
   const stedi = result?.plan_details?.stedi
+  const cardPlan = uhcNmCardPlan(result)
   const choicePlusNetwork =
     !result?.reference_only &&
     result?.benefits?.active === true &&
@@ -39,6 +41,7 @@ export function payerPlanDisplay(result: PrevisitEstimate | null) {
     referenceNames.join(' · ') ||
     (healthselect ? 'HealthSelect Medicare Advantage PPO · H2001-817-000' : null) ||
     identified ||
+    (cardPlan ? 'AARP Medicare Advantage from UHC NM-0006 (PPO) · H2406-091-000' : null) ||
     result?.plan_details?.stedi.names?.join(' · ') ||
     choicePlusNetwork ||
     result?.plan_details?.ecw.plan?.filter((value) => value !== 'CI').join(' · ') ||
@@ -51,12 +54,14 @@ export function payerPlanDisplay(result: PrevisitEstimate | null) {
         : 'Patient-bound Stedi group and ERS plan benefits'
       : identified === 'Humana Value Choice PPO H7617-057'
         ? 'Matched insurance card CMS plan ID and patient-bound Stedi eligibility response'
-        : choicePlusNetwork
-          ? 'Patient-bound Stedi network; product name not returned'
-          : result?.plan_details?.stedi.names?.length
-            ? `${result.benefit_source || result.plan_details.stedi.source || 'Payer'} eligibility response`
-            : planName
-              ? 'eCW policy record'
-              : null
+        : cardPlan && !identified && !healthselect
+          ? 'Patient-linked UnitedHealthcare insurance card; eligibility and payer order unverified'
+          : choicePlusNetwork
+            ? 'Patient-bound Stedi network; product name not returned'
+            : result?.plan_details?.stedi.names?.length
+              ? `${result.benefit_source || result.plan_details.stedi.source || 'Payer'} eligibility response`
+              : planName
+                ? 'eCW policy record'
+                : null
   return { planName, planSource }
 }

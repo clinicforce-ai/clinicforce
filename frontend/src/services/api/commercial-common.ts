@@ -40,6 +40,7 @@ export type CommercialCardCheck = {
   cms_plan_id?: string
   plan_name?: string
   published_office_copay_cents?: number
+  published_inn_specialist_copay_cents?: number
   published_oon_specialist_copay_cents?: number
   published_oon_source_url?: string
 }

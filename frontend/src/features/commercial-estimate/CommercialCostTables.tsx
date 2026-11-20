@@ -178,24 +178,24 @@ export default function CommercialCostTables({
         if (row.label === 'Copay')
           return {
             ...row,
-            value: `${money(nmOffice.copay)} published out-of-network specialist copay`,
+            value: `${money(nmOffice.inNetworkCopay)} in-network / ${money(nmOffice.outOfNetworkCopay)} out-of-network · published specialist copays`,
             detail:
-              'UHC 2026 plan summary; member coverage, provider tier and billing protections were not verified.',
+              'UnitedHealthcare 2026 plan summary; Optum Care administers this plan. Member coverage and provider tier were not verified.',
           }
         if (row.label === 'Estimated patient share')
           return {
             ...row,
-            value: `${money(nmOffice.balance)} conditional plan reference`,
+            value: 'Not established',
             detail:
-              'For one covered out-of-network specialist office visit, after recorded payments. Final responsibility follows the claim.',
+              'The applicable copay depends on the verified provider network tier and covered service. Final responsibility follows the claim.',
           }
         if (row.label.startsWith('Amount to collect at visit'))
           return {
             ...row,
-            label: 'Amount to collect at visit · verification pending',
-            value: `${money(nmOffice.balance)} conditional plan reference · do not collect yet`,
+            label: 'Amount to collect at visit',
+            value: 'Not determined · verify provider network',
             detail:
-              'Confirm active coverage, provider enrollment, QMB protection, other coverage and prior payments before charging. The $150 cash price is separate.',
+              'Confirm active coverage, provider network, QMB protection, other coverage and prior payments before charging. The $150 cash price is separate.',
           }
         return row
       })

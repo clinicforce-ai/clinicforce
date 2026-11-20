@@ -6,6 +6,7 @@ import { aetnaSignatureOfficeNoDeductible } from './payerReportedPartialCopay'
 import type { bluecardOfficeDeductibleScenario } from './bluecardOfficeDeductibleScenario'
 import { money, range } from './format'
 import { ticTreatmentRows } from './ticTreatmentRows'
+import { uhcNmCardPlan } from './uhcNmOfficeReference'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 
 export function commercialAllowedTotalRow(
@@ -419,7 +420,7 @@ export function commercialPricedCptRows({
           : resolved && line.unit_allowed_cents != null
             ? `${money(line.unit_allowed_cents)} per unit × ${line.units || 1}${aetnaVideoDeferral ? '; telehealth allowance follows the claim' : line.allowed_basis === 'payer_fee_schedule' ? '; clinic fee reference, not a payer-confirmed allowance' : ''}`
             : proxyRate
-              ? `${money(proxyRate.unit_reference_cents)} per unit × ${line.units || 1}; ${result.payer || 'payer'} allowed amount unknown`
+              ? `${money(proxyRate.unit_reference_cents)} per unit × ${line.units || 1}; ${uhcNmCardPlan(result) ? 'UnitedHealthcare/Optum Care' : result.payer || 'payer'} allowed amount unknown`
               : line.description || undefined,
     }
   })
