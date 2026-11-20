@@ -93,6 +93,7 @@ def test_exact_roster_keys_cover_all_payer_families_and_card_logo_forms():
     assert network_product_roster.payer_key('Health Plans Incorporated', ['PHCS']) == 'multiplan'
     assert network_product_roster.product_key('Blue Choice PPO℠ [BCS]') == 'bluechoiceppo'
     assert network_product_roster.product_key('Blue Choice PPO℠ [BCA]') == 'bluechoiceppo'
+    assert network_product_roster.product_key('POS CHOICE PLUS') == 'choiceplus'
     assert network_product_roster.product_key('PHCS (Logo on front of card)') == 'phcs'
     assert network_product_roster.product_key('PHCS (Logo on back of card)') == 'phcs'
 

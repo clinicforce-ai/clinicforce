@@ -32,11 +32,12 @@ def payer_key(name: str, network_names: list[str] | None = None) -> str:
 
 
 def product_key(name: str) -> str:
-    """Ignore typography and the roster's bracket code or PHCS card-logo side."""
+    """Normalize clinic roster product names and the UHC POS Choice Plus label."""
     text = re.sub(r'[®℠™]', '', str(name or '').strip())
     text = re.sub(r'\s*\[(?:[A-Z]{2,4})\]\s*$', '', text)
     text = re.sub(r'\s*\(Logo on (?:front|back) of card\)\s*$', '', text, flags=re.I)
-    return normalized(text)
+    key = normalized(text)
+    return 'choiceplus' if key == 'poschoiceplus' else key
 
 
 def matches_contract_network(network: dict, source: dict, payer_name: str, day: str) -> bool:

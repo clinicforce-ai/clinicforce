@@ -1,6 +1,5 @@
 """Recheck saved payer participation against the rendering provider binding."""
 from __future__ import annotations
-
 import re
 import hashlib
 import json
@@ -370,11 +369,12 @@ def recheck_saved_network_evidence(result: dict, case: dict, practice_id: str, p
         if not nmct_document:
             return
         _clear_saved_tier(result, 'NMCT has a current insurer contract. Recalculate the saved out-of-network amount.')
-    if benefits.get('network_source') == 'clinic_product_roster':
+    if benefits.get('network_source') == 'clinic_product_roster' or benefits.get('network_status') == 'unknown':
         exact.update(payer_plan_names=names, payer_network_names=plan.get('network_names') or [])
         if network_product_roster.apply(result, benefits, practice_id, payer_name, context.get('inputs') or {}, exact): return
-        _clear_saved_tier(result, 'NMCT no longer lists this product as participating for the saved visit. Refresh before collecting.')
-        return
+        if benefits.get('network_source') == 'clinic_product_roster':
+            _clear_saved_tier(result, 'NMCT no longer lists this product as participating for the saved visit. Refresh before collecting.')
+            return
     if benefits.get('network_source') == 'clinic_nonparticipation_rule':
         benefits.update(network_status='unknown', network_source=None)
     if benefits.get('network_source') == 'clinic_nmct_policy':
