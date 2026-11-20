@@ -33,6 +33,7 @@ from app.logs.collection_audit import collection_event
 router = APIRouter(prefix="/api/staff", tags=["staff"])
 STAFF_COOKIE = "clinicforce_staff_session"
 NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache", "Referrer-Policy": "no-referrer"}
+CARD_PREVIEW_TIMEOUT_SECONDS = 35
 
 
 from app.api.schemas.staff import (
@@ -285,7 +286,8 @@ async def patient_cards(intake_id: str, request: Request):
     Each card names its upload or current eCW source;
     ClinicForce uploads include their source intake ID for clinician deletion.
     the eCW preview may have changed since a saved estimate. A missing eCW card
-    is reported even when a ClinicForce upload is also available.
+    is reported even when a ClinicForce upload is also available. The eCW scan
+    has a 35-second deadline; an incomplete scan is never reported as no card.
     """
     staff = await require_staff(request)
     intake = await owned_intake(intake_id, staff)
@@ -296,29 +298,41 @@ async def patient_cards(intake_id: str, request: Request):
              for source in sources for item in source['documents']]
     patient_id = (intake.get('patient') or {}).get('ecw_patient_id') or intake.get('fields', {}).get('ecw_patient_id')
     message = ''
+    retryable = False
     if patient_id:
         try:
-            rows = await ecw_backend.insurance_cards(str(patient_id))
+            rows = await asyncio.wait_for(ecw_backend.insurance_cards(str(patient_id)),
+                                          timeout=CARD_PREVIEW_TIMEOUT_SECONDS)
             cards.extend({**item, 'source': 'ecw_current', 'url': f"/api/staff/intakes/{quote(intake_id, safe='')}/ecw-card?document_id={quote(item['id'], safe='')}"} for item in rows)
             if not rows:
-                message = ('This eCW FHIR connection returned no patient-bound insurance-card image or PDF. '
+                message = ('No insurance card was identified among the eCW FHIR documents returned for this patient. '
                            + ('Use the saved ClinicForce card below. ' if cards else
-                              'Check eCW registration and upload its front and back here, or obtain the card from the patient. ')
-                           + 'Ask the eCW administrator why card DocumentReference was not returned.')
+                              'Check the card in eCW and upload its front and back here, or obtain the card from the patient. ')
+                           + 'An eCW registration card may not be available through this FHIR connection.')
+        except (TimeoutError, asyncio.TimeoutError):
+            retryable = True
+            message = ('The eCW card search timed out before every patient document could be checked. '
+                       'Retry later or use a saved ClinicForce card below.')
         except Exception:
-            message = 'The eCW card connection is unavailable. Any saved ClinicForce cards appear below. Card previews are optional for estimates.'
-    return JSONResponse({'cards': cards, 'message': message}, headers=NO_STORE)
+            retryable = True
+            message = ('The eCW card search is incomplete. Any saved ClinicForce cards appear below. '
+                       'Retry the eCW preview or upload the card here.')
+    return JSONResponse({'cards': cards, 'message': message, 'retryable': retryable}, headers=NO_STORE)
 
 
 @router.get("/intakes/{intake_id}/ecw-card")
 async def ecw_card(intake_id: str, document_id: str, request: Request):
-    """Read one patient-bound eCW card, including scanned cards and cards extracted from larger PDFs."""
+    """Read one patient-bound eCW card within 35 seconds, including scanned or embedded cards."""
     intake = await owned_intake(intake_id, await require_staff(request))
     patient_id = (intake.get('patient') or {}).get('ecw_patient_id') or intake.get('fields', {}).get('ecw_patient_id')
     if not patient_id:
         raise HTTPException(404, 'No eCW patient is linked to this intake.')
     try:
-        content, mime = await ecw_backend.insurance_cards(str(patient_id), document_id=document_id)
+        content, mime = await asyncio.wait_for(
+            ecw_backend.insurance_cards(str(patient_id), document_id=document_id),
+            timeout=CARD_PREVIEW_TIMEOUT_SECONDS)
+    except (TimeoutError, asyncio.TimeoutError) as exc:
+        raise HTTPException(504, 'The eCW insurance card read timed out. Retry the preview.') from exc
     except Exception as exc:
         raise HTTPException(502, 'The eCW insurance card could not be read.') from exc
     return Response(content, media_type=mime, headers={**NO_STORE, 'Content-Disposition': 'inline', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': 'sandbox'})

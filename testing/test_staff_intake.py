@@ -55,7 +55,7 @@ class FileBoundaryTests(unittest.TestCase):
             response = asyncio.run(staff.patient_cards('synthetic-intake', None))
         data = json.loads(response.body)
         self.assertEqual(len(data['cards']), 1)
-        self.assertIn('eCW FHIR connection returned no patient-bound insurance-card image or PDF', data['message'])
+        self.assertIn('No insurance card was identified among the eCW FHIR documents', data['message'])
         self.assertIn('Use the saved ClinicForce card below', data['message'])
 
         with patch.object(staff, 'require_staff', AsyncMock(return_value=staff_user)), \
@@ -65,8 +65,42 @@ class FileBoundaryTests(unittest.TestCase):
             response = asyncio.run(staff.patient_cards('synthetic-intake', None))
         data = json.loads(response.body)
         self.assertEqual(data['cards'], [])
-        self.assertIn('Check eCW registration', data['message'])
+        self.assertIn('Check the card in eCW', data['message'])
         self.assertIn('upload its front and back', data['message'])
+
+    def test_card_list_returns_incomplete_instead_of_waiting_past_browser_deadline(self):
+        intake = {'id': 'synthetic-intake', 'patient': {'id': 'synthetic-patient',
+                  'ecw_patient_id': 'synthetic-ecw'}, 'fields': {}, 'documents': []}
+
+        async def stalled_cards(*args, **kwargs):
+            await asyncio.sleep(1)
+            return []
+
+        with patch.object(staff, 'require_staff', AsyncMock(return_value={'practice_id': 'synthetic-practice'})), \
+             patch.object(staff, 'owned_intake', AsyncMock(return_value=intake)), \
+             patch.object(staff.staff_store, 'patient_card_intakes', return_value=[]), \
+             patch.object(staff.ecw_backend, 'insurance_cards', side_effect=stalled_cards), \
+             patch.object(staff, 'CARD_PREVIEW_TIMEOUT_SECONDS', .01):
+            response = asyncio.run(staff.patient_cards('synthetic-intake', None))
+        data = json.loads(response.body)
+        self.assertEqual(data['cards'], [])
+        self.assertTrue(data['retryable'])
+        self.assertIn('timed out before every patient document could be checked', data['message'])
+        self.assertNotIn('returned no patient-bound', data['message'])
+
+    def test_ecw_card_read_timeout_returns_gateway_timeout(self):
+        intake = {'patient': {'ecw_patient_id': 'synthetic-ecw'}, 'fields': {}}
+
+        async def stalled_cards(*args, **kwargs):
+            await asyncio.sleep(1)
+
+        with patch.object(staff, 'require_staff', AsyncMock(return_value={'practice_id': 'synthetic-practice'})), \
+             patch.object(staff, 'owned_intake', AsyncMock(return_value=intake)), \
+             patch.object(staff.ecw_backend, 'insurance_cards', side_effect=stalled_cards), \
+             patch.object(staff, 'CARD_PREVIEW_TIMEOUT_SECONDS', .01):
+            with self.assertRaises(staff.HTTPException) as error:
+                asyncio.run(staff.ecw_card('synthetic-intake', 'synthetic-document', None))
+        self.assertEqual(error.exception.status_code, 504)
 
     def test_bytes_are_validated_before_ocr_and_object_keys_exclude_names(self):
         self.assertEqual(staff.inspect_file(card_pdf()), ("application/pdf", 1))

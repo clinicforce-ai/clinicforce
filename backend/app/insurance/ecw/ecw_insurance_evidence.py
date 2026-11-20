@@ -262,11 +262,12 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
 
         def card_text(text: str) -> bool:
             fields = golden._card_fields(text)
-            return (bool(re.search(r'\b(?:insurance|member(?:\s+id)?)\s+cards?\b', text, re.I))
-                        and all(fields.get(name) for name in golden.CARD_IDENTITY_PATTERNS)
-                        and bool(fields.get('rx_bin') or fields.get('rx_pcn') or re.search(
-                            r'\b(?:health\s+plan|health\s+insurance|copay|co-pay|ppo|hmo|urgent\s+care|emergency\s+room)\b',
-                            text, re.I)))
+            return (all(fields.get(name) for name in golden.CARD_IDENTITY_PATTERNS)
+                    and bool(fields.get('rx_bin') or fields.get('rx_pcn') or re.search(
+                        r'\b(?:health\s+plan|health\s+insurance|copay|co-pay|ppo|hmo|urgent\s+care|emergency\s+room)\b',
+                        text, re.I))
+                    and bool(re.search(r'\b(?:insurance|member(?:\s+id)?)\s+cards?\b', text, re.I)
+                             or fields.get('rx_bin') or fields.get('rx_pcn')))
 
         def card_images(page: fitz.Page, text: str) -> list[dict]:
             if not re.search(r'\bmember\s+id\s+cards?\b', text, re.I):
@@ -302,12 +303,20 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
                     if document.needs_pass or document.page_count > 20:
                         return None
                     if document.page_count <= golden.MAX_PDF_PAGES:
-                        text = golden._pdf_text(content)
-                        scanned_image = any(
-                            fitz.Rect(item['bbox']).get_area() >= page.rect.get_area() * .2
-                            for page in document for item in page.get_image_info(xrefs=True))
-                        return [(None, content)] if (card_text(text) or
-                            scanned_image and scanned_member_card(text)) else []
+                        text = '\n'.join(page.get_text(sort=True) for page in document)
+                        if card_text(text):
+                            return [(None, content)]
+                        for page in document:
+                            images = [item for item in page.get_image_info(xrefs=True)
+                                      if item['xref'] > 0 and fitz.Rect(item['bbox']).get_area()
+                                      >= page.rect.get_area() * golden.MIN_OCR_IMAGE_COVERAGE]
+                            if not images:
+                                continue
+                            image = max(images, key=lambda item: fitz.Rect(item['bbox']).get_area())
+                            text += '\n' + golden._image_text(document.extract_image(image['xref'])['image'])
+                            if card_text(text) or scanned_member_card(text):
+                                return [(None, content)]
+                        return []
                     cards = []
                     for number in range(document.page_count):
                         with fitz.open() as page_pdf:
@@ -327,7 +336,9 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
                                                            stream=document.extract_image(item['xref'])['image'])
                                 cards.append((number, card_pdf.tobytes()))
                     return cards
-            except (golden.GoldenCaseError, golden.OCRServiceError, fitz.FileDataError, fitz.EmptyFileError):
+            except golden.OCRServiceError:
+                return None
+            except (golden.GoldenCaseError, fitz.FileDataError, fitz.EmptyFileError):
                 return []
 
         cards = []

@@ -55,7 +55,8 @@ async def _read_card_hints(session: dict, patient_id: str | None, *, allow_pendi
             fields['member_id'] = submitted_member_id
         return {'status': 'read', 'fields': fields, 'evidence': evidence, 'count': len(contents),
                 'source': source, 'reference_only': reference_only}
-    except (_api.ecw_backend.EcwBackendError, _api.httpx.HTTPError, TimeoutError, ValueError, _api.HTTPException,
+    except (_api.ecw_backend.EcwBackendError, _api.httpx.HTTPError, TimeoutError, _api.asyncio.TimeoutError,
+            ValueError, _api.HTTPException,
             _api.golden.OCRServiceError, _api.golden.GoldenCaseError) as exc:
         return {'status': 'unavailable', 'fields': {}, 'count': len(contents),
-                'failure_reason': 'card_read_timeout' if isinstance(exc, (TimeoutError, _api.httpx.TimeoutException)) else 'card_unavailable'}
+                'failure_reason': 'card_read_timeout' if isinstance(exc, (TimeoutError, _api.asyncio.TimeoutError, _api.httpx.TimeoutException)) else 'card_unavailable'}

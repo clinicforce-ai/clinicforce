@@ -13,6 +13,7 @@ type Cards = {
     source?: string
   }>
   message: string
+  retryable?: boolean
 }
 export default function InsuranceCards({
   intakeId,
@@ -75,6 +76,11 @@ export default function InsuranceCards({
         </p>
       )}
       {data && !!data.cards.length && data.message && <p>{data.message}</p>}
+      {data?.retryable && !error && (
+        <button type="button" disabled={busy} onClick={() => void load()}>
+          Retry eCW card preview
+        </button>
+      )}
       {historicalEstimate && data?.cards.some((card) => card.source === 'ecw_current') && (
         <p>
           Current eCW card preview; it may have changed since this estimate and was not used to
