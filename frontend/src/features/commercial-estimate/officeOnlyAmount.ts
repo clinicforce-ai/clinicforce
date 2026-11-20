@@ -40,6 +40,17 @@ export function officeOnlyCollectionRow(
   supported: boolean,
 ): CostBreakdownRow | null {
   const guidance = result.collection_guidance
+  if (
+    supported &&
+    guidance?.amount_cents === 0 &&
+    guidance.collection_rule?.mode === 'uhc_choice_plus_unassigned_oop_deferral'
+  )
+    return {
+      label: 'Amount to collect at visit',
+      value: money(0),
+      detail: guidance.reason,
+      emphasis: true,
+    }
   if (!supported || guidance?.scope !== 'office_only' || guidance.amount_cents == null) return null
   return {
     label: 'Amount to collect at visit · office only',

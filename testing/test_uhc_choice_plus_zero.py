@@ -153,6 +153,53 @@ def test_choice_plus_zero_requires_patient_binding_and_clear_card():
     assert (collection_guidance.build(result).get('collection_rule') or {}).get('mode') != 'uhc_choice_plus_family_oop_deferral'
 
 
+def test_choice_plus_unassigned_individual_oop_zero_defers_unpriced_office_visit():
+    result = estimate(plan='UNITEDHEALTHCARE CHOICE PLUS', code='99214', family_oop='3500',
+                      family_deductible='500')
+    result['benefits'].update(oop_remaining_cents=None, oop_id=None, copay_cents=None,
+        reported_options=[{'id': 'synthetic-oop', 'kind': 'out_of_pocket',
+                           'service_type_code': '30', 'coverage_level': 'INDIVIDUAL',
+                           'time_period': 'REMAINING', 'network': 'IN_NETWORK',
+                           'plan_association': 'unassigned', 'amount_cents': 0},
+                          {'id': 'family-deductible', 'kind': 'deductible',
+                           'service_type_code': '30', 'coverage_level': 'FAMILY',
+                           'time_period': 'REMAINING', 'network': 'IN_NETWORK',
+                           'amount_cents': 50000},
+                          {'id': 'family-oop', 'kind': 'out_of_pocket',
+                           'service_type_code': '30', 'coverage_level': 'FAMILY',
+                           'time_period': 'REMAINING', 'network': 'IN_NETWORK',
+                           'amount_cents': 350000}])
+    result['price_range'].update(complete=False, patient_min_cents=None, patient_max_cents=None)
+    result['price_range']['lines'][0].update(allowed_cents=None, calculation=None,
+        rate_resolution={'status': 'RATE_UNAVAILABLE'})
+    result['price_range']['lines'][0]['benefits']['copay_cents'] = None
+    result.update(service_selection_status='preview', selected_ids=['visit'],
+        service_plan={'recommended_ids': ['visit']})
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 0
+    assert guidance['basis'] == 'claim_after_service'
+    assert guidance['collection_rule']['mode'] == 'uhc_choice_plus_unassigned_oop_deferral'
+    assert guidance['services'][0]['patient_cents'] is None
+    assert encounter_summary.build({**result, 'collection_guidance': guidance})['collect_today_cents'] == 0
+    assert 'Collect $0' in amount_explanation.build(result, guidance)['sentence']
+    assert collection_guidance.build({**result, 'checked_at': '2026-11-10T15:00:00Z'})['amount_cents'] == 0
+    for change in ({'service_date_matches': False}, {'has_secondary': True},
+                   {'active': False}, {'network_status': 'unknown'}):
+        altered = {**result, 'benefits': {**result['benefits'], **change}}
+        assert collection_guidance.build(altered)['amount_cents'] is None
+    assert collection_guidance.build({**result, 'card_check': {'status': 'conflict'}})['amount_cents'] is None
+    assert collection_guidance.build({**result, 'plan_details': {'stedi': {'names': ['OTHER PLAN']}}})['amount_cents'] is None
+    assert collection_guidance.build({**result, 'checked_at': '2026-11-09T15:00:00Z'})['amount_cents'] is None
+    assert collection_guidance.build({**result, 'benefits': {**result['benefits'], 'copay_cents': 2500}})['amount_cents'] is None
+    no_family = {**result, 'benefits': {**result['benefits'], 'reported_options':
+        result['benefits']['reported_options'][:1]}}
+    assert collection_guidance.build(no_family)['amount_cents'] is None
+    conflicting = {**result, 'benefits': {**result['benefits'], 'reported_options': [
+        *result['benefits']['reported_options'],
+        {**result['benefits']['reported_options'][0], 'id': 'other-oop', 'amount_cents': 2500}]}}
+    assert collection_guidance.build(conflicting)['amount_cents'] is None
+
+
 @pytest.mark.parametrize('plan,zero_supported', [('POS CHOICE PLUS', True), ('OTHER PLAN', False)])
 def test_saved_rate_change_keeps_only_matching_zero_check_in_evidence(monkeypatch, plan, zero_supported):
     result = estimate(plan=plan)
