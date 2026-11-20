@@ -550,6 +550,12 @@ PCP $0 Specialist $50''')])
         check = _compare_card_hints(card, inputs.copy(), source)
         self.assertEqual(check['status'], 'conflict')
         self.assertEqual(check['published_oon_specialist_copay_cents'], 8500)
+        unread_name = {**fields}
+        unread_name.pop('member_name')
+        self.assertEqual(_compare_card_hints({**card, 'fields': unread_name}, inputs.copy(), source)
+                         ['published_oon_specialist_copay_cents'], 8500)
+        self.assertNotIn('published_oon_specialist_copay_cents', _compare_card_hints(
+            {**card, 'fields': {**fields, 'member_name': 'OTHER PERSON'}}, inputs.copy(), source))
         from app.insurance.commercial import is_united_healthcare_payer
         self.assertTrue(is_united_healthcare_payer({'payer': 'Optum Care', 'card_check': check}))
         self.assertEqual(inputs['member_id'], '987654321')

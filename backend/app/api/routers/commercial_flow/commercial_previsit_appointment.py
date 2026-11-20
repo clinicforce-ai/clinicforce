@@ -17,7 +17,7 @@ async def load_previsit_appointment(session: dict, value, request, review_servic
         raise _api.HTTPException(503, "The eClinicalWorks backend connection is not configured.")
     confirmed_patient_id = ((session.get('intake') or {}).get('patient') or {}).get('ecw_patient_id')
     card_task = (_api.asyncio.create_task(_api.asyncio.wait_for(
-        _api._read_card_hints(session, str(confirmed_patient_id), allow_pending_reference=True), timeout=30))
+        _api._read_card_hints(session, str(confirmed_patient_id), allow_pending_reference=True), timeout=45))
         if confirmed_patient_id else None)
     try:
         inputs, _, source = await _api.ecw_backend.fetch_inputs(

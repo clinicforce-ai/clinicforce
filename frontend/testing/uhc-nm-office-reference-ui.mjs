@@ -62,6 +62,22 @@ try {
   }))
   assert(automaticCashArrival.includes('$85.00 conditional'))
   assert(!automaticCashArrival.includes('$150.00'))
+  const missingNetworkEvidence = { ...cashFallbackResult, network_evidence: undefined,
+    appointment_context: { place_of_service: '11' } }
+  const noNetworkTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+    { model: { ...model, cash: true }, result: missingNetworkEvidence }))
+  assert(noNetworkTable.includes('$85.00 conditional plan reference'))
+  const noNetworkArrival = renderToStaticMarkup(React.createElement(ArrivalAmountSummary, {
+    model: { ...model, cash: true }, result: missingNetworkEvidence,
+    partialCopay: null, visibleAmount: true,
+  }))
+  assert(noNetworkArrival.includes('$85.00 conditional'))
+  const conflictingOfficeSetting = renderToStaticMarkup(React.createElement(ArrivalAmountSummary, {
+    model: { ...model, cash: true }, result: { ...missingNetworkEvidence,
+      network_evidence: { place_of_service: '02' } },
+    partialCopay: null, visibleAmount: true,
+  }))
+  assert(!conflictingOfficeSetting.includes('$85.00 conditional'))
   const explicitCash = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
     { model: { ...model, cash: true }, result }))
   assert(!explicitCash.includes('$85.00 conditional plan reference'))
