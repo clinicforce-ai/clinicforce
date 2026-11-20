@@ -60,6 +60,13 @@ UHC_TX_QMB_H4514_024_2026 = {
     'qmb_cost_sharing_protected': True,
 }
 
+UHC_NM_0006_2026 = {
+    'label': '2026 AARP Medicare Advantage from UHC NM-0006 (PPO) Summary of Benefits',
+    'url': 'https://www.uhc.com/medicare/alphadog/AANM26LP0332760_000',
+    'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
+    'out_of_network_office_specialist_copay_cents': 8500,
+}
+
 
 def uhc_tx_qmb_product(plan: dict, service_date: str, patient_bound: bool) -> bool:
     return (patient_bound

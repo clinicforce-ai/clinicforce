@@ -3,6 +3,7 @@ import CostBreakdownTable, { type CostBreakdownRow } from '../insurance-estimate
 import { feeProxyFormula } from './coinsuranceFormula'
 import { money } from './format'
 import { uhcLppoOfficeScenario } from './uhcLppoOfficeScenario'
+import { uhcNmOfficeReference } from './uhcNmOfficeReference'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { uhcQmbOfficeRows } from './uhcQmbOfficeTable'
 
@@ -18,6 +19,7 @@ export default function CommercialCostTables({
   const cash = model.cash
   const lppo =
     !cash && !model.previousEstimate && !model.calculating ? uhcLppoOfficeScenario(result) : null
+  const nmOffice = uhcNmOfficeReference(result, model)
   const proxy = result.fee_proxy_estimate
   const aetnaFamilyZero =
     result.collection_guidance?.amount_cents === 0 &&
@@ -157,38 +159,78 @@ export default function CommercialCostTables({
       value: money(planning.plan_share_cents),
       detail: `${money(planning.allowed_cents)} clinic Aetna fee reference less ${money(planning.copay_cents!)} patient copay, if covered in-network${planning.coinsurance_percent == null ? ' and the fixed copay is the only office cost share' : ''}. This is paid by Aetna after an eligible claim, not collected from the patient.`,
     })
-  const finalRows = lppo
+  const finalRows = nmOffice
     ? visibleRows.map((row) => {
-        if (row.label === 'Total payer allowed')
+        if (row.label === 'Coverage')
           return {
             ...row,
-            value: `Not confirmed by UHC · ${money(lppo.fee)} clinic Medicare fee reference`,
+            value: 'Card identifies UHC Medicare Advantage PPO · eligibility unverified',
             detail:
-              'The clinic Medicare schedule is a planning reference, not a UnitedHealthcare allowance.',
+              'The electronic search did not establish inactive coverage. The payer-specific check needs provider enrollment review.',
           }
-        if (row.label === 'Coinsurance')
+        if (row.label === 'Payer order')
           return {
             ...row,
-            value: `${lppo.percent}% reported · ${money(lppo.share)} provisional`,
-            detail: `${lppo.percent}% × ${money(lppo.fee)} clinic Medicare fee reference.`,
+            value: 'One card plan referenced · eCW entries need reconciliation',
+            detail:
+              'Optum Care and UnitedHealthcare may describe one administered plan. Confirm payer order before billing.',
+          }
+        if (row.label === 'Copay')
+          return {
+            ...row,
+            value: `${money(nmOffice.copay)} published out-of-network specialist copay`,
+            detail:
+              'UHC 2026 plan summary; member coverage, provider tier and billing protections were not verified.',
           }
         if (row.label === 'Estimated patient share')
           return {
             ...row,
-            value: `${money(lppo.share)} provisional`,
+            value: `${money(nmOffice.balance)} conditional plan reference`,
             detail:
-              'The reported deductible has $0 remaining; the payer allowance and final claim share are unconfirmed.',
+              'For one covered out-of-network specialist office visit, after recorded payments. Final responsibility follows the claim.',
           }
-        if (row.label === 'Amount to collect at visit')
+        if (row.label.startsWith('Amount to collect at visit'))
           return {
             ...row,
-            label: 'Amount to collect at visit · provisional',
-            value: `${money(lppo.balance)} provisional · verify before charging`,
-            detail: `${lppo.percent}% × ${money(lppo.fee)} clinic Medicare fee reference = ${money(lppo.share)}${lppo.paid ? `; less ${money(lppo.paid)} already paid` : ''}. Reconcile the policy conflict, network, QMB protection and payer order before charging.`,
+            label: 'Amount to collect at visit · verification pending',
+            value: `${money(nmOffice.balance)} conditional plan reference · do not collect yet`,
+            detail:
+              'Confirm active coverage, provider enrollment, QMB protection, other coverage and prior payments before charging. The $150 cash price is separate.',
           }
         return row
       })
-    : visibleRows
+    : lppo
+      ? visibleRows.map((row) => {
+          if (row.label === 'Total payer allowed')
+            return {
+              ...row,
+              value: `Not confirmed by UHC · ${money(lppo.fee)} clinic Medicare fee reference`,
+              detail:
+                'The clinic Medicare schedule is a planning reference, not a UnitedHealthcare allowance.',
+            }
+          if (row.label === 'Coinsurance')
+            return {
+              ...row,
+              value: `${lppo.percent}% reported · ${money(lppo.share)} provisional`,
+              detail: `${lppo.percent}% × ${money(lppo.fee)} clinic Medicare fee reference.`,
+            }
+          if (row.label === 'Estimated patient share')
+            return {
+              ...row,
+              value: `${money(lppo.share)} provisional`,
+              detail:
+                'The reported deductible has $0 remaining; the payer allowance and final claim share are unconfirmed.',
+            }
+          if (row.label === 'Amount to collect at visit')
+            return {
+              ...row,
+              label: 'Amount to collect at visit · provisional',
+              value: `${money(lppo.balance)} provisional · verify before charging`,
+              detail: `${lppo.percent}% × ${money(lppo.fee)} clinic Medicare fee reference = ${money(lppo.share)}${lppo.paid ? `; less ${money(lppo.paid)} already paid` : ''}. Reconcile the policy conflict, network, QMB protection and payer order before charging.`,
+            }
+          return row
+        })
+      : visibleRows
   return (
     <>
       {!cash &&
@@ -210,6 +252,7 @@ export default function CommercialCostTables({
         open={
           (model.supportedAmount ||
             !!lppo ||
+            !!nmOffice ||
             !!planning ||
             result.collection_guidance?.basis === 'published_uhc_tx_qmb_office') &&
           !cash
