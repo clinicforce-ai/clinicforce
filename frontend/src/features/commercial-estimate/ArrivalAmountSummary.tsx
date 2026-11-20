@@ -62,9 +62,11 @@ export default function ArrivalAmountSummary({
     )
   if (
     model.supportedAmount &&
-    ['individual_oop_zero_deferral', 'bcbstx_plus_office_deferral'].includes(
-      result.collection_guidance?.collection_rule?.mode || '',
-    )
+    [
+      'individual_oop_zero_deferral',
+      'bcbstx_plus_office_deferral',
+      'bcbstx_botox_family_oop_deferral',
+    ].includes(result.collection_guidance?.collection_rule?.mode || '')
   )
     return (
       <>

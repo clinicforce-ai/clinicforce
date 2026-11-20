@@ -146,10 +146,11 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     from a likely published $50-per-test benefit, capped by the draft fee
     reference and reported remaining out-of-pocket balance. This is not an
     authorized collection amount; saved scenarios are recalculated on read.
-    botox_preview, when present, shows the sole priced BCBSTX office-injection
-    candidate from a scoped clinic fee and the returned injection term, even
-    when other suggested candidates remain unpriced.
-    It is a conditional planning amount, not a selected CPT or collection order.
+    botox_preview shows a sole priced BCBSTX injection candidate as a conditional
+    planning amount; it never selects a billable CPT or authorizes collection.
+    An uncoded PPO Medical Botox injection preview with patient-bound in-network 0%
+    injection coinsurance, no copay and $0 remaining on the same medical family's
+    deductible and out-of-pocket limit can defer check-in at $0; final claim share remains unresolved.
     For Cigna, separate exact-CPT
     Stedi inquiries may supply authorization and financial terms. When every
     selected line has compatible terms, fee_proxy_estimate shows a provisional
