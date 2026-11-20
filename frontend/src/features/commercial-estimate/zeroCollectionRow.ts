@@ -14,7 +14,9 @@ export function zeroCollectionRow(
     !(
       rule === 'aetna_office_individual_oop_deferral' ||
       (model.supportedAmount &&
-        (rule === 'individual_oop_zero_deferral' || rule === 'bcbstx_botox_family_oop_deferral'))
+        (rule === 'individual_oop_zero_deferral' ||
+          rule === 'bcbstx_botox_family_oop_deferral' ||
+          rule === 'uhc_choice_plus_family_oop_deferral'))
     )
   )
     return null

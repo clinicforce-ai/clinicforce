@@ -9,7 +9,7 @@ from app.insurance.collection.bcbstx_botox_zero import apply_bcbstx_botox_family
 
 
 def uhc_choice_plus_zero_candidate(result: dict) -> bool:
-    """Recognize the one-office-visit Choice Plus family-cap deferral."""
+    """Recognize a bounded Choice Plus office check-in deferral."""
     benefits = result.get('benefits') or {}
     price = result.get('price_range') or {}
     lines = price.get('lines') or []
@@ -27,31 +27,67 @@ def uhc_choice_plus_zero_candidate(result: dict) -> bool:
                           and row.get('coverage_level') == 'FAMILY'
                           and row.get('time_period') in {'REMAINING', '29'}
                           and row.get('network') == 'IN_NETWORK']
+    individual_oop = [row for row in options if row.get('kind') == 'out_of_pocket'
+                      and row.get('service_type_code') == '30'
+                      and row.get('coverage_level') == 'INDIVIDUAL'
+                      and row.get('time_period') in {'REMAINING', '29'}
+                      and row.get('network') == 'IN_NETWORK']
+    family_oop = [row for row in options if row.get('kind') == 'out_of_pocket'
+                  and row.get('service_type_code') == '30'
+                  and row.get('coverage_level') == 'FAMILY'
+                  and row.get('time_period') in {'REMAINING', '29'}
+                  and row.get('network') == 'IN_NETWORK']
+    code = lines[0].get('code') if len(lines) == 1 else None
+    try:
+        check_age = (date.fromisoformat(str(result.get('service_date') or ''))
+                     - date.fromisoformat(str(result.get('checked_at') or '')[:10])).days
+    except (TypeError, ValueError):
+        check_age = None
+    vision_names = (benefits.get('plan_details') or {}).get('supplementary_names') or []
+    specialist_copays = [row for row in options if row.get('kind') == 'copay'
+                         and row.get('service_type_code') == '96'
+                         and row.get('coverage_level') == 'INDIVIDUAL'
+                         and row.get('network') == 'IN_NETWORK']
+    mixed_vision_followup = (code == '99213' and check_age in {0, 1}
+        and bool(vision_names) and all('vision' in str(name).casefold() or 'spectera' in str(name).casefold()
+                                       for name in vision_names)
+        and (benefits.get('plan_details') or {}).get('names') == names
+        and individual_oop and family_oop
+        and all(type(row.get('plan_index')) is int for row in
+                [*office_copays, *family_deductibles, *individual_oop, *family_oop])
+        and len({row.get('plan_index') for row in
+                 [*office_copays, *family_deductibles, *individual_oop, *family_oop]}) == 1
+        and all(row.get('plan_association') == 'unassigned' and row.get('amount_cents') == 0
+                for row in [*individual_oop, *family_oop]))
     return (str(result.get('payer') or '').casefold().replace(' ', '') == 'unitedhealthcare'
             and names == ['POS CHOICE PLUS']
             and result.get('payment_mode') != 'cash'
-            and result.get('service_date') == str(result.get('checked_at') or '')[:10]
+            and (result.get('service_date') == str(result.get('checked_at') or '')[:10]
+                 or mixed_vision_followup)
             and (result.get('appointment_context') or {}).get('place_of_service') == '11'
             and price.get('mode') == 'services' and not price.get('service_issues')
-            and len(lines) == 1 and lines[0].get('code') == '99203'
+            and len(lines) == 1 and code in {'99203', '99213'}
             and lines[0].get('units') == 1 and not lines[0].get('modifiers')
             and benefits.get('active') is True and benefits.get('service_date_matches') is not False
             and line_benefits.get('active') is True
             and line_benefits.get('service_date_matches') is not False
             and line_benefits.get('network_status') != 'out_of_network'
             and not line_benefits.get('coverage_status_conflict')
-            and line_benefits.get('family_oop_zero_applies') is True
-            and benefits.get('family_oop_zero_applies') is True
-            and benefits.get('family_oop_remaining_cents') == 0
+            and ((code in {'99203', '99213'} and line_benefits.get('family_oop_zero_applies') is True
+                  and benefits.get('family_oop_zero_applies') is True
+                  and benefits.get('family_oop_remaining_cents') == 0)
+                 or mixed_vision_followup)
             and not benefits.get('separate_copay_limit')
             and not benefits.get('has_secondary') and not benefits.get('network_conflict')
             and not benefits.get('coverage_status_conflict') and not benefits.get('coverage_dates_invalid')
             and not benefits.get('historical_only') and not benefits.get('source_errors')
             and card.get('status') not in {'conflict', 'mismatch'}
+            and card.get('independent_ecw_check') is not True
             and not card.get('conflicts') and not card.get('differences')
             and result.get('refresh_requires_selection') is not True
             and patient_benefits_bound(identity) and verified_in_network(benefits)
             and office_copays and all(row.get('amount_cents') == 0 for row in office_copays)
+            and (code != '99213' or all(row.get('amount_cents') == 0 for row in specialist_copays))
             and family_deductibles and all(row.get('amount_cents') == 0 for row in family_deductibles))
 
 
@@ -61,14 +97,21 @@ def apply_uhc_choice_plus_family_oop_deferral(result: dict, guidance: dict, *,
     if (not uhc_choice_plus_zero_candidate(result) or adverse or same_policy_conflict
             or source_errors or guidance.get('amount_cents') not in {None, 0}):
         return
+    code = (result['price_range']['lines'][0]['code'])
+    mixed_vision = code == '99213' and (result.get('benefits') or {}).get('family_oop_zero_applies') is not True
     guidance.update(amount_cents=0, status='zero_advance', basis='claim_after_service',
-        reason=('Collect $0 at check-in for the proposed CPT 99203 office visit. UHC reports a $0 office copay '
+        reason=(f'Collect $0 at check-in for the proposed CPT {code} office visit. UHC reports a $0 office copay '
+                'and $0 remaining on in-network individual and family out-of-pocket rows, but their medical '
+                'applicability is unconfirmed alongside a vision plan. Confirm coverage and the applicable '
+                'medical limit; final responsibility follows the claim.' if mixed_vision else
+                f'Collect $0 at check-in for the proposed CPT {code} office visit. UHC reports a $0 office copay '
                 'and $0 remaining on the family in-network deductible and out-of-pocket maximum. '
                 'The BCBS Texas fee is a price reference, not a UHC allowance. Confirm that the performed '
                 'service is covered and counts toward the family maximum; final responsibility follows the claim.'),
         patient_message='No payment is requested at arrival. Final responsibility follows the processed insurance claim.',
         collection_rule={'mode': 'uhc_choice_plus_family_oop_deferral',
-                         'reference': 'UHC Choice Plus office and family medical benefits'})
+                         'reference': ('UHC Choice Plus office and unassigned in-network STC 30 balances'
+                                       if mixed_vision else 'UHC Choice Plus office and family medical benefits')})
     guidance.pop('policy_setup_required', None)
 
 

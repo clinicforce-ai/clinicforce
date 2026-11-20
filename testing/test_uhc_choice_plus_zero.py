@@ -1,7 +1,7 @@
 """Synthetic UHC office response shape; no patient details or payer payloads."""
 import pytest
 
-from app.insurance import amount_explanation, collection_guidance, commercial, visit_estimate
+from app.insurance import amount_explanation, collection_guidance, commercial, encounter_summary, visit_estimate
 from app.api.routers import commercial_estimator
 from app.api.routers.commercial_flow import commercial_previsit_status as status
 
@@ -16,7 +16,7 @@ def row(amount=None, *, stc='BY', level='INDIVIDUAL', network='IN_NETWORK', peri
 
 def estimate(*, payer='UnitedHealthcare', plan='POS CHOICE PLUS', copay='0',
              family_oop='0', family_deductible='0', code='99203', network='in_network',
-             secondary=False):
+             secondary=False, mixed_vision=False):
     raw = {'payerId': '87726', 'plans': [{'benefits': {
         'statuses': [row(stc='BY', status='ACTIVE_COVERAGE'),
                      row(stc='30', status='ACTIVE_COVERAGE', planCoverageDescription=plan)],
@@ -29,6 +29,18 @@ def estimate(*, payer='UnitedHealthcare', plan='POS CHOICE PLUS', copay='0',
         'deductible': [row(family_deductible, stc='30', level='FAMILY', period='REMAINING')],
         'outOfPocket': [row(family_oop, stc='30', level='FAMILY', period='REMAINING')],
         'limitations': [row('0', messages=['HIGHEST BENEFIT'], period='VISIT')]}}]}
+    if mixed_vision:
+        terms = raw['plans'][0]['benefits']
+        terms['statuses'].append(row(stc='30', status='ACTIVE_COVERAGE',
+                                     planCoverageDescription='SPECTERA VISION PLAN'))
+        terms['coPayment'].append(row('0', stc='96', messages=['SPECIALIST'], period='VISIT'))
+        terms['deductible'].extend([
+            row('3600', stc='30', level='FAMILY', period='CALENDAR_YEAR'),
+            row('580.47', stc='30', period='REMAINING')])
+        terms['outOfPocket'].extend([
+            row('0', stc='30', period='REMAINING'),
+            row('5400', stc='30', period='CALENDAR_YEAR'),
+            row('10800', stc='30', level='FAMILY', period='CALENDAR_YEAR')])
     benefits = commercial.normalize_stedi_271(raw, '98', False, office_visit=True,
         procedure_code=code, service_date='2026-11-12', place_of_service='11',
         office_service_types=['BQ', 'BY', '98'])
@@ -56,6 +68,69 @@ def test_choice_plus_office_by_copay_and_met_family_cap_give_zero_check_in():
     assert guidance['basis'] == 'claim_after_service'
     assert guidance['collection_rule']['mode'] == 'uhc_choice_plus_family_oop_deferral'
     assert 'Collect $0' in amount_explanation.build(result, guidance)['sentence']
+
+
+@pytest.mark.parametrize('checked_at', ['2026-11-11T15:00:00Z', '2026-11-12T15:00:00Z'])
+def test_choice_plus_followup_with_mixed_vision_rows_defers_check_in(checked_at):
+    result = estimate(code='99213', mixed_vision=True)
+    assert result['benefits']['oop_remaining_cents'] is None
+    assert result['benefits']['family_oop_zero_applies'] is False
+    result['checked_at'] = checked_at
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 0
+    assert guidance['basis'] == 'claim_after_service'
+    assert guidance['collection_rule']['mode'] == 'uhc_choice_plus_family_oop_deferral'
+    assert '99213' in guidance['reason']
+    assert result['price_range']['lines'][0]['allowed_cents'] is None
+    summary = encounter_summary.build({**result, 'collection_guidance': guidance})
+    assert summary['collect_today_cents'] == 0
+    assert summary['estimated_total_patient_min_cents'] is None
+
+
+@pytest.mark.parametrize('change', [
+    'positive_individual_oop', 'positive_family_oop', 'positive_family_deductible',
+    'positive_office_copay',
+    'positive_specialist_copay', 'unverified_network', 'stale_check',
+    'wrong_product', 'different_plan_row', 'secondary_coverage', 'card_conflict', 'second_service',
+])
+def test_choice_plus_followup_deferral_requires_matching_evidence(change):
+    result = estimate(code='99213', mixed_vision=True)
+    benefits = result['benefits']
+    if change == 'positive_individual_oop':
+        next(row for row in benefits['reported_options'] if row.get('kind') == 'out_of_pocket'
+             and row.get('coverage_level') == 'INDIVIDUAL' and row.get('time_period') == 'REMAINING'
+             and row.get('network') == 'IN_NETWORK')['amount_cents'] = 100
+    elif change == 'positive_family_oop':
+        next(row for row in benefits['reported_options'] if row.get('kind') == 'out_of_pocket'
+             and row.get('coverage_level') == 'FAMILY' and row.get('time_period') == 'REMAINING'
+             and row.get('network') == 'IN_NETWORK')['amount_cents'] = 100
+    elif change == 'positive_family_deductible':
+        next(row for row in benefits['reported_options'] if row.get('kind') == 'deductible'
+             and row.get('coverage_level') == 'FAMILY' and row.get('time_period') == 'REMAINING'
+             and row.get('network') == 'IN_NETWORK')['amount_cents'] = 100
+    elif change == 'positive_office_copay':
+        next(row for row in benefits['reported_options'] if row.get('kind') == 'copay'
+             and row.get('service_type_code') == 'BY' and row.get('network') == 'IN_NETWORK')['amount_cents'] = 100
+    elif change == 'positive_specialist_copay':
+        next(row for row in benefits['reported_options'] if row.get('kind') == 'copay'
+             and row.get('service_type_code') == '96' and row.get('network') == 'IN_NETWORK')['amount_cents'] = 100
+    elif change == 'unverified_network':
+        benefits['network_status'] = 'unknown'
+    elif change == 'stale_check':
+        result['checked_at'] = '2026-11-09T15:00:00Z'
+    elif change == 'wrong_product':
+        result['plan_details']['stedi']['names'] = ['OTHER PLAN']
+    elif change == 'different_plan_row':
+        next(row for row in benefits['reported_options'] if row.get('kind') == 'out_of_pocket'
+             and row.get('coverage_level') == 'INDIVIDUAL' and row.get('time_period') == 'REMAINING'
+             and row.get('network') == 'IN_NETWORK')['plan_index'] = 1
+    elif change == 'secondary_coverage':
+        benefits['has_secondary'] = True
+    elif change == 'card_conflict':
+        result['card_check'] = {'status': 'conflict'}
+    elif change == 'second_service':
+        result['price_range']['lines'].append({'id': 'extra', 'code': '95908', 'units': 1})
+    assert collection_guidance.build(result)['amount_cents'] is None
 
 
 @pytest.mark.parametrize('change', [
