@@ -31,15 +31,13 @@ def _plus_office_deferral(result: dict, guidance: dict, *, safe: bool) -> None:
             or benefits.get('active') is not True or not verified_in_network(benefits)
             or benefits.get('has_secondary') or benefits.get('source_errors')
             or benefits.get('deductible_remaining_cents') is not None
-            or benefits.get('oop_remaining_cents') is not None
-            or type(benefits.get('deductible_annual_cents')) is not int
-            or type(benefits.get('oop_annual_cents')) is not int
-            or benefits['deductible_annual_cents'] <= 0 or benefits['oop_annual_cents'] <= 0):
+            or benefits.get('oop_remaining_cents') is not None):
         return
     line, code = lines[0], codes[0]
     terms = line.get('benefits') or {}
     allowed = line.get('allowed_cents')
-    if (line.get('id') != code.get('id') or line.get('code') != code.get('code') != '99213'
+    if (line.get('id') != code.get('id') or line.get('code') != code.get('code')
+            or code.get('code') not in {'99213', '99204'}
             or line.get('units') != code.get('units') or line.get('units') != 1
             or line.get('modifiers') or code.get('modifiers')
             or line.get('allowed_basis') != 'clinic_contract'
@@ -51,20 +49,31 @@ def _plus_office_deferral(result: dict, guidance: dict, *, safe: bool) -> None:
             or terms.get('deductible_remaining_cents') is not None
             or terms.get('oop_remaining_cents') is not None
             or terms.get('deductible_applies') is not None
-            or str(terms.get('coinsurance_percent')) not in {'20', '20.0', '20.00'}
+            or (code['code'] == '99213' and (
+                type(benefits.get('deductible_annual_cents')) is not int
+                or type(benefits.get('oop_annual_cents')) is not int
+                or benefits['deductible_annual_cents'] <= 0
+                or benefits['oop_annual_cents'] <= 0
+                or str(terms.get('coinsurance_percent')) not in {'20', '20.0', '20.00'}))
+            or (code['code'] == '99204' and terms.get('coinsurance_percent') is not None)
             or any(row.get('kind') == 'copay' and row.get('service_type_code') in {'30', '98'}
                    and row.get('network') in {'IN_NETWORK', 'Y'}
                    and row.get('plan_association') in {None, 'medical'}
                    for row in benefits.get('reported_options') or [])):
         return
-    guidance.update(amount_cents=0, status='zero_advance', basis='claim_after_service',
-        reason=(f'Collect $0 at check-in and obtain a Blue Cross member-specific cost estimate or '
+    reason = (f'Collect $0 at check-in and obtain a Blue Cross member-specific cost estimate or '
                 f'bill after the claim. The {_money(allowed)} office allowance is not the patient balance. '
                 f'Assuming no copay, if the office deductible is met or waived and at least '
                 f'{_money((allowed + 2) // 5)} remains before the out-of-pocket limit, 20% is '
                 f'{_money((allowed + 2) // 5)}; if the full allowance applies to an unmet office '
                 f'deductible and at least {_money(allowed)} remains before that limit, it is '
-                f'{_money(allowed)}. These are conditional examples, not amounts to collect today.'),
+                f'{_money(allowed)}. These are conditional examples, not amounts to collect today.')
+    if code['code'] == '99204':
+        reason = ('Collect $0 at check-in and obtain a Blue Cross member-specific cost estimate or '
+                  'bill after the claim. The office allowance is not the patient balance; applicable '
+                  'cost-sharing terms and remaining individual balances were not returned for this CPT.')
+    guidance.update(amount_cents=0, status='zero_advance', basis='claim_after_service',
+        reason=reason,
         patient_message='No payment is requested at arrival. The patient share remains unknown until a payer estimate or processed claim.',
         collection_rule={'mode': 'bcbstx_plus_office_deferral',
                          'reference': 'Blue Cross Texas Patient Cost Estimator and clinic check-in deferral'})
