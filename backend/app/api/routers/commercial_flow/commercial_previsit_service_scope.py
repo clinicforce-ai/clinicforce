@@ -93,9 +93,11 @@ def upgrade_saved_post_botox_followup(result: dict, case: dict) -> None:
             or inputs.get('place_of_service') != '10'
             or inputs.get('telehealth_modality') != 'audio_video'):
         return
-    available = _api._previsit_codes(inputs)
+    office_inputs = ({**inputs, 'visit_type': 'established'}
+                     if not inputs.get('visit_type') and result.get('established_for_planning') is True else inputs)
+    available = _api._previsit_codes(office_inputs)
     result['available_codes'] = available
-    result['service_plan'] = {**_api.visit_estimate.service_plan(available, inputs, {}),
+    result['service_plan'] = {**_api.visit_estimate.service_plan(available, office_inputs, context.get('source') or {}),
                               'kind': 'office', 'recommended_ids': [], 'selection_source': 'suggested',
                               'method': 'saved_projection',
                               'recommendation_basis': 'Post-injection follow-up without a new injection.'}
