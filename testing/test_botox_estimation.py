@@ -1,4 +1,5 @@
 """Synthetic Botox planning and financial guards; no payer or eCW calls."""
+from copy import deepcopy
 from datetime import date
 import json
 from unittest.mock import MagicMock, patch
@@ -48,6 +49,80 @@ def test_bare_booking_without_comparable_history_keeps_procedure_unselected():
         plan = cpt_suggester.recommend_visit_plan(BOOKING, {}, available)
         assert plan['kind'] == 'botox' and plan['recommended_ids'] == []
         model.converse.assert_not_called()
+
+
+def test_televisit_after_botox_is_an_office_follow_up_not_an_injection_booking():
+    visit = {'reason': '1 month fu after Botox', 'appointment_type': 'Televisit',
+             'visit_type': 'established', 'lines': []}
+    assert not botox_review.is_botox_visit(visit)
+    assert {row['code'] for row in api._previsit_codes(visit)} == {
+        '99212', '99213', '99214', '99215'}
+    assert api._previsit_service_types(visit) == ['98', '30']
+    with patch.object(cpt_suggester.boto3, 'client', side_effect=RuntimeError('offline')):
+        plan = cpt_suggester.recommend_visit_plan(visit, {}, api._previsit_codes(visit))
+    assert plan['kind'] == 'office' and plan['recommended_ids'] == ['99213:1']
+    assert botox_review.is_botox_visit({**visit, 'reason': 'Repeat Botox injection after follow-up'})
+    assert botox_review.is_botox_visit({**visit, 'lines': [
+        {'code': '64615', 'service_status': 'scheduled', 'description': 'Botox injection'}]})
+
+
+def test_saved_uncoded_post_botox_televisit_reprojects_office_zero_check_in():
+    identity = {'status': 'matched', 'match_version': 2, 'binding': 'synthetic-current-binding'}
+    inputs = {'reason': '1 month fu after Botox', 'appointment_type': 'Televisit',
+              'visit_type': 'established', 'place_of_service': '10',
+              'telehealth_modality': 'audio_video', 'service_date': DAY, 'lines': []}
+    saved = {'payment_mode': 'insurance', 'payer': 'Blue Cross Blue Shield Tx',
+             'stedi_payer': {'id': 'QDTRP'}, 'service_date': DAY,
+             'checked_at': f'{DAY}T10:00:00Z', 'identity': identity,
+             'requested_service_types': ['98', '1', '2', '30'],
+             'appointment_context': {'appointment_type': 'Televisit', 'place_of_service': '10'},
+             'plan_details': {'stedi': {'names': ['PREFERRED PROVIDER OPTION MEDICAL']}},
+             'benefits': {'active': True, 'network_status': 'in_network',
+                          'network_source': 'clinic_group_agreement', 'identity': identity,
+                          'service_date_matches': None, 'reported_options': [
+                              {'kind': 'coinsurance', 'service_type_code': '98',
+                               'network': 'IN_NETWORK', 'plan_association': 'medical',
+                               'places_of_service': ['10'], 'percent': '20', 'plan_index': 0}]},
+             'service_plan': {'kind': 'botox', 'recommended_ids': [], 'selection_source': 'suggested'},
+             'service_selection_status': 'preview', 'codes': [], 'selected_ids': [],
+             'available_codes': [{'id': 'drug', 'code': 'J0585', 'units': 100}],
+             'botox_review': {}, 'selected_service_count': 0,
+             'price_range': {'mode': 'services', 'complete': False, 'lines': [],
+                             'service_issues': ['Confirm the documented injection procedure.']}}
+    case = {'previsit': {'request_state': 'complete'}, 'previsit_context': {
+                'inputs': inputs, 'source': {}, 'result': saved, 'payer_id': 'QDTRP'},
+            'visit_review': {}, 'revision': 0}
+    projected = api._previsit_result(case)
+    assert projected['service_plan']['kind'] == 'office'
+    assert 'botox_review' not in projected
+    assert {row['code'] for row in projected['available_codes']} == {
+        '99212', '99213', '99214', '99215'}
+    assert projected['collection_guidance']['amount_cents'] == 0
+    assert projected['collection_guidance']['basis'] == 'claim_after_service'
+    assert projected['encounter_summary']['collect_today_cents'] == 0
+    assert case['previsit_context']['result']['service_plan']['kind'] == 'botox'
+    old_cash_fallback = deepcopy(case)
+    old_cash_fallback['previsit_context']['result'].update(payment_mode='cash', cash_fallback={})
+    restored = api._previsit_result(old_cash_fallback)
+    assert restored['payment_mode'] == 'insurance' and 'cash_fallback' not in restored
+    assert restored['collection_guidance']['amount_cents'] == 0
+    no_office_benefit = deepcopy(case)
+    no_office_benefit['previsit_context']['result']['benefits']['reported_options'] = []
+    pending = api._previsit_result(no_office_benefit)
+    assert pending['service_plan']['kind'] == 'office'
+    assert pending['collection_guidance']['amount_cents'] is None
+    for mutation in (
+        lambda value: value['previsit_context']['inputs'].update(reason='Repeat Botox injection today'),
+        lambda value: value['previsit_context']['inputs'].update(lines=[
+            {'code': '64615', 'description': 'Botox injection', 'service_status': 'scheduled'}]),
+        lambda value: value['visit_review'].update(selected_ids=[]),
+        lambda value: value['previsit_context']['inputs'].update(place_of_service='11'),
+        lambda value: value['previsit_context']['result'].update(codes=[
+            {'id': 'injection', 'code': '64615', 'units': 1}]),
+    ):
+        changed = deepcopy(case)
+        mutation(changed)
+        assert api._previsit_result(changed)['service_plan']['kind'] == 'botox'
 
 
 def test_comparable_completed_botox_history_selects_one_provisional_procedure():

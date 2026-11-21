@@ -1,7 +1,8 @@
-"""Automatic refundable office quote when a Blue PPO returns family-only balances."""
+"""Blue PPO check-in decisions from patient-bound office benefit evidence."""
 
 from app.insurance.collection.requirements import requirement_blocker
 from app.insurance.network_participation import verified_in_network
+from app.insurance.collection.bcbstx_ppo_televisit import apply as apply_televisit_deferral
 
 OFFICE_CODES = {'99202', '99203', '99204', '99205', '99212', '99213', '99214', '99215'}
 DIAGNOSTIC_CODES = {'95908', '95886'}
@@ -80,6 +81,7 @@ def _plus_office_deferral(result: dict, guidance: dict, *, safe: bool) -> None:
 
 
 def apply(result: dict, guidance: dict, review: dict | None, assumptions: list[str], *, safe: bool) -> None:
+    apply_televisit_deferral(result, guidance)
     _plus_office_deferral(result, guidance, safe=safe)
     benefits = result.get('benefits') or {}
     price = result.get('price_range') or {}

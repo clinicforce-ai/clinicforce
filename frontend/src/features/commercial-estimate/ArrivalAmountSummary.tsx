@@ -61,6 +61,7 @@ export default function ArrivalAmountSummary({
       'uhc_choice_plus_family_oop_deferral',
       'bcbstx_plus_office_deferral',
       'bcbstx_botox_family_oop_deferral',
+      'bcbstx_ppo_televisit_deferral',
     ].includes(result.collection_guidance?.collection_rule?.mode || '')
   )
     return (

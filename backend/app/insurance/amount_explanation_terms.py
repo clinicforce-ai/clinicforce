@@ -2,6 +2,12 @@
 from app.insurance.identity import patient_benefits_bound
 
 
+def missing_planned_cpt(result: dict, benefits: dict) -> bool:
+    plan = result.get('service_plan') or {}
+    return (benefits.get('active') is True and not plan.get('selected_codes') and not plan.get('alternatives')
+            and not (result.get('price_range') or {}).get('lines') and not result.get('codes'))
+
+
 def identity_or_date_reason(reason: str | None, benefits: dict, identity: dict) -> bool:
     return reason in {'identity_or_coverage_review', 'subscriber_relationship_conflict', 'returned_identity_or_coverage_mismatch'} or (
         reason not in {'no_coverage_found', 'upstream_no_policies'}

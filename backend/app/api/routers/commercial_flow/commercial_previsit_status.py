@@ -9,7 +9,7 @@ from app.api.routers.commercial_flow.commercial_previsit_network_guard import re
 from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import guard_unresolved_telehealth, guard_telehealth_guidance, restore_active_blue_cross_insurance, restore_saved_published_product, restore_saved_humana_hmo_product, retain_conflicted_insurance, refresh_saved_aetna_identity, refresh_saved_cigna_office_benefits, refresh_saved_uhc_registration_benefits, refresh_saved_network_pricing, refresh_saved_year_to_date_oop_candidate, upgrade_saved_biopsy_preview, refresh_saved_cross_payer_planning, suppress_saved_ambiguous_combined_zero_oop
 from app.api.routers.commercial_flow.commercial_previsit_requirements import refresh_saved_requirements
 from app.api.routers.commercial_flow.commercial_previsit_enrollment import _enrollment_failure
-from app.api.routers.commercial_flow.commercial_previsit_service_scope import retain_incomplete_service_evidence as _retain_incomplete_service_evidence
+from app.api.routers.commercial_flow.commercial_previsit_service_scope import retain_incomplete_service_evidence as _retain_incomplete_service_evidence, upgrade_saved_post_botox_followup
 from app.api.routers.commercial_flow.commercial_previsit_benefits import case_benefits as _case_benefits
 @_api.router.get("/configuration")
 async def configuration(request: _api.Request) -> dict:
@@ -61,7 +61,6 @@ async def ecw_appointment_readiness(value: _api.EcwStartInput, request: _api.Req
 def _recovery_binding(inputs: dict, source: dict) -> str:
     # Choosing anticipated services must not invalidate the recovered member identity.
     return _api._visit_context_token({**inputs, 'lines': [], 'reason': None, 'visit_type': None}, source)
-
 def _insurance_diagnosis(case: dict, result: dict, guidance: dict) -> dict:
     """Independent, persisted stage results; never put candidate identities in logs."""
     recovery = result.get('recovery') or {}
@@ -330,6 +329,7 @@ def _recheck_saved_payer_allowance(result: dict, case: dict, practice_id: str) -
     result.pop('planning_estimate', None)
 def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     result = _api.deepcopy(case['previsit_context']['result'])
+    upgrade_saved_post_botox_followup(result, case)
     refresh_saved_aetna_identity(result, case)
     suppress_saved_ambiguous_combined_zero_oop(result)
     refresh_saved_year_to_date_oop_candidate(result, case)
