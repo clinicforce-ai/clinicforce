@@ -101,6 +101,37 @@ def test_saved_uncoded_post_botox_televisit_reprojects_office_zero_check_in():
     assert projected['collection_guidance']['basis'] == 'claim_after_service'
     assert projected['encounter_summary']['collect_today_cents'] == 0
     assert case['previsit_context']['result']['service_plan']['kind'] == 'botox'
+    suggested = deepcopy(case)
+    suggested_result = suggested['previsit_context']['result']
+    suggested_result['service_plan'].update(
+        recommended_ids=['cash:64615'], recommended_units={'cash:64615': 1},
+        recommendation_basis='One provisional injection procedure from comparable completed eCW history.',
+        method='history')
+    suggested_result.update(
+        codes=[{'id': 'cash:64615', 'code': '64615', 'units': 1,
+                'modifiers': [], 'service_family': 'chemodenervation'}],
+        selected_ids=['cash:64615'], selected_service_count=1)
+    suggested_result['price_range']['lines'] = [
+        {'id': 'cash:64615', 'code': '64615', 'allowed_cents': None}]
+    suggested_result['price_range']['scenarios'] = [{'code': '64615', 'allowed_cents': None}]
+    suggested_result['price_range']['collection'] = {'action': 'verify_before_collecting'}
+    suggested_result['cpt_authorization'] = {'decisions': {'64615': {}}}
+    projected_suggested = api._previsit_result(suggested)
+    assert projected_suggested['service_plan']['kind'] == 'office'
+    assert {group['id'] for group in projected_suggested['service_plan']['groups']} == {'visit'}
+    assert projected_suggested['codes'] == projected_suggested['selected_ids'] == []
+    assert projected_suggested['price_range']['lines'] == projected_suggested['price_range']['scenarios'] == []
+    assert projected_suggested['price_range']['collection'] is None
+    assert 'cpt_authorization' not in projected_suggested
+    assert projected_suggested['collection_guidance']['amount_cents'] == 0
+    assert projected_suggested['encounter_summary']['collect_today_cents'] == 0
+    assert suggested_result['selected_ids'] == ['cash:64615']
+    reviewed_suggestion = deepcopy(suggested)
+    reviewed_suggestion['visit_review']['selected_ids'] = ['cash:64615']
+    assert api._previsit_result(reviewed_suggestion)['service_plan']['kind'] == 'botox'
+    changed_suggestion = deepcopy(suggested)
+    changed_suggestion['previsit_context']['result']['service_plan']['recommended_ids'] = []
+    assert api._previsit_result(changed_suggestion)['service_plan']['kind'] == 'botox'
     old_cash_fallback = deepcopy(case)
     old_cash_fallback['previsit_context']['result'].update(payment_mode='cash', cash_fallback={})
     restored = api._previsit_result(old_cash_fallback)
@@ -115,6 +146,8 @@ def test_saved_uncoded_post_botox_televisit_reprojects_office_zero_check_in():
         lambda value: value['previsit_context']['inputs'].update(reason='Repeat Botox injection today'),
         lambda value: value['previsit_context']['inputs'].update(lines=[
             {'code': '64615', 'description': 'Botox injection', 'service_status': 'scheduled'}]),
+        lambda value: value['previsit_context']['inputs'].update(lines=[
+            {'code': '95907', 'description': 'Nerve conduction study', 'service_status': 'scheduled'}]),
         lambda value: value['visit_review'].update(selected_ids=[]),
         lambda value: value['previsit_context']['inputs'].update(place_of_service='11'),
         lambda value: value['previsit_context']['result'].update(codes=[
