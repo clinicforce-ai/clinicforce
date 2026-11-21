@@ -92,7 +92,13 @@ def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network
         if any(error.get('kind') == 'invalid_calculation' for error in source_errors):
             return 'the calculated visit amount is invalid', 'financial_source_error'
         return 'the payer benefit response contains an invalid financial field', 'financial_source_error'
+    missing_cpt = (benefits.get('active') is True
+                   and not (result.get('service_plan') or {}).get('selected_codes')
+                   and not (result.get('service_plan') or {}).get('alternatives')
+                   and not (result.get('price_range') or {}).get('lines') and not result.get('codes'))
     issues = result.get('issues') or []
+    if missing_cpt and any('saved estimate' in str(issue).lower() for issue in issues):
+        return 'no billable CPT is documented for this visit', 'planned_cpt_missing'
     if any('configuration timestamp for this saved estimate could not be checked' in str(issue).lower()
            for issue in issues):
         return 'the saved clinic pricing timestamp is invalid', 'saved_clinic_pricing_changed'
@@ -115,10 +121,7 @@ def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network
         return ('the booked NCS service has alternative CPT levels because its study count is undocumented'
                 if (result.get('provisional_scenario') or {}).get('kind') == 'ncs_study_count' else
                 'the office visit has alternative E/M CPT levels'), 'planned_cpt_unselected'
-    if (benefits.get('active') is True
-            and not (result.get('service_plan') or {}).get('selected_codes')
-            and not (result.get('service_plan') or {}).get('alternatives')
-            and not (result.get('price_range') or {}).get('lines') and not result.get('codes')):
+    if missing_cpt:
         return 'no billable CPT is documented for this visit', 'planned_cpt_missing'
     if (result.get('price_range') or {}).get('service_issues'):
         if result.get('botox_review') is not None:
@@ -219,6 +222,8 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
             cause, code = _cash_cause(result, failure, recovery, card, network, benefits, unpriced, missing)
         sentence = (f"No payment is due now because the recorded payment covers NMCT’s cash price{', which was used because ' + cause if code != 'cash_selected' else ''}"
                     if amount == 0 and paid else
+                    'No visit amount is available because no billable CPT is documented for this visit; select the planned service and recheck benefits and prices'
+                    if amount is None and code == 'planned_cpt_missing' else
                     f"Collect {_money(amount)} as the clinician-approved cash price because {cause}"
                     if code == 'clinician_cash_quote' and amount is not None else
                     f"This is NMCT’s nerve-testing package price{' because ' + cause if code != 'cash_selected' else ' for the planned care'}{', after the recorded payment' if paid else ''}, with the focused visit included" if named_package and amount is not None else

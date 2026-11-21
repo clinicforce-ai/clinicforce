@@ -15,7 +15,18 @@ PLANNING_PROMPT = ('\nFor Botox or BTX, choose the one supplied injection proced
 
 
 def is_botox_visit(inputs: dict) -> bool:
-    current = ' '.join(str(inputs.get(key) or '') for key in ('reason', 'appointment_type'))
+    reason = str(inputs.get('reason') or '')
+    appointment_type = str(inputs.get('appointment_type') or '')
+    # A post-injection follow-up describes prior care unless the booking also plans another injection.
+    if (re.search(r'\b(?:fu|f/u|follow[ -]?up)\b.*\b(?:after|post[ -]?)\s+(?:btx|botox)\b', reason, re.I)
+            and not re.search(r'\b(?:repeat|again|another|next|planned|today)\b.*\b(?:btx|botox|inject\w*)\b|\b(?:btx|botox|inject\w*)\b.*\b(?:repeat|again|another|next|planned|today)\b', reason, re.I)
+            and not re.search(r'\b(?:btx|botox|chemodenerv\w*)\b', appointment_type, re.I)
+            and not any(row.get('service_status') == 'scheduled'
+                        and (str(row.get('code') or '') in SELECTABLE_CODES
+                             or re.search(r'\b(?:btx|botox|chemodenerv\w*)\b', str(row.get('description') or ''), re.I))
+                        for row in inputs.get('lines') or [])):
+        return False
+    current = ' '.join((reason, appointment_type))
     current += ' ' + ' '.join(str(row.get('description') or '') for row in inputs.get('lines') or [])
     return bool(re.search(r'\b(?:btx|botox|onabotulinumtoxin\w*|chemodenerv\w*)\b', current, re.I))
 

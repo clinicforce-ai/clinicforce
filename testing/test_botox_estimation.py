@@ -50,6 +50,21 @@ def test_bare_booking_without_comparable_history_keeps_procedure_unselected():
         model.converse.assert_not_called()
 
 
+def test_televisit_after_botox_is_an_office_follow_up_not_an_injection_booking():
+    visit = {'reason': '1 month fu after Botox', 'appointment_type': 'Televisit',
+             'visit_type': 'established', 'lines': []}
+    assert not botox_review.is_botox_visit(visit)
+    assert {row['code'] for row in api._previsit_codes(visit)} == {
+        '99212', '99213', '99214', '99215'}
+    assert api._previsit_service_types(visit) == ['98', '30']
+    with patch.object(cpt_suggester.boto3, 'client', side_effect=RuntimeError('offline')):
+        plan = cpt_suggester.recommend_visit_plan(visit, {}, api._previsit_codes(visit))
+    assert plan['kind'] == 'office' and plan['recommended_ids'] == ['99213:1']
+    assert botox_review.is_botox_visit({**visit, 'reason': 'Repeat Botox injection after follow-up'})
+    assert botox_review.is_botox_visit({**visit, 'lines': [
+        {'code': '64615', 'service_status': 'scheduled', 'description': 'Botox injection'}]})
+
+
 def test_comparable_completed_botox_history_selects_one_provisional_procedure():
     available = [{'id': code, 'code': code, 'source': 'CPT planning catalog', 'units': 1}
                  for code in ('64612', '64615', 'J0585', '99214')]

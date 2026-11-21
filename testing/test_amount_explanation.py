@@ -651,6 +651,25 @@ def test_deferred_uhc_explanation_names_missing_visit_code_and_financial_source_
         'Collect $0 today: the payer benefit response contains an invalid financial field, so verify the flagged benefit field with the payer and rerun the insured estimate.')
 
 
+def test_empty_plan_explains_missing_service_before_stale_rate_warning():
+    result = {'payment_mode': 'insurance', 'payer': 'Blue Cross Blue Shield Tx',
+              'identity': {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2},
+              'benefits': {'active': True, 'network_status': 'in_network'},
+              'service_plan': {'selected_codes': [], 'alternatives': []},
+              'price_range': {'mode': 'services', 'lines': []}, 'codes': [],
+              'issues': ['The clinic contract or CPT rate changed since this saved estimate was calculated.']}
+    explanation = amount_explanation.build(result, {'amount_cents': None, 'basis': 'missing_collection_inputs'})
+    assert explanation['reason_code'] == 'planned_cpt_missing'
+    assert 'no billable CPT' in explanation['sentence']
+    cash_explanation = amount_explanation.build({**result, 'payment_mode': 'cash',
+                                                 'cash_fallback': {'reason': 'Synthetic fallback'}},
+                                                {'amount_cents': None, 'basis': 'missing_collection_inputs'})
+    assert cash_explanation['reason_code'] == 'planned_cpt_missing'
+    assert cash_explanation['sentence'] == (
+        'No visit amount is available because no billable CPT is documented for this visit; '
+        'select the planned service and recheck benefits and prices.')
+
+
 def test_identity_mismatch_precedes_empty_follow_up_discovery():
     result = {'payment_mode': 'insurance', 'benefits': {'active': True,
               'identity': {'status': 'review'}, 'network_status': 'unknown'},
