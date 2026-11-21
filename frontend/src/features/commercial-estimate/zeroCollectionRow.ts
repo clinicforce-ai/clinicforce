@@ -16,6 +16,7 @@ export function zeroCollectionRow(
       (model.supportedAmount &&
         (rule === 'individual_oop_zero_deferral' ||
           rule === 'bcbstx_botox_family_oop_deferral' ||
+          rule === 'bcbstx_ppo_televisit_deferral' ||
           rule === 'uhc_choice_plus_family_oop_deferral'))
     )
   )

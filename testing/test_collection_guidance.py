@@ -21,6 +21,66 @@ def scenario(amount=3800):
                     'requirements': {kind: {'required': 'unknown', 'cleared': False} for kind in ('referral', 'authorization')}}}]}}
 
 
+def test_bcbstx_ppo_unpriced_home_follow_up_defers_check_in_without_staff_confirmation():
+    result = scenario()
+    result.update(payment_mode='insurance', payer='Blue Cross Blue Shield Tx',
+        stedi_payer={'id': 'QDTRP'}, service_date='2026-11-21',
+        checked_at='2026-11-21T10:00:00Z', requested_service_types=['98', '30'],
+        appointment_context={'place_of_service': '10', 'appointment_type': 'Televisit'},
+        plan_details={'stedi': {'names': ['PREFERRED PROVIDER OPTION MEDICAL']}},
+        service_plan={'kind': 'office', 'recommended_ids': []},
+        service_selection_status='preview', codes=[], selected_ids=[])
+    result['benefits'].update(identity=result['identity'], network_source='clinic_group_agreement',
+        service_date_matches=None, has_secondary=False, deductible_remaining_cents=None,
+        oop_remaining_cents=None, reported_options=[
+            {'kind': 'coinsurance', 'service_type_code': '98', 'network': 'IN_NETWORK',
+             'plan_association': 'medical', 'places_of_service': ['10'], 'percent': '20',
+             'plan_index': 0},
+            {'kind': 'deductible', 'service_type_code': '30', 'network': 'IN_NETWORK',
+             'plan_association': 'medical', 'coverage_level': 'FAMILY',
+             'time_period': 'REMAINING', 'amount_cents': 0, 'plan_index': 0},
+            {'kind': 'out_of_pocket', 'service_type_code': '30', 'network': 'IN_NETWORK',
+             'plan_association': 'medical', 'coverage_level': 'FAMILY',
+             'time_period': 'REMAINING', 'amount_cents': 110980, 'plan_index': 0}])
+    result['price_range'].update(complete=False, patient_min_cents=None,
+                                 patient_max_cents=None, lines=[], service_issues=[])
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 0
+    assert guidance['basis'] == 'claim_after_service'
+    assert guidance['collection_rule']['mode'] == 'bcbstx_ppo_televisit_deferral'
+    assert encounter_summary.build({**result, 'collection_guidance': guidance})['collect_today_cents'] == 0
+    explanation = amount_explanation.build(result, guidance)['sentence']
+    assert 'Collect $0' in explanation and 'planned home televisit' in explanation
+    proposed = deepcopy(result)
+    proposed.update(codes=[{'id': 'office', 'code': '99213', 'units': 1, 'modifiers': []}],
+                    selected_ids=['office'], service_plan={'kind': 'office', 'recommended_ids': ['office']})
+    proposed['price_range'].update(lines=[{'id': 'office', 'code': '99213', 'units': 1}],
+                                   service_issues=['No matched POS 10 clinic allowance.'])
+    assert collection_guidance.build(proposed)['amount_cents'] == 0
+    bad_line = deepcopy(proposed)
+    bad_line['price_range']['lines'][0]['benefits'] = {
+        'source_errors': [{'kind': 'invalid_source'}]}
+    assert collection_guidance.build(bad_line)['amount_cents'] is None
+    for mutation in (
+        lambda value: value['benefits'].update(active=False),
+        lambda value: value['benefits'].update(has_secondary=True),
+        lambda value: value['benefits'].update(network_conflict=True),
+        lambda value: value['benefits'].update(source_errors=[{'kind': 'invalid_source'}]),
+        lambda value: value['benefits'].update(service_date_matches=False),
+        lambda value: value['benefits'].update(network_status='out_of_network'),
+        lambda value: value['benefits']['reported_options'][0].update(percent='30'),
+        lambda value: value['benefits']['reported_options'].append({
+            'kind': 'copay', 'service_type_code': '98', 'network': 'IN_NETWORK',
+            'plan_association': 'medical', 'places_of_service': ['10'], 'amount_cents': 2500}),
+        lambda value: value.update(checked_at='2026-10-01T10:00:00Z'),
+        lambda value: value['appointment_context'].update(place_of_service='11'),
+        lambda value: value.update(codes=[{'id': 'drug', 'code': 'J0585', 'units': 100}]),
+    ):
+        blocked = deepcopy(result)
+        mutation(blocked)
+        assert collection_guidance.build(blocked)['amount_cents'] is None
+
+
 def test_bcbstx_botox_met_family_oop_defers_check_in_without_a_priced_cpt():
     result = scenario()
     result.update(payment_mode='insurance', payer='Blue Cross Blue Shield Tx',
