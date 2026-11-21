@@ -67,24 +67,46 @@ def upgrade_saved_post_botox_followup(result: dict, case: dict) -> None:
     plan = result.get('service_plan') or {}
     price = result.get('price_range') or {}
     reason = str(inputs.get('reason') or '')
+    codes = result.get('codes') or []
+    selected = result.get('selected_ids') or []
+    lines = price.get('lines') or []
+    suggested_injection = (
+        plan.get('selection_source') == 'suggested'
+        and plan.get('method') in {'history', 'appointment'}
+        and len(codes) == len(selected) == len(lines) == 1
+        and plan.get('recommended_ids') == selected
+        and codes[0].get('id') == lines[0].get('id') == selected[0]
+        and codes[0].get('code') == lines[0].get('code')
+        and codes[0].get('code') in botox_review.PROCEDURE_CODES
+        and codes[0].get('units') == 1 and not codes[0].get('modifiers')
+        and price.get('complete') is not True)
     if (plan.get('kind') != 'botox' or plan.get('selection_source') == 'clinician'
             or 'selected_ids' in review or result.get('service_selection_status') != 'preview'
-            or result.get('codes') or result.get('selected_ids') or price.get('lines')
+            or ((codes or selected or lines) and not suggested_injection)
             or price.get('mode') != 'services'
             or not _api.re.search(r'\b(?:fu|f/u|follow[ -]?up)\b.*\b(?:after|post[ -]?)\s*(?:botox|btx)\b', reason, _api.re.I)
             or botox_review.is_botox_visit(inputs)
+            or any(row.get('service_status') == 'scheduled'
+                   or row.get('code') in botox_review.SELECTABLE_CODES
+                   for row in inputs.get('lines') or [])
             or inputs.get('appointment_type') != 'Televisit'
             or inputs.get('place_of_service') != '10'
             or inputs.get('telehealth_modality') != 'audio_video'):
         return
-    result['available_codes'] = _api._previsit_codes(inputs)
-    result['service_plan'] = {**plan, 'kind': 'office', 'recommended_ids': [],
-                              'selection_source': 'suggested', 'method': 'saved_projection',
+    available = _api._previsit_codes(inputs)
+    result['available_codes'] = available
+    result['service_plan'] = {**_api.visit_estimate.service_plan(available, inputs, {}),
+                              'kind': 'office', 'recommended_ids': [], 'selection_source': 'suggested',
+                              'method': 'saved_projection',
                               'recommendation_basis': 'Post-injection follow-up without a new injection.'}
+    result['codes'] = []
+    result['selected_ids'] = []
     result['selected_service_count'] = 0
-    price.update(complete=False, lines=[], service_issues=[], allowed_min_cents=None,
+    price.update(complete=False, lines=[], scenarios=[], collection=None, service_issues=[], allowed_min_cents=None,
                  allowed_max_cents=None, patient_min_cents=None, patient_max_cents=None)
     for key in ('botox_review', 'botox_preview', 'provisional_scenario',
                 'temporary_rate_reference', 'fee_proxy_estimate', 'arrival_collection',
-                'planning_estimate'):
+                'planning_estimate', 'cpt_authorization', 'requirement_evidence',
+                'requirement_sources', 'candidate_requirements', 'public_source_rules',
+                'public_source_checked_day', 'published_requirements_version'):
         result.pop(key, None)
