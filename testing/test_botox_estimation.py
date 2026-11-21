@@ -126,6 +126,16 @@ def test_saved_uncoded_post_botox_televisit_reprojects_office_zero_check_in():
     assert projected_suggested['collection_guidance']['amount_cents'] == 0
     assert projected_suggested['encounter_summary']['collect_today_cents'] == 0
     assert suggested_result['selected_ids'] == ['cash:64615']
+    established_without_label = deepcopy(suggested)
+    established_without_label['previsit_context']['inputs'].pop('visit_type')
+    established_without_label['previsit_context']['result']['established_for_planning'] = True
+    projected_established = api._previsit_result(established_without_label)
+    assert {row['code'] for row in projected_established['available_codes']} == {
+        '99212', '99213', '99214', '99215'}
+    assert projected_established['collection_guidance']['amount_cents'] == 0
+    unknown_status = deepcopy(established_without_label)
+    unknown_status['previsit_context']['result']['established_for_planning'] = False
+    assert api._previsit_result(unknown_status)['available_codes'] == []
     reviewed_suggestion = deepcopy(suggested)
     reviewed_suggestion['visit_review']['selected_ids'] = ['cash:64615']
     assert api._previsit_result(reviewed_suggestion)['service_plan']['kind'] == 'botox'
