@@ -37,6 +37,7 @@ def apply(result: dict, guidance: dict) -> None:
             or (lines and (len(codes) != 1 or lines[0].get('code') != codes[0].get('code')
                            or lines[0].get('id') != codes[0].get('id')))
             or benefits.get('active') is not True or benefits.get('service_date_matches') is False
+            or benefits.get('copay_cents') is not None
             or not verified_in_network(benefits) or benefits.get('has_secondary')
             or benefits.get('source_errors')
             or any((line.get('benefits') or {}).get('source_errors') for line in lines)
@@ -66,14 +67,16 @@ def apply(result: dict, guidance: dict) -> None:
     coinsurance = [row for row in office if row.get('kind') == 'coinsurance']
     if (len(coinsurance) != 1 or str(coinsurance[0].get('percent')) not in {'20', '20.0', '20.00'}
             or any(row.get('kind') == 'copay' for row in office)
+            or any(row.get('kind') == 'copay' and row.get('network') in {'IN_NETWORK', 'Y'}
+                   and row.get('plan_association') in {None, 'medical', 'unassigned'}
+                   and row.get('service_type_code') in {'30', '98'}
+                   and (not row.get('places_of_service') or '10' in row['places_of_service'])
+                   for row in benefits.get('reported_options') or [])
             or any(row.get('kind') == 'coinsurance'
                    and row.get('service_type_code') in {'30', '98'}
                    and row.get('plan_index') == coinsurance[0].get('plan_index')
                    and (not row.get('places_of_service') or '10' in row['places_of_service'])
-                   and str(row.get('percent')) not in {'20', '20.0', '20.00'} for row in rows)
-            or any(row.get('kind') == 'copay' and row.get('service_type_code') == '30'
-                   and (not row.get('places_of_service') or '10' in row['places_of_service'])
-                   for row in rows)):
+                   and str(row.get('percent')) not in {'20', '20.0', '20.00'} for row in rows)):
         return
     guidance.update(amount_cents=0, status='zero_advance', basis='claim_after_service',
         reason=('Collect $0.00 at check-in for the planned home televisit. BCBS Texas reports '

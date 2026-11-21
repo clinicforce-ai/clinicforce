@@ -68,10 +68,14 @@ def test_bcbstx_ppo_unpriced_home_follow_up_defers_check_in_without_staff_confir
         lambda value: value['benefits'].update(source_errors=[{'kind': 'invalid_source'}]),
         lambda value: value['benefits'].update(service_date_matches=False),
         lambda value: value['benefits'].update(network_status='out_of_network'),
+        lambda value: value['benefits'].update(copay_cents=2500),
         lambda value: value['benefits']['reported_options'][0].update(percent='30'),
         lambda value: value['benefits']['reported_options'].append({
             'kind': 'copay', 'service_type_code': '98', 'network': 'IN_NETWORK',
             'plan_association': 'medical', 'places_of_service': ['10'], 'amount_cents': 2500}),
+        lambda value: value['benefits']['reported_options'].append({
+            'kind': 'copay', 'service_type_code': '98', 'network': 'IN_NETWORK',
+            'plan_association': 'unassigned', 'places_of_service': ['10'], 'amount_cents': 2500}),
         lambda value: value.update(checked_at='2026-10-01T10:00:00Z'),
         lambda value: value['appointment_context'].update(place_of_service='11'),
         lambda value: value.update(codes=[{'id': 'drug', 'code': 'J0585', 'units': 100}]),
