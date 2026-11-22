@@ -1,5 +1,6 @@
 import type { PrevisitEstimate } from '../../services/api/commercial-estimator'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
+import { patientBenefitsBound } from './identityBinding'
 
 export function nextStep(model: CommercialEstimateModel, result: PrevisitEstimate) {
   const lines = result.price_range?.mode === 'services' ? result.price_range.lines || [] : []
@@ -25,6 +26,16 @@ export function nextStep(model: CommercialEstimateModel, result: PrevisitEstimat
     return {
       title: 'Check payer response',
       hint: 'Review the incomplete benefit check for this visit.',
+    }
+  if (result.identity && !patientBenefitsBound(result.identity))
+    return {
+      title: 'Reconcile patient and policy',
+      hint: 'The payer details are not bound to this patient and policy. Use the clinic’s claim-after-service policy before setting a charge.',
+    }
+  if (result.benefits.service_date_matches === false)
+    return {
+      title: 'Choose check-in policy',
+      hint: 'The payer returned benefits for an earlier date. Use an approved clinic advance or $0 claim-after-service policy for this visit.',
     }
   const cignaTerms = [result.benefits, ...lines.map((line) => line.benefits)]
   if (

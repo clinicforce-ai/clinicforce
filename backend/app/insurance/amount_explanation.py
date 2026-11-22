@@ -409,7 +409,7 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
         elif cause_code in {'provider_enrollment', 'multiple_active_policies', 'policy_identity_mismatch',
                             'payer_identity_match_missing',
                             'coverage_status_conflict', 'coverage_date_invalid',
-                            'service_inactive', 'service_date_mismatch', 'service_benefits_historical',
+                            'service_inactive', 'service_date_mismatch', 'payer_service_date_mismatch', 'service_benefits_historical',
                             'service_secondary_coverage', 'service_identity_mismatch', 'service_network_conflict',
                             'no_policy_returned', 'card_conflict', 'member_identity_unverified',
                             'clinic_product_mismatch', 'clinic_contract_missing', 'clinic_payer_connection_draft',

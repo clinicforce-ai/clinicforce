@@ -20,6 +20,9 @@ try {
   const { deriveCommercialEstimateView } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/deriveCommercialEstimateView.ts',
   )
+  const { nextStep } = await server.ssrLoadModule(
+    '/src/features/commercial-estimate/arrivalNextStep.ts',
+  )
   const { commercialRequirementRows } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/commercialRequirementStatus.ts',
   )
@@ -61,7 +64,7 @@ try {
   const blocked = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
     { result: { ...result, identity: { status: 'review' } }, model,
       partialCopay: null, visibleAmount: false }))
-  assert.match(blocked, /Verify network/)
+  assert.match(blocked, /Reconcile patient and policy/)
   const metLimit = { ...result, price_range: { ...result.price_range,
     lines: [{ ...result.price_range.lines[0], benefits: {
       ...result.price_range.lines[0].benefits, oop_remaining_cents: 0,
@@ -199,6 +202,33 @@ try {
     readOnly: true, recovering: false })
   assert.equal(ppoModel.networkLabel, 'In network · clinic agreement')
   assert.equal(ppoModel.amount, '$60.00')
+  const rosterVisit = {
+    ...ppoVisit,
+    benefits: { ...ppoVisit.benefits, network_source: 'clinic_product_roster' },
+    network_evidence: { decision: 'in_network_by_clinic_attestation', source: 'clinic_product_roster' },
+    collection_guidance: { amount_cents: null, services: [] },
+  }
+  const rosterModel = deriveCommercialEstimateView({ result: rosterVisit,
+    appointments: [], selectedVisit: null, busy: null, error: null,
+    readOnly: true, recovering: false })
+  assert.equal(rosterModel.networkLabel, 'In network')
+  assert.equal(rosterModel.networkSource, 'NMCT confirmed product list · not payer confirmed')
+  assert.notEqual(nextStep(rosterModel, rosterVisit).title, 'Verify network')
+  const conflictedRosterVisit = { ...rosterVisit,
+    benefits: { ...rosterVisit.benefits, network_conflict: true } }
+  const conflictedRosterModel = deriveCommercialEstimateView({ result: conflictedRosterVisit,
+    appointments: [], selectedVisit: null, busy: null, error: null,
+    readOnly: true, recovering: false })
+  assert.equal(conflictedRosterModel.networkLabel, 'Network not determined')
+  assert.equal(nextStep(conflictedRosterModel, conflictedRosterVisit).title, 'Verify network')
+  const priorDateVisit = { ...rosterVisit,
+    benefits: { ...rosterVisit.benefits, network_status: 'unknown', network_source: null,
+      service_date_matches: false } }
+  assert.equal(nextStep({ ...rosterModel, networkLabel: 'Not determined' }, priorDateVisit).title,
+    'Choose check-in policy')
+  const identityReviewVisit = { ...priorDateVisit, identity: { status: 'review' } }
+  assert.equal(nextStep({ ...rosterModel, networkLabel: 'Not determined' }, identityReviewVisit).title,
+    'Reconcile patient and policy')
   const ppoRequirements = commercialRequirementRows(ppoVisit, false, false)
   assert.equal(ppoRequirements.find((row) => row.label === 'Referral').value, 'CPT 99214: not required')
   assert.equal(ppoRequirements.find((row) => row.label === 'Prior authorization').value, 'CPT 99214: not required')
