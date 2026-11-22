@@ -72,16 +72,18 @@ const waitingActions = { result: null, appointments: [],
   patient: null, loaded: false, onBack() {}, load() {}, estimate() {} }
 const waiting = deriveCommercialEstimateView(waitingActions)
 const viewPath = new URL('../frontend/src/features/commercial-estimate/CommercialEstimateView.tsx', import.meta.url).pathname
+const staffViewPath = new URL('../frontend/src/features/staff-workspace/StaffWorkspaceView.tsx', import.meta.url).pathname
+const prebookingPath = new URL('../frontend/src/features/staff-workspace/StaffPrebookingScreen.tsx', import.meta.url).pathname
 const entry = 'virtual:waiting-visit-render'
 const viewBundle = await rolldown({ input: entry, external: [/^react(?:$|\/)/, /^react-dom(?:$|\/)/], plugins: [{ name: 'waiting-view',
   resolveId(id) { if (id === entry) return entry },
-  load(id) { if (id === entry) return `import React from 'react'; import { renderToStaticMarkup } from 'react-dom/server'; import View from '${viewPath}'; export const render = model => renderToStaticMarkup(React.createElement(View, { model }));` },
+  load(id) { if (id === entry) return `import React from 'react'; import { renderToStaticMarkup } from 'react-dom/server'; import View from '${viewPath}'; import StaffView from '${staffViewPath}'; import Prebooking from '${prebookingPath}'; export const render = model => renderToStaticMarkup(React.createElement(View, { model })); export const renderStaff = model => renderToStaticMarkup(React.createElement(StaffView, { model })); export const renderPrebooking = practiceId => renderToStaticMarkup(React.createElement(Prebooking, { practiceId, onBack() {} }));` },
 }, { name: 'ignore-css', load(id) { if (id.endsWith('.css')) return { code: 'export default {}', moduleType: 'js' } } }] })
 const viewModule = await viewBundle.generate({ format: 'esm' })
 const renderFile = new URL('../frontend/.clinic-zero-arrival-ssr.mjs', import.meta.url)
 await writeFile(renderFile, viewModule.output[0].code)
-let renderView
-try { ({ render: renderView } = await import(renderFile.href)) }
+let renderView, renderStaff, renderPrebooking
+try { ({ render: renderView, renderStaff, renderPrebooking } = await import(renderFile.href)) }
 finally { await unlink(renderFile) }
 const waitingScreen = renderView({ ...waitingActions, ...waiting })
 assert.match(waitingScreen, /Amount to collect at visit.*\$0\.00/s)
@@ -109,4 +111,29 @@ const availity = renderToStaticMarkup(React.createElement(AvailityArrivalAmount,
     oop_remaining_cents: 10000 } } }))
 assert.match(availity, /Amount to collect at visit.*\$0\.00/s)
 assert.doesNotMatch(availity, /pending verification/)
-console.log('Clinic zero arrival: insured, cash, waiting, stale and Availity views')
+const lookupScreen = renderStaff({
+  restoring: false, busy: 'lookup', lookupDetails: { given_name: 'Pat', family_name: 'Example',
+    birth_date: '1980-01-15' }, session: { practice_name: 'NMCT',
+    arrival_collection_default_cents: 0 },
+})
+assert.match(lookupScreen, /Amount to collect at visit.*\$0\.00/s)
+const otherLookupScreen = renderStaff({ restoring: false, busy: 'lookup',
+  lookupDetails: { given_name: 'Pat', family_name: 'Example', birth_date: '1980-01-15' },
+  session: { practice_name: 'Other clinic', arrival_collection_default_cents: null } })
+assert.doesNotMatch(otherLookupScreen, /Amount to collect at visit.*\$0\.00/s)
+const unresolvedPatientModel = { restoring: false, busy: null, screen: 'lookup',
+  session: { practice_id: 'primary', practice_name: 'NMCT', arrival_collection_default_cents: 0,
+    role: 'staff' },
+  lookupDetails: { given_name: '', middle_initial: '', family_name: '', birth_date: '',
+    ecw_account_number: '' }, ecwSuggestions: [], ecwSelection: '', ecwConfirmed: false,
+  selectedEcwPatient: null, navigate() {}, changeEcwSearch() {}, startEcwLookup() {},
+  lookupEcwPatient() {} }
+const unresolvedPatientScreen = renderStaff(unresolvedPatientModel)
+assert.match(unresolvedPatientScreen, /Amount to collect at visit.*\$0\.00/s)
+assert.doesNotMatch(renderStaff({ ...unresolvedPatientModel,
+  session: { practice_id: 'other', practice_name: 'Other clinic',
+    arrival_collection_default_cents: null, role: 'staff' } }),
+  /Amount to collect at visit.*\$0\.00/s)
+assert.match(renderPrebooking('primary'), /Collect on arrival.*\$0\.00/s)
+assert.doesNotMatch(renderPrebooking('synthetic-practice'), /Collect on arrival.*\$0\.00/s)
+console.log('Clinic zero arrival: insured, cash, lookup, waiting, stale and Availity views')

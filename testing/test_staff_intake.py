@@ -15,6 +15,7 @@ import fitz
 import httpx
 from fastapi import FastAPI
 from PIL import Image, ImageFile
+from starlette.requests import Request
 
 from app.api.routers import staff
 from app.core import patient_store, staff_store, object_store
@@ -32,6 +33,15 @@ def card_pdf(text="Member Name: PAT EXAMPLE\nMember ID: MEM123\nGroup Number: GR
 
 
 class FileBoundaryTests(unittest.TestCase):
+    def test_login_immediately_reports_nmct_no_upfront_policy(self):
+        actor = {'practice_id': 'primary', 'id': 'synthetic-staff', 'role': 'staff'}
+        request = Request({'type': 'http', 'method': 'POST', 'headers': []})
+        with patch.object(staff, 'check_origin'), \
+             patch.object(staff, 'request_address', return_value='127.0.0.1'), \
+             patch.object(staff.staff_store, 'authenticate', return_value=(actor, 'synthetic-token')):
+            response = asyncio.run(staff.login(staff.Login(username='synthetic', password='synthetic-password'), request))
+        self.assertEqual(json.loads(response.body)['staff']['arrival_collection_default_cents'], 0)
+
     def test_session_reports_nmct_no_upfront_policy_without_assigning_it_to_other_practices(self):
         for practice_id, expected in [('primary', 0), ('synthetic-practice', None)]:
             with patch.object(staff, 'require_staff', AsyncMock(return_value={

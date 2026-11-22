@@ -65,6 +65,11 @@ async def require_staff(request: Request) -> dict:
     return staff
 
 
+def _session_staff(actor: dict) -> dict:
+    return {**actor, "arrival_collection_default_cents":
+        0 if network_participation.is_nmct_practice(actor["practice_id"]) else None}
+
+
 def public(intake: dict) -> dict:
     value = {key: item for key, item in intake.items() if key not in {"created_by", "source_portal_patient_id"}}
     for key in ('patient', 'expected_patient', 'auto_patient'):
@@ -111,7 +116,7 @@ async def owned_intake(intake_id: str, staff: dict) -> dict:
     return intake
 
 
-@router.post("/login")
+@router.post("/login", description="Sign in to the clinic staff workspace. The returned staff session includes arrival_collection_default_cents: 0 for NMCT and null for other practices.")
 async def login(body: Login, request: Request):
     check_origin(request)
     try:
@@ -121,7 +126,7 @@ async def login(body: Login, request: Request):
     if not result:
         raise HTTPException(401, "Unable to sign in. Check your details or try again later.")
     staff, token = result
-    response = JSONResponse({"staff": staff}, headers=NO_STORE)
+    response = JSONResponse({"staff": _session_staff(staff)}, headers=NO_STORE)
     response.set_cookie(STAFF_COOKIE, token, httponly=True, secure=PUBLIC_BASE_URL.startswith("https://"),
                         samesite="lax", path="/api", max_age=staff_store.SESSION_SECONDS)
     return response
@@ -129,9 +134,7 @@ async def login(body: Login, request: Request):
 
 @router.get("/session", description="Return the authenticated clinic staff session. staff.arrival_collection_default_cents is 0 for NMCT and null for other practices; it is a check-in instruction, not a patient price or coverage determination.")
 async def session(request: Request):
-    actor = await require_staff(request)
-    return JSONResponse({"staff": {**actor, "arrival_collection_default_cents":
-        0 if network_participation.is_nmct_practice(actor["practice_id"]) else None}}, headers=NO_STORE)
+    return JSONResponse({"staff": _session_staff(await require_staff(request))}, headers=NO_STORE)
 
 
 @router.post("/logout")

@@ -1,8 +1,10 @@
 import type { StaffWorkspaceModel } from './useStaffWorkspaceModel'
 import { today } from './staff-workspace-utils'
+import { clinicFallbackReason } from '../commercial-estimate/isClinicZeroArrival'
 
 export default function StaffEcwLookupScreen({
   model,
+  session,
 }: {
   model: StaffWorkspaceModel
   session: NonNullable<StaffWorkspaceModel['session']>
@@ -36,6 +38,13 @@ export default function StaffEcwLookupScreen({
           </p>
         </div>
       </header>
+      {session.arrival_collection_default_cents === 0 && (
+        <div className="prebooking-cost-card is-patient" role="status">
+          <span>Amount to collect at visit</span>
+          <strong>$0.00</strong>
+          <small>{clinicFallbackReason}</small>
+        </div>
+      )}
       <section className="staff-panel">
         <h2>Patient details</h2>
         <form onSubmit={startEcwLookup}>
