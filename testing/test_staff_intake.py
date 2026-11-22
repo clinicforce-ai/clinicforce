@@ -32,6 +32,13 @@ def card_pdf(text="Member Name: PAT EXAMPLE\nMember ID: MEM123\nGroup Number: GR
 
 
 class FileBoundaryTests(unittest.TestCase):
+    def test_session_reports_nmct_no_upfront_policy_without_assigning_it_to_other_practices(self):
+        for practice_id, expected in [('primary', 0), ('synthetic-practice', None)]:
+            with patch.object(staff, 'require_staff', AsyncMock(return_value={
+                    'practice_id': practice_id, 'id': 'synthetic-staff'})):
+                response = asyncio.run(staff.session(None))
+            self.assertEqual(json.loads(response.body)['staff']['arrival_collection_default_cents'], expected)
+
     def test_saved_card_and_current_ecw_card_are_labeled_separately(self):
         intake = {'id': 'synthetic-intake', 'patient': {'id': 'synthetic-patient',
             'ecw_patient_id': 'synthetic-ecw'}, 'fields': {}, 'documents': []}

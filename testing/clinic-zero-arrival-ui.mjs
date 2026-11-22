@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
+import { writeFile, unlink } from 'node:fs/promises'
 
 const require = createRequire(new URL('../frontend/package.json', import.meta.url))
 const { rolldown } = require('rolldown')
@@ -14,6 +15,7 @@ async function load(path) {
 const { deriveCommercialEstimateView } = await load('../frontend/src/features/commercial-estimate/deriveCommercialEstimateView.ts')
 const { default: ArrivalAmountSummary } = await load('../frontend/src/features/commercial-estimate/ArrivalAmountSummary.tsx')
 const { default: CommercialCostBreakdown } = await load('../frontend/src/features/commercial-estimate/CommercialCostBreakdown.tsx')
+const { AvailityArrivalAmount } = await load('../frontend/src/features/commercial-estimate/AvailityVisitPlanning.tsx')
 
 const result = {
   payer: 'Aetna', payment_mode: 'insurance', service_date: '2026-12-15',
@@ -44,4 +46,67 @@ assert.doesNotMatch(headline, /Verify network|\$120\.00/)
 const table = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
   { result, model }))
 assert.match(table, /Amount to collect at visit.*\$0\.00/s)
-console.log('Clinic zero arrival: numeric check-in decision, unresolved patient share')
+
+const cashResult = { ...result, payment_mode: 'cash',
+  price_range: { ...result.price_range, cash_complete: false, cash_min_cents: null,
+    cash_max_cents: null },
+  collection_guidance: { ...result.collection_guidance, basis: 'cash_price_pending',
+    reason: 'Collect $0 at arrival under the clinic default; the cash quote is pending.' },
+}
+const cashModel = deriveCommercialEstimateView({ result: cashResult, appointments: [],
+  selectedVisit: '', busy: null, error: null, readOnly: true, recovering: false })
+assert.equal(cashModel.supportedAmount, true)
+assert.equal(cashModel.amount, '$0.00')
+const cashHeadline = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
+  { result: cashResult, model: cashModel, partialCopay: null, visibleAmount: true }))
+assert.match(cashHeadline, /Amount to collect at visit.*\$0\.00/s)
+assert.doesNotMatch(cashHeadline, /Confirm clinic price/)
+const cashTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+  { result: cashResult, model: cashModel }))
+assert.match(cashTable, /Amount to collect at visit.*\$0\.00/s)
+
+const waitingActions = { result: null, appointments: [],
+  selectedVisit: '', busy: 'visits', error: '',
+  readOnly: false, recovering: false,
+  session: { practice_id: 'synthetic-nmct', arrival_collection_default_cents: 0 },
+  patient: null, loaded: false, onBack() {}, load() {}, estimate() {} }
+const waiting = deriveCommercialEstimateView(waitingActions)
+const viewPath = new URL('../frontend/src/features/commercial-estimate/CommercialEstimateView.tsx', import.meta.url).pathname
+const entry = 'virtual:waiting-visit-render'
+const viewBundle = await rolldown({ input: entry, external: [/^react(?:$|\/)/, /^react-dom(?:$|\/)/], plugins: [{ name: 'waiting-view',
+  resolveId(id) { if (id === entry) return entry },
+  load(id) { if (id === entry) return `import React from 'react'; import { renderToStaticMarkup } from 'react-dom/server'; import View from '${viewPath}'; export const render = model => renderToStaticMarkup(React.createElement(View, { model }));` },
+}, { name: 'ignore-css', load(id) { if (id.endsWith('.css')) return { code: 'export default {}', moduleType: 'js' } } }] })
+const viewModule = await viewBundle.generate({ format: 'esm' })
+const renderFile = new URL('../frontend/.clinic-zero-arrival-ssr.mjs', import.meta.url)
+await writeFile(renderFile, viewModule.output[0].code)
+let renderView
+try { ({ render: renderView } = await import(renderFile.href)) }
+finally { await unlink(renderFile) }
+const waitingScreen = renderView({ ...waitingActions, ...waiting })
+assert.match(waitingScreen, /Amount to collect at visit.*\$0\.00/s)
+assert.match(waitingScreen, /No payment is requested at arrival/)
+const failedVisitScreen = renderView({ ...waitingActions, busy: null, error: 'eCW unavailable',
+  ...deriveCommercialEstimateView({ ...waitingActions, busy: null, error: 'eCW unavailable' }) })
+assert.match(failedVisitScreen, /Amount to collect at visit.*\$0\.00/s)
+const otherPracticeScreen = renderView({ ...waitingActions,
+  session: { arrival_collection_default_cents: null }, ...waiting })
+assert.doesNotMatch(otherPracticeScreen, /Amount to collect at visit.*\$0\.00/s)
+
+const stale = { ...model, session: { arrival_collection_default_cents: 0 },
+  previousEstimate: true, supportedAmount: false }
+const staleResult = { ...result, collection_guidance: { amount_cents: null,
+  basis: 'missing_collection_inputs', reason: 'Previous result is stale.', services: [] } }
+const staleHeadline = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
+  { result: staleResult, model: stale, partialCopay: null, visibleAmount: false }))
+assert.match(staleHeadline, /Amount to collect at visit.*\$0\.00/s)
+const staleTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+  { result: staleResult, model: stale }))
+assert.match(staleTable, /Amount to collect at visit.*\$0\.00/s)
+
+const availity = renderToStaticMarkup(React.createElement(AvailityArrivalAmount,
+  { result: { ...result, availity_visit_reference: { copay_cents: 3000,
+    oop_remaining_cents: 10000 } } }))
+assert.match(availity, /Amount to collect at visit.*\$0\.00/s)
+assert.doesNotMatch(availity, /pending verification/)
+console.log('Clinic zero arrival: insured, cash, waiting, stale and Availity views')

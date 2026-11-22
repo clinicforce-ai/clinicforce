@@ -112,11 +112,11 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     A cash fallback names an exact product or clinic contract mapping blocker
     when that blocker prevented an insured amount. For UnitedHealthcare, an
     unresolved insured amount stays in insurance mode and gives a short reason.
-    The evidence engine retains a null insured advance when inputs cannot
-    support a charge. For a completed NMCT insured visit, the final collection
+    The evidence engine retains a null advance when inputs cannot
+    support a charge. For a completed NMCT visit, the final collection
     decision returns amount_cents=0, status=zero_advance and
     collection_rule.mode=clinic_zero_arrival_default. Its claim_after_service
-    basis requests no upfront payment; unresolved_collection_reason retains the evidence blocker, and final patient share stays unknown.
+    or cash_price_pending basis requests no upfront payment; unresolved_collection_reason retains the evidence blocker, and final patient share or cash price stays unknown.
     Supported advances and approved payer policies still take precedence.
     A scoped Blue Cross Clinical Library CPT price can appear in
     temporary_rate_reference as a disclosed planning reference only; it does

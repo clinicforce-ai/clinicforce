@@ -210,13 +210,13 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
     if result.get('payment_mode') == 'cash':
         named_package = (result.get('cash_quote') or {}).get('selection') and (result.get('cash_quote') or {}).get('complete')
         visit_reason = (result.get('cash_quote') or {}).get('reason')
-        if visit_reason:
-            cause, code = visit_reason, 'clinician_cash_quote'
-        elif not result.get('cash_fallback'):
-            cause, code = 'cash was selected for the planned care', 'cash_selected'
+        if visit_reason: cause, code = visit_reason, 'clinician_cash_quote'
+        elif not result.get('cash_fallback'): cause, code = 'cash was selected for the planned care', 'cash_selected'
         else:
             cause, code = _cash_cause(result, failure, recovery, card, network, benefits, unpriced, missing)
-        sentence = (f"No payment is due now because the recorded payment covers NMCT’s cash price{', which was used because ' + cause if code != 'cash_selected' else ''}"
+        if basis == 'cash_price_pending': code = 'cash_collection_deferred'
+        sentence = (guidance['reason'].rstrip('.') if code == 'cash_collection_deferred' else
+                    f"No payment is due now because the recorded payment covers NMCT’s cash price{', which was used because ' + cause if code != 'cash_selected' else ''}"
                     if amount == 0 and paid else
                     'No visit amount is available because no billable CPT is documented for this visit; select the planned service and recheck benefits and prices' if amount is None and code == 'planned_cpt_missing' else
                     f"Collect {_money(amount)} as the clinician-approved cash price because {cause}"

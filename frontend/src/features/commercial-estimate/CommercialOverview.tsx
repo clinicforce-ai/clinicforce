@@ -20,6 +20,7 @@ import type { PaidClaimFinancialState } from './usePaidClaimFinancials'
 import CommercialCashQuoteForm from './CommercialCashQuoteForm'
 import { AvailityArrivalAmount, AvailityVisitTable } from './AvailityVisitPlanning'
 import { availityVisitPlanning } from './availityVisitPlanning'
+import { isClinicZeroArrival } from './isClinicZeroArrival'
 import { cignaBtxOfficeScenario } from './cignaBtxOfficeScenario'
 import { uhcLppoOfficeScenario } from './uhcLppoOfficeScenario'
 import { uhcNmCardPlan, uhcNmOfficeReference } from './uhcNmOfficeReference'
@@ -139,7 +140,7 @@ export default function CommercialOverview({
     result.payment_explanation?.reason_code === 'out_of_network_allowance_missing' &&
     !!result.selected_ids?.length
   const automaticCashFallback = cash && result.cash_fallback != null
-  const availity = availityVisitPlanning(result, model)
+  const availity = isClinicZeroArrival(result, model) ? null : availityVisitPlanning(result, model)
   return (
     <section
       id={featured ? 'latest-visit-estimate' : 'visit-estimate'}

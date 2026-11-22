@@ -4,6 +4,7 @@ export interface StaffSession {
   display_name: string
   practice_id: string
   practice_name: string
+  arrival_collection_default_cents?: number | null
   role: 'staff' | 'admin'
 }
 

@@ -16,6 +16,7 @@ import {
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { range, visitDate, visitTime } from './format'
 import { usePaidClaimFinancials } from './usePaidClaimFinancials'
+import { clinicFallbackReason } from './isClinicZeroArrival'
 
 export default function CommercialEstimateView({
   model,
@@ -66,6 +67,7 @@ export default function CommercialEstimateView({
     explanation,
     provider,
   } = model
+  const clinicFallback = session?.arrival_collection_default_cents === 0
   const financials = usePaidClaimFinancials(result, model.intakeId, !cash && !previousEstimate)
   const address = Object.values(result?.patient_details?.address || {})
     .filter(Boolean)
@@ -320,11 +322,11 @@ export default function CommercialEstimateView({
         {(!result || busy === 'estimate' || busy === 'visits') && (
           <section className="visit-overview" aria-label="Arrival collection">
             <div className="arrival-total">
-              <span>{amountLabel}</span>
-              <strong className="amount-pending" role="status">
-                {amountText}
+              <span>{clinicFallback ? 'Amount to collect at visit' : amountLabel}</span>
+              <strong className={clinicFallback ? '' : 'amount-pending'} role="status">
+                {clinicFallback ? '$0.00' : amountText}
               </strong>
-              <p>{explanation}</p>
+              <p>{clinicFallback ? clinicFallbackReason : explanation}</p>
             </div>
           </section>
         )}

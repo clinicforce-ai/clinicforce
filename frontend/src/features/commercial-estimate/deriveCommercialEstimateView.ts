@@ -299,7 +299,7 @@ export function deriveCommercialEstimateView({
   const billingInstruction = guidance?.billing_note?.kind === 'no_collection'
   const emgScenario = !billingInstruction && !cash && emg?.requested && !emg.included
   const cashAmount =
-    cash && supportedAmount && guidance?.basis === 'practice_cash_price'
+    supportedAmount && ['practice_cash_price', 'cash_price_pending'].includes(guidance?.basis || '')
       ? guidance.range_min_cents != null && guidance.range_max_cents != null
         ? range(guidance.range_min_cents, guidance.range_max_cents)
         : money(guidance.amount_cents!)

@@ -108,7 +108,7 @@ def test_schedule_activation_and_effective_dates_are_practice_scoped():
 
 @pytest.mark.parametrize('practice_id', ['clinic-a', 'f378bc13-af1d-4ea5-bfbd-8cd102e42ddc'])
 @pytest.mark.parametrize('amount', [17321, 28109, None])
-def test_previsit_uses_active_schedule_without_clinic_defaults(practice_id, amount):
+def test_previsit_uses_active_schedule_without_embedded_cash_rates(practice_id, amount):
     from app.api.routers import commercial_estimator as api
     inputs = {'service_date': '2026-10-07', 'visit_type': 'new', 'lines': []}
     source = {'active_coverages': 0, 'self_pay_recorded': True}
@@ -125,8 +125,12 @@ def test_previsit_uses_active_schedule_without_clinic_defaults(practice_id, amou
     assert result['payment_mode'] == 'cash'
     assert 'cash_schedule' not in result and 'collection_policy' not in result
     assert result['price_range'].get('cash_min_cents') == amount
-    assert result['collection_guidance']['amount_cents'] == amount
-    assert result['collection_guidance']['basis'] == 'practice_cash_price'
+    expected = 0 if amount is None and practice_id != 'clinic-a' else amount
+    assert result['collection_guidance']['amount_cents'] == expected
+    if amount is None and practice_id != 'clinic-a':
+        assert result['collection_guidance']['basis'] == 'cash_price_pending'
+    else:
+        assert result['collection_guidance']['basis'] == 'practice_cash_price'
     if amount is not None:
         assert result['cash_quote']['min_cents'] == amount
         assert result['practice_cash_source']['version'] == 'version'

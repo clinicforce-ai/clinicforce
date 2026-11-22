@@ -85,6 +85,61 @@ def test_nmct_saved_insured_visit_reprojects_missing_payer_evidence_to_zero_arri
     assert any('no-upfront default' in source['finding'] for source in trace['sources'])
 
 
+def test_explicit_nmct_cash_without_price_collects_zero_without_inventing_a_quote():
+    result = scenario()
+    result.update(payment_mode='cash', nmct_fixed_office_copay_advance_enabled=True)
+    result['price_range'].update(cash_complete=False, cash_min_cents=None,
+                                 cash_max_cents=None)
+    guidance = arrival_zero_default.apply(result, collection_guidance.build(result))
+    assert guidance['amount_cents'] == 0
+    assert guidance['basis'] == 'cash_price_pending'
+    assert guidance['collection_rule']['mode'] == 'clinic_zero_arrival_default'
+    assert guidance['unresolved_collection_reason']
+    assert 'Collect $0' in amount_explanation.build(result, guidance)['sentence']
+    summary = encounter_summary.build({**result, 'collection_guidance': guidance})
+    assert summary['collect_today_cents'] == 0
+    assert summary['complete'] is False
+    assert summary['estimated_total_patient_min_cents'] is None
+
+
+@pytest.mark.parametrize('invalid_amount', [-1, '3000', 100_000_001])
+def test_nmct_invalid_advance_is_replaced_by_zero_check_in(invalid_amount):
+    guidance = arrival_zero_default.apply(
+        {'payment_mode': 'insurance', 'nmct_fixed_office_copay_advance_enabled': True},
+        {'amount_cents': invalid_amount, 'reason': 'Unsupported amount'})
+    assert guidance['amount_cents'] == 0
+    assert guidance['unresolved_collection_reason'] == 'Unsupported amount'
+
+
+@pytest.mark.parametrize('payment_mode', ['cash', 'insurance'])
+def test_nmct_zero_default_preserves_supported_advance(payment_mode):
+    guidance = {'amount_cents': 3000, 'basis': 'practice_cash_price' if payment_mode == 'cash' else 'office_copay'}
+    assert arrival_zero_default.apply(
+        {'payment_mode': payment_mode, 'nmct_fixed_office_copay_advance_enabled': True},
+        guidance) is guidance
+
+
+def test_saved_explicit_nmct_cash_without_quote_reopens_with_zero_arrival():
+    result = scenario()
+    result.update(payment_mode='cash', service_date='2026-12-15')
+    result['price_range'].update(cash_complete=False, cash_min_cents=None,
+                                 cash_max_cents=None)
+    case = {'visit_review': {'payment_mode': 'cash'},
+            'previsit_context': {'result': result, 'source': {},
+                                 'inputs': {'service_date': '2026-12-15'}}}
+    with patch.object(api.network_participation, 'is_nmct_practice', return_value=True), \
+         patch.object(api.staff_store, 'list_library', return_value=[]):
+        reopened = api._previsit_result(case, 'nmct')
+    assert reopened['payment_mode'] == 'cash'
+    assert reopened['collection_guidance']['amount_cents'] == 0
+    assert reopened['collection_guidance']['basis'] == 'cash_price_pending'
+    assert reopened['encounter_summary']['collect_today_cents'] == 0
+    assert reopened['encounter_summary']['complete'] is False
+    assert reopened['payment_explanation']['reason_code'] == 'cash_collection_deferred'
+    trace = next(row for row in reopened['evidence_resolution'] if row['field'] == 'collection_amount')
+    assert any('self-pay price unresolved' in source['finding'] for source in trace['sources'])
+
+
 def test_bcbstx_ppo_unpriced_home_follow_up_defers_check_in_without_staff_confirmation():
     result = scenario()
     result.update(payment_mode='insurance', payer='Blue Cross Blue Shield Tx',

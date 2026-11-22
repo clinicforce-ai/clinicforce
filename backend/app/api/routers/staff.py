@@ -26,7 +26,7 @@ from app.api.settings import ALLOWED_ORIGINS, CLINICIAN_SHARE_COOKIE, MAX_INSURA
 from app.core import clinic_email, object_store, staff_store, staff_deletions, library_files
 from app.core.patient_store import get_patient_profile
 from app.core.request_address import request_address
-from app.insurance import commercial, commercial_store, ecw_backend, era835, golden, missing_rates, store, v1_sources
+from app.insurance import commercial, commercial_store, ecw_backend, era835, golden, missing_rates, network_participation, store, v1_sources
 from app.logs.collection_audit import collection_event
 
 
@@ -127,9 +127,11 @@ async def login(body: Login, request: Request):
     return response
 
 
-@router.get("/session")
+@router.get("/session", description="Return the authenticated clinic staff session. staff.arrival_collection_default_cents is 0 for NMCT and null for other practices; it is a check-in instruction, not a patient price or coverage determination.")
 async def session(request: Request):
-    return JSONResponse({"staff": await require_staff(request)}, headers=NO_STORE)
+    actor = await require_staff(request)
+    return JSONResponse({"staff": {**actor, "arrival_collection_default_cents":
+        0 if network_participation.is_nmct_practice(actor["practice_id"]) else None}}, headers=NO_STORE)
 
 
 @router.post("/logout")
