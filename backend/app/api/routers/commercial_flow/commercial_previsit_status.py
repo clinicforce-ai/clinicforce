@@ -474,7 +474,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         result['cash_fallback']['reason'] = 'Clinic self-pay pricing is shown because ' + _api.amount_explanation.fallback_cause(result) + '.'
     result['collection_guidance'] = _api.collection_guidance.build(result, case.get('visit_review'))
     guard_telehealth_guidance(result, unresolved_telehealth)
-    result['collection_guidance'] = _api.arrival_zero_default.apply(result, result['collection_guidance'])
+    result['collection_guidance'] = _api.arrival_zero_default.apply(result, result['collection_guidance'], case.get('visit_review'))
     result['established_for_planning'] = _api.cpt_suggester.established_visit_for_planning(
         {**(case['previsit_context'].get('inputs') or {}), 'separate_em_planned': result.get('separate_em_planned')}, source)
     result['combined_emg_plan'] = _api.visit_estimate.combined_emg_plan(result, case.get('visit_review'))

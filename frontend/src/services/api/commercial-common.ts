@@ -134,6 +134,7 @@ export type CollectionGuidance = {
   unresolved_service_issues?: string[]
   office_visit_copay_advance?: { amount_cents: number; source: 'selected_office_benefit' } | null
   payer_reported_office_copay_cents?: number
+  payer_response_date?: string
   reference_total_cents?: number
   clinic_fee_reference_cents?: number
   primary_secondary_copay?: boolean

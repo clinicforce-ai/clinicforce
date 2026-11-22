@@ -32,7 +32,10 @@ export function nextStep(model: CommercialEstimateModel, result: PrevisitEstimat
       title: 'Reconcile patient and policy',
       hint: 'The payer details are not bound to this patient and policy. Use the clinic’s claim-after-service policy before setting a charge.',
     }
-  if (result.benefits.service_date_matches === false)
+  if (
+    result.benefits.service_date_matches === false &&
+    result.collection_guidance?.collection_rule?.mode !== 'nmct_stedi_provisional_office_copay'
+  )
     return {
       title: 'Choose check-in policy',
       hint: 'The payer returned benefits for an earlier date. Use an approved clinic advance or $0 claim-after-service policy for this visit.',

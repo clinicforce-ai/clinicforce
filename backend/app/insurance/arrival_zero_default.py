@@ -1,8 +1,11 @@
 """Clinic check-in decision when an insured visit has no supported advance."""
 from __future__ import annotations
 
+from app.insurance.collection import stedi_office_copay
 
-def apply(result: dict, guidance: dict) -> dict:
+
+def apply(result: dict, guidance: dict, review: dict | None = None) -> dict:
+    guidance = stedi_office_copay.apply(result, guidance, review)
     amount = guidance.get('amount_cents')
     if (result.get('nmct_fixed_office_copay_advance_enabled') is not True
             or (type(amount) is int and 0 <= amount <= 100_000_000)):

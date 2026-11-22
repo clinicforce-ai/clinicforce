@@ -341,7 +341,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
             inputs, pricing_source or source, (result.get('plan_details') or {}).get('stedi') or {})
     aetna_office_planning.attach(result, inputs)
     result['collection_guidance'] = _api.arrival_zero_default.apply(
-        result, _api.collection_guidance.build(result, review))
+        result, _api.collection_guidance.build(result, review), review)
     result.pop('botox_preview', None)
     if botox_review.is_botox_visit(inputs) and payload:
         result['botox_preview'] = botox_review.provisional_office_injection(

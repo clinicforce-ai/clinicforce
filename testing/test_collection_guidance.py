@@ -58,6 +58,69 @@ def test_unresolved_insured_visit_has_zero_check_in_decision_without_zero_patien
     assert 'Collect $0' in amount_explanation.build(result, guidance)['sentence']
 
 
+def test_nmct_can_collect_sourced_stedi_office_copay_with_a_date_or_roster_mismatch():
+    result = scenario()
+    result.update(payment_mode='insurance', payer='Aetna', service_date='2026-11-23',
+                  appointment_context={'place_of_service': '11'},
+                  nmct_fixed_office_copay_advance_enabled=True,
+                  service_selection_status='approved',
+                  codes=[{'id': 'office', 'code': '99203', 'units': 1}], selected_ids=['office'])
+    result['benefits'].update(service_date_matches=False, identity=result['identity'],
+        network_source='clinic_product_roster', returned_service_dates={'start': '2026-11-21'},
+        coverage_evidence={'status': 'ACTIVE', 'start': '2026-01-01'})
+    result['price_range'].update(complete=False, patient_min_cents=None, patient_max_cents=None)
+    line = result['price_range']['lines'][0]
+    line.update(allowed_cents=9000, allowed_basis='clinic_contract', rate_resolution={'status': 'RESOLVED'})
+    row = {'id': 'office-copay', 'kind': 'copay', 'service_type_code': '98',
+           'network': 'IN_NETWORK', 'coverage_level': 'INDIVIDUAL', 'time_period': 'VISIT',
+           'amount_cents': 3000, 'places_of_service': ['11'], 'payer_note': 'Office specialist visit'}
+    line['benefits'].update(copay_cents=3000, copay_id='office-copay', copay_period='VISIT',
+        coinsurance_percent='0', deductible_remaining_cents=0, oop_remaining_cents=50000,
+        network_status='in_network', reported_options=[row])
+    result['benefits']['reported_options'] = [row]
+    review = {'payments': {'reference': 'synthetic-receipt', 'amount_cents': 500}}
+    guidance = arrival_zero_default.apply(result, collection_guidance.build(result, review), review)
+    assert guidance['amount_cents'] == 2500
+    assert guidance['basis'] == 'office_copay'
+    assert guidance['collection_rule']['mode'] == 'nmct_stedi_provisional_office_copay'
+    assert guidance['payer_response_date'] == '2026-11-21'
+    assert result['benefits']['service_date_matches'] is False
+    summary = encounter_summary.build({**result, 'collection_guidance': guidance}, review)
+    assert summary['collect_today_cents'] == 2500
+    assert summary['complete'] is False
+
+    no_roster = deepcopy(result)
+    no_roster['benefits'].update(network_status='unknown', network_source=None)
+    no_roster_guidance = arrival_zero_default.apply(no_roster, collection_guidance.build(no_roster, review), review)
+    assert no_roster_guidance['amount_cents'] == 2500
+    assert encounter_summary.build({**no_roster, 'collection_guidance': no_roster_guidance}, review)['collect_today_cents'] == 2500
+    same_day = deepcopy(no_roster)
+    same_day['benefits']['service_date_matches'] = True
+    same_day['benefits']['returned_service_dates']['start'] = '2026-11-23'
+    same_day_guidance = arrival_zero_default.apply(same_day, collection_guidance.build(same_day, review), review)
+    assert same_day_guidance['amount_cents'] == 2500
+    assert encounter_summary.build({**same_day, 'collection_guidance': same_day_guidance}, review)['collect_today_cents'] == 2500
+
+    for change in ('identity', 'terminated', 'qmb', 'medicare', 'other_care', 'out_of_network'):
+        unsafe = deepcopy(result)
+        if change == 'identity':
+            unsafe['identity'] = {'status': 'review', 'match_version': 2}
+            unsafe['benefits']['identity'] = unsafe['identity']
+        elif change == 'terminated':
+            unsafe['benefits']['coverage_evidence']['end'] = '2026-11-22'
+        elif change == 'qmb':
+            unsafe['benefits']['qmb_status'] = 'protected'
+        elif change == 'medicare':
+            unsafe['plan_details'] = {'stedi': {'names': ['BP Medicare PPO ESA']}}
+        elif change == 'out_of_network':
+            unsafe['benefits'].update(network_status='out_of_network', network_source='payer_participation_message')
+        else:
+            unsafe['price_range']['lines'].append({'id': 'other', 'code': '70552', 'units': 1})
+        blocked = arrival_zero_default.apply(unsafe, collection_guidance.build(unsafe, review), review)
+        assert blocked['amount_cents'] == 0, change
+        assert blocked['collection_rule']['mode'] != 'nmct_stedi_provisional_office_copay', change
+
+
 @pytest.mark.parametrize('legacy_cash_fallback', [False, True])
 def test_nmct_saved_insured_visit_reprojects_missing_payer_evidence_to_zero_arrival(legacy_cash_fallback):
     result = scenario()

@@ -34,6 +34,19 @@ def patient_plan_applies(benefits: dict, comparison: dict | None, service_date: 
             and (not coverage.get('end') or coverage['end'] >= service_date))
 
 
+def patient_plan_without_response_day(benefits: dict, comparison: dict | None, service_date: str) -> bool:
+    """Accept a different payer response day, but not an expired plan or unbound member."""
+    if (benefits.get('active') is not True or benefits.get('service_date_matches') is not False
+            or benefits.get('coverage_dates_invalid') or benefits.get('coverage_status_conflict')
+            or not patient_benefits_bound(comparison) or not service_date):
+        return False
+    coverage = benefits.get('coverage_evidence') or {}
+    if coverage.get('status') in {'INACTIVE', 'EXPIRED', 'FUTURE', 'CONFLICT'}:
+        return False
+    return (not coverage.get('start') or coverage['start'] <= service_date) and (
+        not coverage.get('end') or service_date <= coverage['end'])
+
+
 def payer_identity_verified(comparison: dict | None) -> bool:
     """Payer-specific rules require a current patient-bound identity decision."""
     return patient_benefits_bound(comparison) and (

@@ -18,6 +18,9 @@ export type CommercialNetworkEvidence = {
     | 'out_of_network_confirmed_by_scoped_nonparticipation_record'
     | 'conflicting_network_evidence'
   source?: string
+  match_kind?: 'exact_product' | 'shared_product_word'
+  matched_words?: string[]
+  source_references?: string[]
   evidence_ids?: string[]
   product_kind?: string
   page?: number

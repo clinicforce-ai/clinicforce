@@ -47,6 +47,40 @@ const table = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
   { result, model }))
 assert.match(table, /Amount to collect at visit.*\$0\.00/s)
 
+const returnedDate = { ...result,
+  network_evidence: { source: 'clinic_product_roster', match_kind: 'shared_product_word',
+    matched_words: ['gold'] },
+  benefits: { ...result.benefits, network_status: 'in_network',
+    network_source: 'clinic_product_roster' },
+  price_range: { ...result.price_range, lines: [{ ...result.price_range.lines[0],
+    benefits: { ...result.price_range.lines[0].benefits, copay_cents: 3000 } }] },
+  collection_guidance: { amount_cents: 2500, status: 'estimated', basis: 'office_copay',
+    payer_response_date: '2026-12-13',
+    collection_rule: { mode: 'nmct_stedi_provisional_office_copay' },
+    reason: 'Provisional office copay from 2026-12-13; refund any excess.', services: [] },
+  encounter_summary: { collect_today_cents: 2500, complete: false,
+    estimated_total_patient_min_cents: null },
+}
+const returnedDateModel = deriveCommercialEstimateView({ result: returnedDate,
+  appointments: [], selectedVisit: '', busy: null, error: null, readOnly: true,
+  recovering: false })
+assert.equal(returnedDateModel.supportedAmount, true)
+assert.equal(returnedDateModel.amount, '$25.00')
+assert.match(returnedDateModel.networkSource, /shared plan word: gold/)
+const returnedDateHeadline = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
+  { result: returnedDate, model: returnedDateModel, partialCopay: null, visibleAmount: true }))
+assert.match(returnedDateHeadline, /Amount to collect at visit.*\$25\.00/s)
+assert.match(returnedDateHeadline, /2026-12-13/)
+const unmatchedRoster = { ...returnedDate,
+  network_evidence: { decision: 'lacking_applicable_network_evidence' },
+  benefits: { ...returnedDate.benefits, network_status: 'unknown', network_source: null },
+}
+const unmatchedRosterModel = deriveCommercialEstimateView({ result: unmatchedRoster,
+  appointments: [], selectedVisit: '', busy: null, error: null, readOnly: true,
+  recovering: false })
+assert.equal(unmatchedRosterModel.supportedAmount, true)
+assert.equal(unmatchedRosterModel.amount, '$25.00')
+
 const cashResult = { ...result, payment_mode: 'cash',
   price_range: { ...result.price_range, cash_complete: false, cash_min_cents: null,
     cash_max_cents: null },

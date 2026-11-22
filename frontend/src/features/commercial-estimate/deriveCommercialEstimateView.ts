@@ -177,11 +177,14 @@ export function deriveCommercialEstimateView({
                     : contractCandidate
                       ? 'Contract match unavailable'
                       : 'Not determined'
-  const networkSource = networkSourceLabel(
-    result?.network_evidence?.decision,
-    benefits?.network_source,
-    guidance?.network_source,
-  )
+  const networkSource =
+    result?.network_evidence?.match_kind === 'shared_product_word'
+      ? `NMCT product roster · shared plan word: ${(result.network_evidence.matched_words || []).join(', ')} · not an exact product or payer confirmation`
+      : networkSourceLabel(
+          result?.network_evidence?.decision,
+          benefits?.network_source,
+          guidance?.network_source,
+        )
   let networkTone =
     !result || tooEarly || result.recovery?.state === 'pending'
       ? ''
@@ -221,16 +224,24 @@ export function deriveCommercialEstimateView({
     ) &&
       result?.encounter_summary?.collect_today_cents === guidance?.amount_cents) ||
     guidance?.collection_rule?.mode === 'original_medicare_office_coinsurance'
+  const stediOfficeAdvance =
+    guidance?.collection_rule?.mode === 'nmct_stedi_provisional_office_copay' &&
+    guidance.payer_response_date != null &&
+    result?.encounter_summary?.collect_today_cents === guidance.amount_cents
   const currentPayerAmount =
     benefits?.active === true &&
-    benefits.service_date_matches !== false &&
+    (benefits.service_date_matches !== false || stediOfficeAdvance) &&
     payerEvidenceSafe &&
     financialSourceValid &&
     !participationConflict &&
     patientBenefitsBound &&
     ((!benefits.has_secondary && result?.recovery?.reason_code !== 'multiple_active_policies') ||
       guidance?.primary_secondary_copay === true) &&
-    (networkConfirmed || outOfNetworkCollection || independentOfficeCopay || unconfirmedTierAdvance)
+    (networkConfirmed ||
+      outOfNetworkCollection ||
+      independentOfficeCopay ||
+      unconfirmedTierAdvance ||
+      stediOfficeAdvance)
   const healthselectZeroArrival =
     result != null &&
     healthselectZero(result) &&
