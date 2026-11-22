@@ -143,6 +143,7 @@ export type CollectionGuidance = {
   basis: string
   integrity_error?: 'patient_total_mismatch' | 'line_amount_mismatch' | 'collection_amount_mismatch'
   reason: string
+  unresolved_collection_reason?: string
   patient_message: string
   assumptions: string[]
   patient_actions: string[]

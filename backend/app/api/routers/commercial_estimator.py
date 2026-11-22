@@ -28,7 +28,7 @@ from app.api.routers.insurance import _response, _scope, _session as insurance_s
 from app.core import object_store, staff_store
 from app.insurance import identity as insurance_identity
 from app.insurance import commercial, commercial_store, cpt_rules, cpt_suggester, ecw_backend, golden, stedi_discovery, stedi_payers, store, visit_estimate, practice_prices
-from app.insurance import stedi_financial, stedi_cob, collection_guidance, encounter_summary, amount_explanation, contract_requirements, ecw_benefits, ecw_billing, library_pricing, payer_allowance, network_participation
+from app.insurance import stedi_financial, stedi_cob, collection_guidance, arrival_zero_default, encounter_summary, amount_explanation, contract_requirements, ecw_benefits, ecw_billing, library_pricing, payer_allowance, network_participation
 from app.insurance import provider_specialty
 from app.logs.collection_audit import collection_event
 from app.logs.logger import log_info, log_warning

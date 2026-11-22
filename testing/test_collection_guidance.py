@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
-from app.insurance import amount_explanation, collection_guidance, commercial, encounter_summary, evidence_resolution, identity, visit_estimate
+from app.insurance import amount_explanation, arrival_zero_default, collection_guidance, commercial, encounter_summary, evidence_resolution, identity, visit_estimate
 from app.api.routers import commercial_estimator as api
 from app.api.routers.commercial_flow.commercial_previsit_reuse import saved_benefits_for_review
 from test_visit_estimate import DAY, payload as synthetic_271
@@ -19,6 +19,70 @@ def scenario(amount=3800):
                 'lines': [{'id': 'office', 'code': '99203', 'units': 1,
                     'calculation': {'patient_cents': amount}, 'benefits': {'active': True,
                     'requirements': {kind: {'required': 'unknown', 'cleared': False} for kind in ('referral', 'authorization')}}}]}}
+
+
+@pytest.mark.parametrize('gap', ['prior_date', 'identity', 'unpriced', 'no_payer_benefits', 'no_ecw_policy'])
+def test_unresolved_insured_visit_has_zero_check_in_decision_without_zero_patient_share(gap):
+    result = scenario()
+    result.update(payment_mode='insurance', payer='Aetna', service_date='2026-11-23',
+                  appointment_context={'place_of_service': '11'},
+                  nmct_fixed_office_copay_advance_enabled=True)
+    result['benefits'].update(service_date_matches=True, identity=result['identity'])
+    if gap == 'prior_date':
+        result['benefits']['service_date_matches'] = False
+    elif gap == 'identity':
+        result['identity'] = {'status': 'review', 'binding': None,
+                              'differences': [{'field': 'member_id'}]}
+    elif gap == 'unpriced':
+        result['price_range'].update(complete=False, patient_min_cents=None,
+                                     patient_max_cents=None)
+        result['price_range']['lines'][0]['calculation'] = None
+        result['price_range']['lines'][0]['rate_resolution'] = {'status': 'RATE_UNAVAILABLE'}
+    elif gap == 'no_payer_benefits':
+        result['benefits'] = {}
+    elif gap == 'no_ecw_policy':
+        result['benefits'] = {}
+        result['identity'] = {}
+        result['coverage_records'] = []
+    guidance = arrival_zero_default.apply(result, collection_guidance.build(result))
+    assert guidance['amount_cents'] == 0
+    assert guidance['status'] == 'zero_advance'
+    assert guidance['basis'] == 'claim_after_service'
+    assert guidance['collection_rule']['mode'] == 'clinic_zero_arrival_default'
+    assert all(word not in guidance['reason'].lower() for word in ('verify', 'confirm', 'check'))
+    assert guidance['unresolved_collection_reason']
+    summary = encounter_summary.build({**result, 'collection_guidance': guidance})
+    assert summary['collect_today_cents'] == 0
+    assert summary['complete'] is False
+    assert summary['estimated_total_patient_min_cents'] is None
+    assert 'Collect $0' in amount_explanation.build(result, guidance)['sentence']
+
+
+@pytest.mark.parametrize('legacy_cash_fallback', [False, True])
+def test_nmct_saved_insured_visit_reprojects_missing_payer_evidence_to_zero_arrival(legacy_cash_fallback):
+    result = scenario()
+    result.update(payment_mode='insurance', payer='Aetna', service_date='2026-12-15')
+    result['benefits'] = {}
+    result['price_range'].update(complete=False, patient_min_cents=None,
+                                 patient_max_cents=None)
+    result['price_range']['lines'][0]['calculation'] = None
+    if legacy_cash_fallback:
+        result.update(payment_mode='cash', cash_fallback={'reason': 'older automatic quote'})
+    case = {'previsit_context': {'result': result, 'source': {},
+                                 'inputs': {'service_date': '2026-12-15'}}}
+    with patch.object(api.network_participation, 'is_nmct_practice', return_value=True), \
+         patch.object(api.staff_store, 'list_library', return_value=[]):
+        projected = api._previsit_result(case, 'nmct')
+    assert projected['collection_guidance']['amount_cents'] == 0
+    assert projected['payment_mode'] == 'insurance'
+    assert 'cash_fallback' not in projected
+    assert projected['collection_guidance']['collection_rule']['mode'] == 'clinic_zero_arrival_default'
+    assert projected['encounter_summary']['collect_today_cents'] == 0
+    assert projected['encounter_summary']['estimated_total_patient_min_cents'] is None
+    assert 'Collect $0' in projected['payment_explanation']['sentence']
+    trace = next(row for row in projected['evidence_resolution'] if row['field'] == 'collection_amount')
+    assert trace['status'] == 'resolved'
+    assert any('no-upfront default' in source['finding'] for source in trace['sources'])
 
 
 def test_bcbstx_ppo_unpriced_home_follow_up_defers_check_in_without_staff_confirmation():

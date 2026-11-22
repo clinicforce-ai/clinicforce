@@ -17,6 +17,8 @@ import { uhcLppoOfficeScenario } from './uhcLppoOfficeScenario'
 import UhcLppoOfficeArrival from './UhcLppoOfficeArrival'
 import { uhcNmOfficeReference } from './uhcNmOfficeReference'
 import UhcNmOfficeArrival from './UhcNmOfficeArrival'
+import ClinicZeroArrival from './ClinicZeroArrival'
+import { isClinicZeroArrival } from './isClinicZeroArrival'
 
 export default function ArrivalAmountSummary({
   model,
@@ -33,6 +35,7 @@ export default function ArrivalAmountSummary({
   referenceOnly?: boolean
   visibleAmount: boolean
 }) {
+  if (isClinicZeroArrival(result, model)) return <ClinicZeroArrival result={result} />
   if (model.supportedAmount && result.collection_guidance?.scope === 'office_only')
     return (
       <>

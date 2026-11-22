@@ -12,6 +12,7 @@ export function zeroCollectionRow(
   if (
     guidance?.amount_cents !== 0 ||
     !(
+      rule === 'clinic_zero_arrival_default' ||
       rule === 'aetna_office_individual_oop_deferral' ||
       (model.supportedAmount &&
         (rule === 'individual_oop_zero_deferral' ||

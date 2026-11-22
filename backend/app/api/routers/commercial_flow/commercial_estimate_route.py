@@ -112,11 +112,12 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     A cash fallback names an exact product or clinic contract mapping blocker
     when that blocker prevented an insured amount. For UnitedHealthcare, an
     unresolved insured amount stays in insurance mode and gives a short reason.
-    Without an approved collection policy, missing collection inputs return a
-    null amount with status action_required and basis missing_collection_inputs.
-    If no supported copay or patient-share estimate exists, an administrator-
-    approved payer collection policy can give a $0 check-in advance with basis
-    claim_after_service. This does not waive later adjudicated patient charges.
+    The evidence engine retains a null insured advance when inputs cannot
+    support a charge. For a completed NMCT insured visit, the final collection
+    decision returns amount_cents=0, status=zero_advance and
+    collection_rule.mode=clinic_zero_arrival_default. Its claim_after_service
+    basis requests no upfront payment; unresolved_collection_reason retains the evidence blocker, and final patient share stays unknown.
+    Supported advances and approved payer policies still take precedence.
     A scoped Blue Cross Clinical Library CPT price can appear in
     temporary_rate_reference as a disclosed planning reference only; it does
     not establish UnitedHealthcare participation or a collection amount.
@@ -146,7 +147,6 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     payer allowed amount never becomes a dollar total. Self-pay uses recorded cash mode or the terminal coverage-recovery fallback
     and configured cash prices, without built-in clinic prices or plan-name
     benefit overrides. Earlier snapshots are unchanged.
-
     Missing policy/routing or failed identity checks start bounded background
     recovery through linked saved policies, card/OCR, uniquely routed eCW hints,
     discovery and, for eligible enrolled Original Medicare cases, MBI lookup.

@@ -445,7 +445,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     coverage_conflict = retain_conflicted_insurance(result, case)
     united_healthcare = _api.commercial.is_united_healthcare_payer(result, {'displayName': route_payer.get('display_name')} if route_payer else None)
     original_medicare = _api.stedi_payers.original_medicare_result(result, source)
-    if ((united_healthcare or original_medicare) and result.get('cash_fallback') is not None
+    if ((united_healthcare or original_medicare or result.get('nmct_fixed_office_copay_advance_enabled')) and result.get('cash_fallback') is not None
             and (case.get('visit_review') or {}).get('payment_mode') != 'cash'):
         result['payment_mode'] = 'insurance'
         result.pop('cash_fallback', None)
@@ -456,25 +456,25 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     pricing_unavailable = (result.get('payment_mode') != 'cash' and insurance_guidance.get('amount_cents') is None
         and case.get('previsit', {}).get('request_state') in {'complete', 'rejected', 'not_requested'}
         and not recovery)
-    if (not united_healthcare and not original_medicare and (result.get('benefits') or {}).get('active') is not True and not coverage_conflict
+    if (not result.get('nmct_fixed_office_copay_advance_enabled') and not united_healthcare and not original_medicare and (result.get('benefits') or {}).get('active') is not True and not coverage_conflict
             and not timing and recovery.get('state') in {'complete', 'rejected'}
             and recovery.get('outcome') != 'recovered'
             and recovery.get('exhausted') is not False
             and explicit_payment_mode is None):
         result['payment_mode'] = 'cash'
         result['cash_fallback'] = {}
-        result.pop('emg_option', None)
-    elif (not united_healthcare and not original_medicare and (result.get('benefits') or {}).get('active') is not True and not coverage_conflict
+    elif (not result.get('nmct_fixed_office_copay_advance_enabled') and not united_healthcare and not original_medicare and (result.get('benefits') or {}).get('active') is not True and not coverage_conflict
             and not timing and (pricing_unavailable or (recovery.get('state') == 'complete' and recovery.get('outcome') == 'recovered'
             and insurance_guidance.get('amount_cents') is None))
             and explicit_payment_mode is None):
         result['payment_mode'] = 'cash'
         result['cash_fallback'] = {}
-        result.pop('emg_option', None)
     if 'cash_fallback' in result:
+        result.pop('emg_option', None)
         result['cash_fallback']['reason'] = 'Clinic self-pay pricing is shown because ' + _api.amount_explanation.fallback_cause(result) + '.'
     result['collection_guidance'] = _api.collection_guidance.build(result, case.get('visit_review'))
     guard_telehealth_guidance(result, unresolved_telehealth)
+    result['collection_guidance'] = _api.arrival_zero_default.apply(result, result['collection_guidance'])
     result['established_for_planning'] = _api.cpt_suggester.established_visit_for_planning(
         {**(case['previsit_context'].get('inputs') or {}), 'separate_em_planned': result.get('separate_em_planned')}, source)
     result['combined_emg_plan'] = _api.visit_estimate.combined_emg_plan(result, case.get('visit_review'))
