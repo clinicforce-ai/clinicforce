@@ -806,14 +806,13 @@ def test_zero_advance_identity_line_names_only_mismatched_fields():
               'reference': 'clinic policy 2026', 'approved_by': 'administrator',
               'approved_at': '2026-10-15T12:00:00Z'},
               'benefits': {'active': True, 'identity': {'status': 'review',
-                  'differences': [{'field': 'birth_date', 'ecw': 'synthetic', 'payer': 'synthetic'}]},
+                  'differences': [{'field': 'birth_date', 'ecw': '2001-01-01', 'payer': '2001-02-01'}]},
                   'network_status': 'unknown'}, 'recovery': {'reason_code': 'no_coverage_found'},
               'price_range': {'lines': []}}
     guidance = collection_guidance.build(result)
     explanation = amount_explanation.build(result, guidance)
     assert explanation['reason_code'] == 'policy_identity_mismatch'
-    assert 'reconcile date of birth with the payer' in explanation['sentence']
-    assert 'synthetic' not in explanation['sentence']
+    assert 'patient date of birth: eCW 2001-01-01, payer 2001-02-01' in explanation['sentence']
 
 
 def test_doctor_diagnosis_marks_copay_with_unpriced_testing_as_partial():
