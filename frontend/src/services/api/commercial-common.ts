@@ -135,6 +135,29 @@ export type CollectionGuidance = {
   office_visit_copay_advance?: { amount_cents: number; source: 'selected_office_benefit' } | null
   payer_reported_office_copay_cents?: number
   payer_response_date?: string
+  potential_office_collection?: {
+    amount_cents: number
+    copay_cents: number
+    allowed_cents: number | null
+    oop_remaining_cents: number | null
+    separate_copay_remaining_cents?: number | null
+    verified_payments_cents: number
+    office_code: string
+    other_codes: string[]
+    source: string
+    issues: Array<{
+      code: string
+      field?: string
+      ecw?: string
+      payer?: string
+      office_code?: string
+      codes?: string[]
+      services?: Array<{ code: string; description: string }>
+      selection_status?: string
+      end?: string
+      detail?: string
+    }>
+  }
   reference_total_cents?: number
   clinic_fee_reference_cents?: number
   primary_secondary_copay?: boolean

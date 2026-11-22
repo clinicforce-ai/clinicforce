@@ -78,7 +78,7 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     recalculated check; this saved read never submits a payer transaction. Missing
     collection inputs return collection_guidance with a null
     amount, status action_required and basis missing_collection_inputs; the reason
-    names the next staff action. A supported diagnostic per-day copay without an
+    names the next staff action. For NMCT, amount_cents=0 for an unsupported charge; potential_office_collection can show a conditional sourced Stedi office copay with caps and exact identity, QMB or unpriced-service blockers. A supported diagnostic per-day copay without an
     approved positive-advance policy returns diagnostic_copay_reference_cents
     for UI display while amount_cents stays null. An administrator-approved
     policy can give a $0 check-in advance

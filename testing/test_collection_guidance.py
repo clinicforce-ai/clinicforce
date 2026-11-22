@@ -121,6 +121,99 @@ def test_nmct_can_collect_sourced_stedi_office_copay_with_a_date_or_roster_misma
         assert blocked['collection_rule']['mode'] != 'nmct_stedi_provisional_office_copay', change
 
 
+def test_nmct_reports_potential_office_copay_with_exact_blockers():
+    result = scenario()
+    result.update(payment_mode='insurance', payer='Aetna', service_date='2026-11-23',
+                  appointment_context={'place_of_service': '11'},
+                  nmct_fixed_office_copay_advance_enabled=True,
+                  service_selection_status='preview',
+                  plan_details={'stedi': {'names': ['BP Medicare PPO ESA']}},
+                  codes=[{'id': 'office', 'code': '99213', 'units': 1, 'source': 'LLM proposal'}])
+    result['benefits'].update(service_date_matches=False,
+        returned_service_dates={'start': '2026-11-21'},
+        coverage_evidence={'status': 'ACTIVE', 'start': '2026-01-01'},
+        oop_remaining_cents=102747)
+    result['price_range'].update(complete=False, patient_min_cents=None,
+                                 patient_max_cents=None, service_issues=[])
+    line = result['price_range']['lines'][0]
+    row = {'id': 'office-copay', 'kind': 'copay', 'service_type_code': '98',
+           'network': 'IN_NETWORK', 'coverage_level': 'INDIVIDUAL', 'time_period': 'VISIT',
+           'amount_cents': 3000, 'places_of_service': ['11'],
+           'payer_note': 'Physician office visit specialist'}
+    line.update(code='99213', allowed_cents=9633, calculation=None)
+    line['benefits'].update(copay_cents=3000, copay_id='office-copay', copay_period='VISIT',
+        oop_remaining_cents=102747, reported_options=[row])
+    result['benefits']['reported_options'] = [row]
+    result['benefits']['identity'] = result['identity']
+    medicare = arrival_zero_default.apply(result, collection_guidance.build(result))
+    assert medicare['amount_cents'] == 0
+    assert medicare['potential_office_collection']['amount_cents'] == 3000
+    assert medicare['potential_office_collection']['office_code'] == '99213'
+    assert 'medicare_protection_unknown' in {issue['code'] for issue in medicare['potential_office_collection']['issues']}
+
+    mismatched = deepcopy(result)
+    mismatched['plan_details']['stedi']['names'] = ['BP Choice PPO']
+    mismatched['identity'] = {'status': 'review', 'match_version': 2, 'binding': None,
+        'differences': [
+            {'field': 'first_name', 'ecw': 'Morgan', 'payer': 'Megan'},
+            {'field': 'member_id', 'ecw': 'A123', 'payer': 'B456'}],
+        'policy_differences': [
+            {'field': 'subscriber_first', 'ecw': 'Morgan', 'payer': 'Megan'}]}
+    mismatched['benefits']['identity'] = mismatched['identity']
+    identity_guidance = arrival_zero_default.apply(mismatched, collection_guidance.build(mismatched))
+    assert identity_guidance['amount_cents'] == 0
+    potential = identity_guidance['potential_office_collection']
+    assert potential['amount_cents'] == 3000
+    assert [(issue['field'], issue['ecw'], issue['payer']) for issue in potential['issues']
+            if issue['code'] == 'identity_difference'] == [
+        ('first_name', 'Morgan', 'Megan'), ('member_id', 'A123', 'B456'),
+        ('subscriber_first', 'Morgan', 'Megan')]
+    from app.insurance.collection.amount_actions import _collection_action
+    action = _collection_action('policy_identity_mismatch', mismatched)
+    assert 'patient first name: eCW Morgan, payer Megan' in action
+    assert 'member ID: eCW A123, payer B456' in action
+    assert 'subscriber first name: eCW Morgan, payer Megan' in action
+
+    imaging = deepcopy(result)
+    imaging['plan_details']['stedi']['names'] = ['Aetna Choice POS II']
+    imaging['codes'] = [imaging['codes'][0],
+        {'id': 'imaging', 'code': '70552', 'units': 1, 'source': 'LLM proposal'}]
+    imaging['price_range']['lines'][0]['code'] = '99203'
+    imaging['codes'][0]['code'] = '99203'
+    imaging['price_range']['lines'][0]['allowed_cents'] = 9325
+    imaging['price_range']['lines'][0]['benefits'].update(copay_cents=8000,
+        oop_remaining_cents=319197)
+    imaging['price_range']['lines'][0]['benefits']['reported_options'][0]['amount_cents'] = 8000
+    imaging['price_range']['lines'].append({'id': 'imaging', 'code': '70552', 'units': 1,
+        'description': 'Brain MRI', 'allowed_cents': None, 'issues': ['Rate unavailable']})
+    imaging['benefits']['oop_remaining_cents'] = 319197
+    imaging_guidance = arrival_zero_default.apply(imaging, collection_guidance.build(imaging))
+    assert imaging_guidance['amount_cents'] == 0
+    potential = imaging_guidance['potential_office_collection']
+    assert potential['amount_cents'] == 8000
+    assert potential['office_code'] == '99203'
+    assert potential['other_codes'] == ['70552']
+    assert 'other_service_unpriced' in {issue['code'] for issue in potential['issues']}
+    assert 'office_not_selected' in {issue['code'] for issue in potential['issues']}
+
+    capped = deepcopy(imaging)
+    capped['price_range']['lines'][0]['allowed_cents'] = 2500
+    capped['price_range']['lines'][0]['benefits']['oop_remaining_cents'] = 2000
+    capped['benefits']['oop_remaining_cents'] = 2000
+    paid = {'payments': {'reference': 'synthetic-receipt', 'amount_cents': 500}}
+    capped_guidance = arrival_zero_default.apply(capped, collection_guidance.build(capped, paid), paid)
+    assert capped_guidance['potential_office_collection']['amount_cents'] == 1500
+    assert capped_guidance['potential_office_collection']['oop_remaining_cents'] == 2000
+    assert capped_guidance['potential_office_collection']['verified_payments_cents'] == 500
+
+    unsourced = deepcopy(imaging)
+    unsourced['price_range']['lines'][0]['benefits']['reported_options'] = []
+    unsourced['benefits']['reported_options'] = []
+    unsourced_guidance = arrival_zero_default.apply(unsourced, collection_guidance.build(unsourced))
+    assert unsourced_guidance['amount_cents'] == 0
+    assert 'potential_office_collection' not in unsourced_guidance
+
+
 @pytest.mark.parametrize('legacy_cash_fallback', [False, True])
 def test_nmct_saved_insured_visit_reprojects_missing_payer_evidence_to_zero_arrival(legacy_cash_fallback):
     result = scenario()

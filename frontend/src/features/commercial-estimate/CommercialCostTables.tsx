@@ -6,6 +6,7 @@ import { uhcLppoOfficeScenario } from './uhcLppoOfficeScenario'
 import { uhcNmOfficeReference } from './uhcNmOfficeReference'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { uhcQmbOfficeRows } from './uhcQmbOfficeTable'
+import { potentialOfficeFormula, potentialOfficeIssue } from './potentialOfficeAmount'
 
 export default function CommercialCostTables({
   result,
@@ -231,6 +232,21 @@ export default function CommercialCostTables({
           return row
         })
       : visibleRows
+  const potential = result.collection_guidance?.potential_office_collection
+  const costRows = [...finalRows]
+  if (!cash && potential && result.collection_guidance?.amount_cents === 0) {
+    const collectionIndex = costRows.findIndex((row) =>
+      row.label.startsWith('Amount to collect at visit'),
+    )
+    costRows.splice(collectionIndex < 0 ? costRows.length : collectionIndex, 0, {
+      label: 'Potential office amount · conditional',
+      value: money(potential.amount_cents),
+      detail: [
+        potentialOfficeFormula(potential),
+        ...potential.issues.map((issue) => potentialOfficeIssue(issue, result.payer || 'payer')),
+      ].join(' '),
+    })
+  }
   return (
     <>
       {!cash &&
@@ -246,8 +262,8 @@ export default function CommercialCostTables({
       <CostBreakdownTable
         rows={
           !cash && !model.previousEstimate
-            ? uhcQmbOfficeRows(result, finalRows) || finalRows
-            : finalRows
+            ? uhcQmbOfficeRows(result, costRows) || costRows
+            : costRows
         }
         open={
           (model.supportedAmount ||
