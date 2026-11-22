@@ -188,7 +188,7 @@ def test_nmct_reports_potential_office_copay_with_exact_blockers():
     imaging['price_range']['lines'][0]['benefits']['reported_options'][0].update(
         network='IN_NETWORK', coverage_level='EMPLOYEE_ONLY')
     imaging['price_range']['lines'].append({'id': 'imaging', 'code': '70552', 'units': 1,
-        'description': 'Brain MRI', 'allowed_cents': None, 'issues': ['Rate unavailable']})
+        'description': 'Brain MRI without contrast', 'allowed_cents': None, 'issues': ['Rate unavailable']})
     imaging['benefits']['oop_remaining_cents'] = 319197
     imaging_guidance = arrival_zero_default.apply(imaging, collection_guidance.build(imaging))
     assert imaging_guidance['amount_cents'] == 0
@@ -197,6 +197,7 @@ def test_nmct_reports_potential_office_copay_with_exact_blockers():
     assert potential['office_code'] == '99203'
     assert potential['other_codes'] == ['70552']
     assert 'other_service_unpriced' in {issue['code'] for issue in potential['issues']}
+    assert 'mri_contrast_code_mismatch' in {issue['code'] for issue in potential['issues']}
     assert 'office_not_selected' in {issue['code'] for issue in potential['issues']}
 
     capped = deepcopy(imaging)

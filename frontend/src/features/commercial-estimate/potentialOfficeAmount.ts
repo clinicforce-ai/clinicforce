@@ -50,6 +50,8 @@ export function potentialOfficeIssue(issue: Issue, payer = 'payer'): string {
         : `${codes} is only a proposed service and has no resolved price. The potential office amount excludes it; select it if planned for this visit, or remove it if it describes past care.`
     case 'other_service_excluded':
       return `${codes} is outside this office-only amount; the total visit amount includes its separate terms.`
+    case 'mri_contrast_code_mismatch':
+      return `The proposed MRI description says “without contrast,” but CPT ${issue.reported_cpt} means brain MRI with contrast. Confirm whether MRI is planned for this visit and the actual contrast protocol; use CPT ${issue.expected_code} only if a brain MRI without contrast is documented, or remove the proposal if it describes prior care.`
     case 'coverage_not_active':
       return 'The payer did not return active medical coverage for this visit.'
     case 'coverage_ended_before_visit':

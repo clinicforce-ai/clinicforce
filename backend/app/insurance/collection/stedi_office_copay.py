@@ -227,6 +227,11 @@ def potential(result: dict, review: dict | None = None) -> dict | None:
         issues.append({'code': 'other_service_excluded', 'codes': other_codes,
                        'services': other_services,
                        'selection_status': result.get('service_selection_status')})
+    for item in other:
+        description = str(item.get('description') or item.get('label') or '')
+        if item.get('code') == '70552' and re.search(r'\bwithout\s+contrast\b', description, re.I):
+            issues.append({'code': 'mri_contrast_code_mismatch', 'reported_cpt': '70552',
+                           'description': description, 'expected_code': '70551'})
     if benefits.get('active') is not True:
         issues.append({'code': 'coverage_not_active'})
     coverage = benefits.get('coverage_evidence') or {}

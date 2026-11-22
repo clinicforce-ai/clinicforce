@@ -151,6 +151,9 @@ export type CollectionGuidance = {
       ecw?: string
       payer?: string
       office_code?: string
+      reported_cpt?: string
+      expected_code?: string
+      description?: string
       codes?: string[]
       services?: Array<{ code: string; description: string }>
       selection_status?: string

@@ -58,8 +58,9 @@ for (const scenario of [
   { amount: 8000, code: '99203', issues: [
     { code: 'office_not_selected', office_code: '99203' },
     { code: 'other_service_unpriced', codes: ['70552'],
-      services: [{ code: '70552', description: 'Brain MRI' }], selection_status: 'preview' }],
-    expected: /\$80\.00.*CPT 99203 is a proposal.*CPT 70552.*no resolved price/s },
+      services: [{ code: '70552', description: 'Brain MRI without contrast' }], selection_status: 'preview' },
+    { code: 'mri_contrast_code_mismatch', reported_cpt: '70552', expected_code: '70551' }],
+    expected: /\$80\.00.*CPT 99203 is a proposal.*CPT 70552.*no resolved price.*70552 means brain MRI with contrast/s },
 ]) {
   const conditional = { ...result, collection_guidance: { ...result.collection_guidance,
     potential_office_collection: { amount_cents: scenario.amount,
