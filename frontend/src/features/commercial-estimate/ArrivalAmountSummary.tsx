@@ -19,6 +19,7 @@ import { uhcNmOfficeReference } from './uhcNmOfficeReference'
 import UhcNmOfficeArrival from './UhcNmOfficeArrival'
 import ClinicZeroArrival from './ClinicZeroArrival'
 import { isClinicZeroArrival } from './isClinicZeroArrival'
+import StediOfficeArrival, { isStediOfficeArrival } from './StediOfficeArrival'
 
 export default function ArrivalAmountSummary({
   model,
@@ -36,17 +37,7 @@ export default function ArrivalAmountSummary({
   visibleAmount: boolean
 }) {
   if (isClinicZeroArrival(result, model)) return <ClinicZeroArrival result={result} />
-  if (
-    model.supportedAmount &&
-    result.collection_guidance?.collection_rule?.mode === 'nmct_stedi_provisional_office_copay'
-  )
-    return (
-      <>
-        <span>Amount to collect at visit · provisional office copay</span>
-        <strong role="status">{money(result.collection_guidance.amount_cents!)}</strong>
-        <p>{result.collection_guidance.reason}</p>
-      </>
-    )
+  if (isStediOfficeArrival(result, model)) return <StediOfficeArrival result={result} />
   if (model.supportedAmount && result.collection_guidance?.scope === 'office_only')
     return (
       <>

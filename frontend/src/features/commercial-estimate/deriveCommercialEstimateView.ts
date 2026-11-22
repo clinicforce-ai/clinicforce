@@ -11,7 +11,7 @@ import {
   provisionalSummaryExplanation,
 } from './provisionalEstimateAmounts'
 import { networkEvidenceStatus } from './networkEvidenceStatus'
-import { networkSourceLabel } from './networkSourceLabel'
+import { arrivalNetworkSource, stediOfficeAdvance } from './arrivalEvidence'
 import { emgOptionPresentation } from './emgOptionPresentation'
 import { healthselectZero } from './healthselectRows'
 import { officeOnlyAmount } from './officeOnlyAmount'
@@ -177,14 +177,6 @@ export function deriveCommercialEstimateView({
                     : contractCandidate
                       ? 'Contract match unavailable'
                       : 'Not determined'
-  const networkSource =
-    result?.network_evidence?.match_kind === 'shared_product_word'
-      ? `NMCT product roster · shared plan word: ${(result.network_evidence.matched_words || []).join(', ')} · not an exact product or payer confirmation`
-      : networkSourceLabel(
-          result?.network_evidence?.decision,
-          benefits?.network_source,
-          guidance?.network_source,
-        )
   let networkTone =
     !result || tooEarly || result.recovery?.state === 'pending'
       ? ''
@@ -224,13 +216,10 @@ export function deriveCommercialEstimateView({
     ) &&
       result?.encounter_summary?.collect_today_cents === guidance?.amount_cents) ||
     guidance?.collection_rule?.mode === 'original_medicare_office_coinsurance'
-  const stediOfficeAdvance =
-    guidance?.collection_rule?.mode === 'nmct_stedi_provisional_office_copay' &&
-    guidance.payer_response_date != null &&
-    result?.encounter_summary?.collect_today_cents === guidance.amount_cents
+  const stediOffice = stediOfficeAdvance(result)
   const currentPayerAmount =
     benefits?.active === true &&
-    (benefits.service_date_matches !== false || stediOfficeAdvance) &&
+    (benefits.service_date_matches !== false || stediOffice) &&
     payerEvidenceSafe &&
     financialSourceValid &&
     !participationConflict &&
@@ -241,7 +230,7 @@ export function deriveCommercialEstimateView({
       outOfNetworkCollection ||
       independentOfficeCopay ||
       unconfirmedTierAdvance ||
-      stediOfficeAdvance)
+      stediOffice)
   const healthselectZeroArrival =
     result != null &&
     healthselectZero(result) &&
@@ -484,7 +473,7 @@ export function deriveCommercialEstimateView({
     guidance,
     contractCandidate,
     networkLabel,
-    networkSource,
+    networkSource: arrivalNetworkSource(result),
     networkTone,
     unavailableReason,
     requirementIssue,
