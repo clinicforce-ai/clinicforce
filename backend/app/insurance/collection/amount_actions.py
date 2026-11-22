@@ -69,7 +69,7 @@ def _collection_action(code: str, result: dict, source_errors: list[dict] | None
         failure_reason = (result.get('eligibility_failure') or {}).get('reason_code')
         return ENROLLMENT_REASON_ACTION.get(failure_reason, ENROLLMENT_DEFAULT)[1]
     if code == 'multiple_active_policies':
-        mismatches = _mismatch_fields(result)
+        mismatches = _mismatch_details(result) or _mismatch_fields(result)
         recovery = result.get('recovery') or {}
         count = recovery.get('active_policy_count')
         if type(count) is not int:
