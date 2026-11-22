@@ -7,6 +7,7 @@ from app.insurance.network_participation import participation_conflict, verified
 from app.insurance.identity import patient_benefits_bound
 from app.insurance.benefit_review import selected_service_blocker
 from app.insurance.collection.requirements import requirement_blocker
+from app.insurance.collection.stedi_office_copay import eligible as stedi_office_copay_eligible
 
 
 def _coinsurance_rate(percent: object) -> Decimal | None:
@@ -118,7 +119,7 @@ def build(result: dict, review: dict | None = None) -> dict:
     if type(collect) is not int or collect < 0:
         collect = None
     clinic_zero_instruction = (collect == 0 and guidance.get('basis') in {
-        'claim_after_service', 'ecw_billing_note', 'healthselect_ma_zero_televisit',
+        'claim_after_service', 'cash_price_pending', 'ecw_billing_note', 'healthselect_ma_zero_televisit',
         'healthselect_ma_zero_office_biopsy'})
     if (checkable and integrity_error is None and collect is not None
             and guidance.get('basis') in {'patient_obligations', 'anticipated_services'}
@@ -136,6 +137,11 @@ def build(result: dict, review: dict | None = None) -> dict:
             and (type(guidance.get('payer_reported_office_copay_cents')) is not int
                  or collect != max(0, guidance['payer_reported_office_copay_cents'] - (paid or 0)))):
         integrity_error = 'collection_amount_mismatch'
+    stedi_office_copay = (guidance.get('collection_rule') or {}).get('mode') == 'nmct_stedi_provisional_office_copay'
+    stedi_office_decision = stedi_office_copay_eligible(result, review) if stedi_office_copay else None
+    stedi_office_copay = bool(stedi_office_decision
+        and (collect, guidance.get('payer_reported_office_copay_cents'), guidance.get('payer_response_date'))
+            == stedi_office_decision and not integrity_error)
     if (integrity_error and guidance.get('basis') in {'patient_obligations', 'anticipated_services', 'bcbstx_proxy_advance', 'cigna_fee_proxy_advance',
                                                       'bcbstx_refundable_advance', 'cigna_refundable_office_copay', 'calculation_conflict'} and not clinic_zero_instruction):
         collect = None
@@ -155,7 +161,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         and not benefits.get('source_errors') and not (office_line.get('benefits') or {}).get('source_errors')
         and selected_service_blocker(benefits.get('network_status') or 'unknown', identity, [office_line]) is None
         and not participation_conflict(benefits))
-    if (unsupported_insurance or requirement_blocker(result) is not None) and collect is not None and not clinic_zero_instruction and not office_only_collection:
+    if (unsupported_insurance or requirement_blocker(result) is not None) and collect is not None and not clinic_zero_instruction and not office_only_collection and not stedi_office_copay:
         collect = None
     office = [line for line in lines if str(line.get('code') or '').isdigit() and
               (99202 <= int(line['code']) <= 99205 or 99212 <= int(line['code']) <= 99215)]
@@ -168,6 +174,7 @@ def build(result: dict, review: dict | None = None) -> dict:
             and not independent_office_copay and not out_of_network_share
             and not out_of_network_office_copay and not proxy_advance
             and not original_medicare_share
+            and not stedi_office_copay
             and not (refundable_advance and not verified_out_of_network(benefits))):
         collect = None
     if guidance.get('basis') == 'office_copay' and components['copay_cents'] is None:

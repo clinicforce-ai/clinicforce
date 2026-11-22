@@ -161,7 +161,11 @@ export default function StaffWorkspaceView({ model }: { model: StaffWorkspaceMod
 
   if (busy === 'lookup')
     return (
-      <CommercialEstimateLoading practiceName={session.practice_name} patient={lookupDetails} />
+      <CommercialEstimateLoading
+        practiceName={session.practice_name}
+        patient={lookupDetails}
+        arrivalCollectionDefaultCents={session.arrival_collection_default_cents}
+      />
     )
 
   if (screen === 'add' && camera)

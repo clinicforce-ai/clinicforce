@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
-from app.insurance import amount_explanation, collection_guidance, commercial, encounter_summary, evidence_resolution, identity, visit_estimate
+from app.insurance import amount_explanation, arrival_zero_default, collection_guidance, commercial, encounter_summary, evidence_resolution, identity, visit_estimate
 from app.api.routers import commercial_estimator as api
 from app.api.routers.commercial_flow.commercial_previsit_reuse import saved_benefits_for_review
 from test_visit_estimate import DAY, payload as synthetic_271
@@ -19,6 +19,188 @@ def scenario(amount=3800):
                 'lines': [{'id': 'office', 'code': '99203', 'units': 1,
                     'calculation': {'patient_cents': amount}, 'benefits': {'active': True,
                     'requirements': {kind: {'required': 'unknown', 'cleared': False} for kind in ('referral', 'authorization')}}}]}}
+
+
+@pytest.mark.parametrize('gap', ['prior_date', 'identity', 'unpriced', 'no_payer_benefits', 'no_ecw_policy'])
+def test_unresolved_insured_visit_has_zero_check_in_decision_without_zero_patient_share(gap):
+    result = scenario()
+    result.update(payment_mode='insurance', payer='Aetna', service_date='2026-11-23',
+                  appointment_context={'place_of_service': '11'},
+                  nmct_fixed_office_copay_advance_enabled=True)
+    result['benefits'].update(service_date_matches=True, identity=result['identity'])
+    if gap == 'prior_date':
+        result['benefits']['service_date_matches'] = False
+    elif gap == 'identity':
+        result['identity'] = {'status': 'review', 'binding': None,
+                              'differences': [{'field': 'member_id'}]}
+    elif gap == 'unpriced':
+        result['price_range'].update(complete=False, patient_min_cents=None,
+                                     patient_max_cents=None)
+        result['price_range']['lines'][0]['calculation'] = None
+        result['price_range']['lines'][0]['rate_resolution'] = {'status': 'RATE_UNAVAILABLE'}
+    elif gap == 'no_payer_benefits':
+        result['benefits'] = {}
+    elif gap == 'no_ecw_policy':
+        result['benefits'] = {}
+        result['identity'] = {}
+        result['coverage_records'] = []
+    guidance = arrival_zero_default.apply(result, collection_guidance.build(result))
+    assert guidance['amount_cents'] == 0
+    assert guidance['status'] == 'zero_advance'
+    assert guidance['basis'] == 'claim_after_service'
+    assert guidance['collection_rule']['mode'] == 'clinic_zero_arrival_default'
+    assert all(word not in guidance['reason'].lower() for word in ('verify', 'confirm', 'check'))
+    assert guidance['unresolved_collection_reason']
+    summary = encounter_summary.build({**result, 'collection_guidance': guidance})
+    assert summary['collect_today_cents'] == 0
+    assert summary['complete'] is False
+    assert summary['estimated_total_patient_min_cents'] is None
+    assert 'Collect $0' in amount_explanation.build(result, guidance)['sentence']
+
+
+def test_nmct_can_collect_sourced_stedi_office_copay_with_a_date_or_roster_mismatch():
+    result = scenario()
+    result.update(payment_mode='insurance', payer='Aetna', service_date='2026-11-23',
+                  appointment_context={'place_of_service': '11'},
+                  nmct_fixed_office_copay_advance_enabled=True,
+                  service_selection_status='approved',
+                  codes=[{'id': 'office', 'code': '99203', 'units': 1}], selected_ids=['office'])
+    result['benefits'].update(service_date_matches=False, identity=result['identity'],
+        network_source='clinic_product_roster', returned_service_dates={'start': '2026-11-21'},
+        coverage_evidence={'status': 'ACTIVE', 'start': '2026-01-01'})
+    result['price_range'].update(complete=False, patient_min_cents=None, patient_max_cents=None)
+    line = result['price_range']['lines'][0]
+    line.update(allowed_cents=9000, allowed_basis='clinic_contract', rate_resolution={'status': 'RESOLVED'})
+    row = {'id': 'office-copay', 'kind': 'copay', 'service_type_code': '98',
+           'network': 'IN_NETWORK', 'coverage_level': 'INDIVIDUAL', 'time_period': 'VISIT',
+           'amount_cents': 3000, 'places_of_service': ['11'], 'payer_note': 'Office specialist visit'}
+    line['benefits'].update(copay_cents=3000, copay_id='office-copay', copay_period='VISIT',
+        coinsurance_percent='0', deductible_remaining_cents=0, oop_remaining_cents=50000,
+        network_status='in_network', reported_options=[row])
+    result['benefits']['reported_options'] = [row]
+    review = {'payments': {'reference': 'synthetic-receipt', 'amount_cents': 500}}
+    guidance = arrival_zero_default.apply(result, collection_guidance.build(result, review), review)
+    assert guidance['amount_cents'] == 2500
+    assert guidance['basis'] == 'office_copay'
+    assert guidance['collection_rule']['mode'] == 'nmct_stedi_provisional_office_copay'
+    assert guidance['payer_response_date'] == '2026-11-21'
+    assert result['benefits']['service_date_matches'] is False
+    summary = encounter_summary.build({**result, 'collection_guidance': guidance}, review)
+    assert summary['collect_today_cents'] == 2500
+    assert summary['complete'] is False
+
+    no_roster = deepcopy(result)
+    no_roster['benefits'].update(network_status='unknown', network_source=None)
+    no_roster_guidance = arrival_zero_default.apply(no_roster, collection_guidance.build(no_roster, review), review)
+    assert no_roster_guidance['amount_cents'] == 2500
+    assert encounter_summary.build({**no_roster, 'collection_guidance': no_roster_guidance}, review)['collect_today_cents'] == 2500
+    same_day = deepcopy(no_roster)
+    same_day['benefits']['service_date_matches'] = True
+    same_day['benefits']['returned_service_dates']['start'] = '2026-11-23'
+    same_day_guidance = arrival_zero_default.apply(same_day, collection_guidance.build(same_day, review), review)
+    assert same_day_guidance['amount_cents'] == 2500
+    assert encounter_summary.build({**same_day, 'collection_guidance': same_day_guidance}, review)['collect_today_cents'] == 2500
+
+    for change in ('identity', 'terminated', 'qmb', 'medicare', 'other_care', 'out_of_network'):
+        unsafe = deepcopy(result)
+        if change == 'identity':
+            unsafe['identity'] = {'status': 'review', 'match_version': 2}
+            unsafe['benefits']['identity'] = unsafe['identity']
+        elif change == 'terminated':
+            unsafe['benefits']['coverage_evidence']['end'] = '2026-11-22'
+        elif change == 'qmb':
+            unsafe['benefits']['qmb_status'] = 'protected'
+        elif change == 'medicare':
+            unsafe['plan_details'] = {'stedi': {'names': ['BP Medicare PPO ESA']}}
+        elif change == 'out_of_network':
+            unsafe['benefits'].update(network_status='out_of_network', network_source='payer_participation_message')
+        else:
+            unsafe['price_range']['lines'].append({'id': 'other', 'code': '70552', 'units': 1})
+        blocked = arrival_zero_default.apply(unsafe, collection_guidance.build(unsafe, review), review)
+        assert blocked['amount_cents'] == 0, change
+        assert blocked['collection_rule']['mode'] != 'nmct_stedi_provisional_office_copay', change
+
+
+@pytest.mark.parametrize('legacy_cash_fallback', [False, True])
+def test_nmct_saved_insured_visit_reprojects_missing_payer_evidence_to_zero_arrival(legacy_cash_fallback):
+    result = scenario()
+    result.update(payment_mode='insurance', payer='Aetna', service_date='2026-12-15')
+    result['benefits'] = {}
+    result['price_range'].update(complete=False, patient_min_cents=None,
+                                 patient_max_cents=None)
+    result['price_range']['lines'][0]['calculation'] = None
+    if legacy_cash_fallback:
+        result.update(payment_mode='cash', cash_fallback={'reason': 'older automatic quote'})
+    case = {'previsit_context': {'result': result, 'source': {},
+                                 'inputs': {'service_date': '2026-12-15'}}}
+    with patch.object(api.network_participation, 'is_nmct_practice', return_value=True), \
+         patch.object(api.staff_store, 'list_library', return_value=[]):
+        projected = api._previsit_result(case, 'nmct')
+    assert projected['collection_guidance']['amount_cents'] == 0
+    assert projected['payment_mode'] == 'insurance'
+    assert 'cash_fallback' not in projected
+    assert projected['collection_guidance']['collection_rule']['mode'] == 'clinic_zero_arrival_default'
+    assert projected['encounter_summary']['collect_today_cents'] == 0
+    assert projected['encounter_summary']['estimated_total_patient_min_cents'] is None
+    assert 'Collect $0' in projected['payment_explanation']['sentence']
+    trace = next(row for row in projected['evidence_resolution'] if row['field'] == 'collection_amount')
+    assert trace['status'] == 'resolved'
+    assert any('no-upfront default' in source['finding'] for source in trace['sources'])
+
+
+def test_explicit_nmct_cash_without_price_collects_zero_without_inventing_a_quote():
+    result = scenario()
+    result.update(payment_mode='cash', nmct_fixed_office_copay_advance_enabled=True)
+    result['price_range'].update(cash_complete=False, cash_min_cents=None,
+                                 cash_max_cents=None)
+    guidance = arrival_zero_default.apply(result, collection_guidance.build(result))
+    assert guidance['amount_cents'] == 0
+    assert guidance['basis'] == 'cash_price_pending'
+    assert guidance['collection_rule']['mode'] == 'clinic_zero_arrival_default'
+    assert guidance['unresolved_collection_reason']
+    assert 'Collect $0' in amount_explanation.build(result, guidance)['sentence']
+    summary = encounter_summary.build({**result, 'collection_guidance': guidance})
+    assert summary['collect_today_cents'] == 0
+    assert summary['complete'] is False
+    assert summary['estimated_total_patient_min_cents'] is None
+
+
+@pytest.mark.parametrize('invalid_amount', [-1, '3000', 100_000_001])
+def test_nmct_invalid_advance_is_replaced_by_zero_check_in(invalid_amount):
+    guidance = arrival_zero_default.apply(
+        {'payment_mode': 'insurance', 'nmct_fixed_office_copay_advance_enabled': True},
+        {'amount_cents': invalid_amount, 'reason': 'Unsupported amount'})
+    assert guidance['amount_cents'] == 0
+    assert guidance['unresolved_collection_reason'] == 'Unsupported amount'
+
+
+@pytest.mark.parametrize('payment_mode', ['cash', 'insurance'])
+def test_nmct_zero_default_preserves_supported_advance(payment_mode):
+    guidance = {'amount_cents': 3000, 'basis': 'practice_cash_price' if payment_mode == 'cash' else 'office_copay'}
+    assert arrival_zero_default.apply(
+        {'payment_mode': payment_mode, 'nmct_fixed_office_copay_advance_enabled': True},
+        guidance) is guidance
+
+
+def test_saved_explicit_nmct_cash_without_quote_reopens_with_zero_arrival():
+    result = scenario()
+    result.update(payment_mode='cash', service_date='2026-12-15')
+    result['price_range'].update(cash_complete=False, cash_min_cents=None,
+                                 cash_max_cents=None)
+    case = {'visit_review': {'payment_mode': 'cash'},
+            'previsit_context': {'result': result, 'source': {},
+                                 'inputs': {'service_date': '2026-12-15'}}}
+    with patch.object(api.network_participation, 'is_nmct_practice', return_value=True), \
+         patch.object(api.staff_store, 'list_library', return_value=[]):
+        reopened = api._previsit_result(case, 'nmct')
+    assert reopened['payment_mode'] == 'cash'
+    assert reopened['collection_guidance']['amount_cents'] == 0
+    assert reopened['collection_guidance']['basis'] == 'cash_price_pending'
+    assert reopened['encounter_summary']['collect_today_cents'] == 0
+    assert reopened['encounter_summary']['complete'] is False
+    assert reopened['payment_explanation']['reason_code'] == 'cash_collection_deferred'
+    trace = next(row for row in reopened['evidence_resolution'] if row['field'] == 'collection_amount')
+    assert any('self-pay price unresolved' in source['finding'] for source in trace['sources'])
 
 
 def test_bcbstx_ppo_unpriced_home_follow_up_defers_check_in_without_staff_confirmation():

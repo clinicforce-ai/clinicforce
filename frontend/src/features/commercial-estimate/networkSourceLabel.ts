@@ -4,6 +4,7 @@ const labels: Record<string, string> = {
     'Clinic attestation for matched Cigna PPO office provider · not payer confirmed',
   clinic_attested_aetna_office:
     'Clinic attestation for matched Aetna Choice POS II group and office provider · not payer confirmed',
+  clinic_product_roster: 'NMCT confirmed product list · not payer confirmed',
   clinic_library_absent: 'No contract linked to this exact payer product and provider',
   clinic_no_insurer_contract: 'No current insurer contract registered in the NMCT Clinical Library',
   clinic_nonparticipation_rule: 'Current scoped clinic nonparticipation rule',

@@ -24,7 +24,9 @@ export function AvailityArrivalAmount({ result }: { result: PrevisitEstimate }) 
     result.collection_guidance?.basis === 'qmb_protection'
   return (
     <div aria-label="Availity office visit planning amount">
-      <span className="visit-label">Amount to collect at visit · pending verification</span>
+      <span className="visit-label">
+        Amount to collect at visit{deferred ? '' : ' · pending verification'}
+      </span>
       <h3>{money(amount)}</h3>
       <p>
         {protectedPatient

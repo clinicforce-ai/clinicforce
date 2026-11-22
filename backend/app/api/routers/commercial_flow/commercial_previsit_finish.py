@@ -186,7 +186,8 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     # eCW self-pay fields do not override a recorded Medicare or UHC policy.
     result['payment_mode'] = review.get('payment_mode',
         'insurance' if united_healthcare or original_medicare else
-        'cash' if source.get('self_pay_recorded') or note_self_pay or _api.ecw_billing.cash_without_coverage(source) else 'insurance')
+        'cash' if source.get('self_pay_recorded') or note_self_pay or
+            (_api.ecw_billing.cash_without_coverage(source) and not _api.network_participation.is_nmct_practice(session['practice_id'])) else 'insurance')
     result['ecw_saved_eligibility'] = {k: v for k, v in (source.get('saved_eligibility') or {}).items() if not k.startswith('_')}
     labels = {'refresh_context': 'Visit details', 'selected_ids': 'Services', 'confirmed_units': 'Service quantities', 'payment_mode': 'Payment method',
               'cash_selection': 'Cash package', 'cash_visit_quote': 'Visit cash quote',
@@ -339,7 +340,8 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         apply_nmct_aetna_office_attestation(result, result['benefits'], session['practice_id'],
             inputs, pricing_source or source, (result.get('plan_details') or {}).get('stedi') or {})
     aetna_office_planning.attach(result, inputs)
-    result['collection_guidance'] = _api.collection_guidance.build(result, review)
+    result['collection_guidance'] = _api.arrival_zero_default.apply(
+        result, _api.collection_guidance.build(result, review), review)
     result.pop('botox_preview', None)
     if botox_review.is_botox_visit(inputs) and payload:
         result['botox_preview'] = botox_review.provisional_office_injection(

@@ -67,7 +67,7 @@ def build(result: dict, review: dict | None = None) -> dict:
                                    'The plan returned out-of-network benefit terms without establishing this provider tier' if benefits.get('network_status') == 'out_of_network' else
                                    f'No exact product and rendering-provider link to the {candidate_network} agreement' if candidate_network else
                                    f'Participation for this product and rendering provider is not established by the {(result.get("network_evidence") or {}).get("network_name")} agreement' if (result.get('network_evidence') or {}).get('network_name') else
-                                   'No provider participation result available'),
+                                   (result.get('network_evidence') or {}).get('reason') or 'No provider participation result available'),
                 'requirements': {}, 'requirement_sources': {}}
     if result.get('eligibility_timing', {}).get('status') == 'too_early':
         guidance.update(status='too_early', basis='appointment_window', reason=result['eligibility_timing']['message'],

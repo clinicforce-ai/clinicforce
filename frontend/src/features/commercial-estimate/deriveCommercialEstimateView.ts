@@ -11,7 +11,7 @@ import {
   provisionalSummaryExplanation,
 } from './provisionalEstimateAmounts'
 import { networkEvidenceStatus } from './networkEvidenceStatus'
-import { networkSourceLabel } from './networkSourceLabel'
+import { arrivalNetworkSource, stediOfficeAdvance } from './arrivalEvidence'
 import { emgOptionPresentation } from './emgOptionPresentation'
 import { healthselectZero } from './healthselectRows'
 import { officeOnlyAmount } from './officeOnlyAmount'
@@ -177,11 +177,6 @@ export function deriveCommercialEstimateView({
                     : contractCandidate
                       ? 'Contract match unavailable'
                       : 'Not determined'
-  const networkSource = networkSourceLabel(
-    result?.network_evidence?.decision,
-    benefits?.network_source,
-    guidance?.network_source,
-  )
   let networkTone =
     !result || tooEarly || result.recovery?.state === 'pending'
       ? ''
@@ -221,16 +216,21 @@ export function deriveCommercialEstimateView({
     ) &&
       result?.encounter_summary?.collect_today_cents === guidance?.amount_cents) ||
     guidance?.collection_rule?.mode === 'original_medicare_office_coinsurance'
+  const stediOffice = stediOfficeAdvance(result)
   const currentPayerAmount =
     benefits?.active === true &&
-    benefits.service_date_matches !== false &&
+    (benefits.service_date_matches !== false || stediOffice) &&
     payerEvidenceSafe &&
     financialSourceValid &&
     !participationConflict &&
     patientBenefitsBound &&
     ((!benefits.has_secondary && result?.recovery?.reason_code !== 'multiple_active_policies') ||
       guidance?.primary_secondary_copay === true) &&
-    (networkConfirmed || outOfNetworkCollection || independentOfficeCopay || unconfirmedTierAdvance)
+    (networkConfirmed ||
+      outOfNetworkCollection ||
+      independentOfficeCopay ||
+      unconfirmedTierAdvance ||
+      stediOffice)
   const healthselectZeroArrival =
     result != null &&
     healthselectZero(result) &&
@@ -299,7 +299,7 @@ export function deriveCommercialEstimateView({
   const billingInstruction = guidance?.billing_note?.kind === 'no_collection'
   const emgScenario = !billingInstruction && !cash && emg?.requested && !emg.included
   const cashAmount =
-    cash && supportedAmount && guidance?.basis === 'practice_cash_price'
+    supportedAmount && ['practice_cash_price', 'cash_price_pending'].includes(guidance?.basis || '')
       ? guidance.range_min_cents != null && guidance.range_max_cents != null
         ? range(guidance.range_min_cents, guidance.range_max_cents)
         : money(guidance.amount_cents!)
@@ -473,7 +473,7 @@ export function deriveCommercialEstimateView({
     guidance,
     contractCandidate,
     networkLabel,
-    networkSource,
+    networkSource: arrivalNetworkSource(result),
     networkTone,
     unavailableReason,
     requirementIssue,

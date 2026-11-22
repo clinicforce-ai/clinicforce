@@ -210,13 +210,13 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
     if result.get('payment_mode') == 'cash':
         named_package = (result.get('cash_quote') or {}).get('selection') and (result.get('cash_quote') or {}).get('complete')
         visit_reason = (result.get('cash_quote') or {}).get('reason')
-        if visit_reason:
-            cause, code = visit_reason, 'clinician_cash_quote'
-        elif not result.get('cash_fallback'):
-            cause, code = 'cash was selected for the planned care', 'cash_selected'
+        if visit_reason: cause, code = visit_reason, 'clinician_cash_quote'
+        elif not result.get('cash_fallback'): cause, code = 'cash was selected for the planned care', 'cash_selected'
         else:
             cause, code = _cash_cause(result, failure, recovery, card, network, benefits, unpriced, missing)
-        sentence = (f"No payment is due now because the recorded payment covers NMCT’s cash price{', which was used because ' + cause if code != 'cash_selected' else ''}"
+        if basis == 'cash_price_pending': code = 'cash_collection_deferred'
+        sentence = (guidance['reason'].rstrip('.') if code == 'cash_collection_deferred' else
+                    f"No payment is due now because the recorded payment covers NMCT’s cash price{', which was used because ' + cause if code != 'cash_selected' else ''}"
                     if amount == 0 and paid else
                     'No visit amount is available because no billable CPT is documented for this visit; select the planned service and recheck benefits and prices' if amount is None and code == 'planned_cpt_missing' else
                     f"Collect {_money(amount)} as the clinician-approved cash price because {cause}"
@@ -230,7 +230,7 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
     elif amount is not None:
         if basis == 'claim_after_service':
             cause, code = _cash_cause(result, failure, recovery, card, network, benefits, unpriced, missing, guidance.get('source_errors'))
-            if (guidance.get('collection_rule') or {}).get('mode') in {'aetna_choice_family_oop_deferral', 'aetna_televisit_oop_deferral', 'uhc_choice_plus_family_oop_deferral', 'uhc_choice_plus_unassigned_oop_deferral', 'individual_oop_zero_deferral', 'bcbstx_plus_office_deferral', 'bcbstx_botox_family_oop_deferral', 'bcbstx_ppo_televisit_deferral'}:
+            if (guidance.get('collection_rule') or {}).get('mode') in {'clinic_zero_arrival_default', 'aetna_choice_family_oop_deferral', 'aetna_televisit_oop_deferral', 'uhc_choice_plus_family_oop_deferral', 'uhc_choice_plus_unassigned_oop_deferral', 'individual_oop_zero_deferral', 'bcbstx_plus_office_deferral', 'bcbstx_botox_family_oop_deferral', 'bcbstx_ppo_televisit_deferral'}:
                 sentence, code = (guidance['reason'], 'collection_deferred')
             elif (guidance.get('collection_rule') or {}).get('mode') == 'cms_msp_part_b_deferral':
                 sentence, code = ('Collect $0.00 at arrival: the payer reports Original Medicare Part B as secondary. Submit the claims and determine any patient balance from the remittances; the office copay is not due at check-in', 'collection_deferred')
@@ -409,7 +409,7 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
         elif cause_code in {'provider_enrollment', 'multiple_active_policies', 'policy_identity_mismatch',
                             'payer_identity_match_missing',
                             'coverage_status_conflict', 'coverage_date_invalid',
-                            'service_inactive', 'service_date_mismatch', 'service_benefits_historical',
+                            'service_inactive', 'service_date_mismatch', 'payer_service_date_mismatch', 'service_benefits_historical',
                             'service_secondary_coverage', 'service_identity_mismatch', 'service_network_conflict',
                             'no_policy_returned', 'card_conflict', 'member_identity_unverified',
                             'clinic_product_mismatch', 'clinic_contract_missing', 'clinic_payer_connection_draft',

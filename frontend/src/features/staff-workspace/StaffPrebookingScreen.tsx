@@ -3,6 +3,7 @@ import { ArrowLeft } from 'lucide-react'
 import { ApiError } from '../../services/api/client'
 import StaffPrebookingResult from './StaffPrebookingResult'
 import StaffPrebookingPlan from './StaffPrebookingPlan'
+import { clinicFallbackReason } from '../commercial-estimate/isClinicZeroArrival'
 import {
   checkPrebookingEstimate,
   getPrebookingContexts,
@@ -36,7 +37,6 @@ export default function StaffPrebookingScreen({
   const [contextId, setContextId] = useState('')
   const [busy, setBusy] = useState<'planning' | 'checking' | null>(null)
   const [error, setError] = useState('')
-  const [payerCheckUnavailable, setPayerCheckUnavailable] = useState(false)
   const [form, setForm] = useState<PrebookingDetails>(empty)
   const [reason, setReason] = useState('')
   const [visitType, setVisitType] = useState<VisitType>('new')
@@ -88,14 +88,12 @@ export default function StaffPrebookingScreen({
     setForm((current) => ({ ...current, [key]: value }))
     setResult(null)
     setError('')
-    setPayerCheckUnavailable(false)
   }
   function changeReason(value: string) {
     setReason(value)
     setPlan(null)
     setSelected({})
     setResult(null)
-    setPayerCheckUnavailable(false)
   }
   function toggle(code: string, group?: PrebookingPlan['groups'][number]) {
     setSelected((current) => {
@@ -115,7 +113,6 @@ export default function StaffPrebookingScreen({
   async function check(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (busy) return
-    setPayerCheckUnavailable(false)
     if (!form.payer_id) {
       setError('Choose the insurer from the search results.')
       return
@@ -138,7 +135,6 @@ export default function StaffPrebookingScreen({
     setBusy(plan ? 'checking' : 'planning')
     setResult(null)
     setError('')
-    let estimateRequested = false
     try {
       const planned = plan || (await planPrebookingServices(reason.trim(), visitType))
       if (!plan) setPlan(planned)
@@ -159,7 +155,6 @@ export default function StaffPrebookingScreen({
       }
       if (!plan) setSelected(included)
       setBusy('checking')
-      estimateRequested = true
       setResult(
         await checkPrebookingEstimate({
           ...form,
@@ -175,13 +170,6 @@ export default function StaffPrebookingScreen({
         }),
       )
     } catch (caught) {
-      setPayerCheckUnavailable(
-        estimateRequested &&
-          (!(caught instanceof ApiError) ||
-            caught.status === 0 ||
-            caught.status === 408 ||
-            caught.status >= 500),
-      )
       setError(
         caught instanceof ApiError && [0, 408].includes(caught.status)
           ? 'The request may have reached Stedi. Check Stedi activity before sending another inquiry.'
@@ -214,21 +202,18 @@ export default function StaffPrebookingScreen({
           {error}
         </p>
       )}
-      {nmct &&
-        !result &&
-        (payerCheckUnavailable || optionsState === 'failed' || payerNotListed) && (
-          <div className="prebooking-cost-card is-patient" role="status">
-            <span>Collect on arrival</span>
-            <strong>$0.00</strong>
-            <small>
-              {payerNotListed
-                ? 'Stedi did not list an insurer matching this search, so no payer benefit amount was obtained. '
-                : ''}
-              NMCT policy: collect $0 at arrival; bill after coverage and claim review. This does
-              not mean the visit costs $0.
-            </small>
-          </div>
-        )}
+      {nmct && !result && (
+        <div className="prebooking-cost-card is-patient" role="status">
+          <span>Collect on arrival</span>
+          <strong>$0.00</strong>
+          <small>
+            {payerNotListed
+              ? 'Stedi did not list an insurer matching this search, so no payer benefit amount was obtained. '
+              : ''}
+            {clinicFallbackReason}
+          </small>
+        </div>
+      )}
       <form className="staff-panel" onSubmit={(event) => void check(event)} autoComplete="off">
         <h2>Patient and insurance</h2>
         <div className="staff-two-columns">

@@ -145,7 +145,10 @@ def build(result: dict, source: dict) -> list[dict]:
         'Resolve the remaining product, network, benefit or allowance evidence; clinic collection policy is separate.')
     record('collection_amount', guidance.get('amount_cents') is not None, [
         ('shared estimator', guidance.get('basis') or 'no supported basis'),
-        ('clinic collection rule', 'approved route decision applied' if guidance.get('collection_rule') else
+        ('clinic collection rule', ('NMCT no-upfront default; self-pay price unresolved'
+         if guidance.get('basis') == 'cash_price_pending' else 'NMCT no-upfront default; patient share unresolved')
+         if (guidance.get('collection_rule') or {}).get('mode') == 'clinic_zero_arrival_default' else
+         'approved route decision applied' if guidance.get('collection_rule') else
          'member QMB protection' if guidance.get('basis') == 'qmb_protection' else
          'payer out-of-pocket limit' if guidance.get('basis') == 'out_of_pocket_limit' else
          'visit-linked eCW billing instruction' if guidance.get('basis') == 'ecw_billing_note' else

@@ -43,6 +43,20 @@ def test_bound_payer_with_prior_day_echo_explains_date_instead_of_identity(reaso
     assert 'visit date' in explanation['sentence'].lower()
 
 
+def test_prior_date_with_resolved_office_fee_does_not_claim_price_is_unknown():
+    result = {'payer': 'Aetna', 'service_date': '2026-12-15',
+              'identity': {'status': 'matched', 'match_version': 2,
+                           'binding': 'synthetic-binding'},
+              'benefits': {'active': True, 'service_date_matches': False,
+                           'returned_service_dates': {'start': '2026-12-13'}},
+              'price_range': {'mode': 'services', 'lines': [
+                  {'code': '99213', 'allowed_cents': 12000,
+                   'rate_resolution': {'status': 'RESOLVED'}, 'calculation': None}]}}
+    explanation = amount_explanation.build(result, {'amount_cents': None})
+    assert explanation['reason_code'] == 'payer_service_date_mismatch'
+    assert 'price' not in explanation['sentence'].lower()
+
+
 def test_missing_identity_fields_name_the_actual_payer():
     result = {'payer': 'Blue Cross Blue Shield Tx',
               'identity': {'missing_fields': ['member_id', 'patient_demographics']}}

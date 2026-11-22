@@ -98,6 +98,67 @@ def test_exact_roster_keys_cover_all_payer_families_and_card_logo_forms():
     assert network_product_roster.product_key('PHCS (Logo on back of card)') == 'phcs'
 
 
+def test_roster_can_use_any_shared_product_word_except_insurer_name(monkeypatch):
+    rows = [
+        {'product_name': 'Aetna Gold Plus', 'source_reference': 'clinic-roster'},
+        {'product_name': 'Aetna Choice POS II (Open Access)', 'source_reference': 'clinic-roster'},
+    ]
+    monkeypatch.setattr(commercial_store, 'matching_network_product', lambda *_: None)
+    monkeypatch.setattr(commercial_store, 'list_network_products', lambda *_: rows)
+    result, benefits, inputs, source = case()
+    result['payer'] = 'Aetna'
+    source['payer_plan_names'] = ['Aetna Gold Select']
+    source['payer_plan_bound'] = False  # A payer date echo must not erase the patient-bound product.
+    benefits['service_date_matches'] = False
+    benefits['coverage_evidence'] = {'status': 'ACTIVE', 'start': '2026-01-01'}
+    assert network_product_roster.apply(result, benefits, network_participation.NMCT_PRACTICE_ID,
+                                        'Aetna', inputs, source)
+    assert benefits['network_status'] == 'in_network'
+    assert result['network_evidence']['match_kind'] == 'shared_product_word'
+    assert result['network_evidence']['matched_words'] == ['gold']
+    assert not network_product_roster.matches_contract_network(
+        {'practice_id': network_participation.NMCT_PRACTICE_ID, 'network_name': 'Aetna Gold Plus',
+         'status': 'verified', 'plan_matcher': 'Gold Plus'}, source, 'Aetna', DAY)
+
+
+def test_roster_shared_word_does_not_match_insurer_only_or_unbound_patient(monkeypatch):
+    monkeypatch.setattr(commercial_store, 'matching_network_product', lambda *_: None)
+    monkeypatch.setattr(commercial_store, 'list_network_products', lambda *_:
+                        [{'product_name': 'Aetna Gold Plus', 'source_reference': 'clinic-roster'}])
+    result, benefits, inputs, source = case()
+    result['payer'] = 'Aetna'
+    source['payer_plan_names'] = ['Aetna Silver HMO']
+    assert not network_product_roster.apply(result, benefits, network_participation.NMCT_PRACTICE_ID,
+                                            'Aetna', inputs, source)
+    source['payer_plan_names'] = ['Aetna Gold Select']
+    benefits['identity'] = {'status': 'review', 'match_version': 2}
+    assert not network_product_roster.apply(result, benefits, network_participation.NMCT_PRACTICE_ID,
+                                            'Aetna', inputs, source)
+
+
+def test_saved_aetna_plan_uses_shared_word_even_with_payer_date_echo(monkeypatch):
+    monkeypatch.setattr(guard.staff_store, 'list_library', lambda *_: [])
+    monkeypatch.setattr(guard, 'scoped_admin_nonparticipation', lambda *_: None)
+    monkeypatch.setattr(commercial_store, 'matching_network_product', lambda *_: None)
+    monkeypatch.setattr(commercial_store, 'list_network_products', lambda *_:
+                        [{'product_name': 'Open Choice PPO', 'source_reference': 'clinic-roster'}])
+    result, benefits, inputs, source = case()
+    result['payer'] = 'Aetna'
+    benefits.update(service_date_matches=False,
+                    coverage_evidence={'status': 'ACTIVE', 'start': '2026-01-01'})
+    source.update(payer_plan_bound=False, payer_plan_names=['BP Medicare PPO ESA'])
+    result.update(benefits=benefits, plan_details={'stedi': {'names': source['payer_plan_names']}},
+                  price_range={'complete': False, 'lines': []})
+    saved = {'previsit_context': {'inputs': inputs, 'source': source}}
+    guard.recheck_saved_network_evidence(result, saved, network_participation.NMCT_PRACTICE_ID, None)
+    assert benefits['network_status'] == 'in_network'
+    assert result['network_evidence']['match_kind'] == 'shared_product_word'
+    assert result['network_evidence']['matched_words'] == ['ppo']
+    benefits['coverage_evidence']['end'] = '2026-11-17'
+    guard.recheck_saved_network_evidence(result, saved, network_participation.NMCT_PRACTICE_ID, None)
+    assert benefits['network_status'] == 'unknown'
+
+
 def test_saved_roster_tier_is_cleared_when_product_is_revoked(monkeypatch):
     monkeypatch.setattr(guard.staff_store, 'list_library', lambda *_: [])
     monkeypatch.setattr(guard, 'scoped_admin_nonparticipation', lambda *_: None)
