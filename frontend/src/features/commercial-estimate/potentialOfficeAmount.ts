@@ -36,6 +36,8 @@ export function potentialOfficeIssue(issue: Issue, payer = 'payer'): string {
       return `eCW ${identityLabels[issue.field || ''] || issue.field}: “${issue.ecw || 'not recorded'}”; ${payer} returned “${issue.payer || 'not returned'}”.`
     case 'patient_identity_unbound':
       return 'The returned policy has no patient identity match in the saved visit.'
+    case 'copay_period_unverified':
+      return 'The payer described a specialist visit copay but did not specify its billing period in the source row. Confirm it applies once to this office visit.'
     case 'medicare_protection_unknown':
       return 'QMB billing-protection status is unknown for this Medicare member. If QMB applies, the office copay cannot be charged.'
     case 'qmb_protected':

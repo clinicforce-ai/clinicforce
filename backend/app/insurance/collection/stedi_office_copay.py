@@ -158,11 +158,11 @@ def potential(result: dict, review: dict | None = None) -> dict | None:
     row = rows[0]
     note = str(row.get('payer_note') or '')
     if (row.get('amount_cents') != copay or row.get('service_type_code') != '98'
-            or row.get('network') not in {'IN_NETWORK', 'Y'}
-            or str(row.get('coverage_level') or '').upper() not in {'INDIVIDUAL', 'IND'}
-            or row.get('time_period') not in {'VISIT', '27'}
+            or row.get('network') not in {'IN_NETWORK', 'IN_AND_OUT_OF_NETWORK', 'Y'}
+            or str(row.get('coverage_level') or '').upper() not in {'INDIVIDUAL', 'IND', 'EMPLOYEE_ONLY'}
+            or row.get('time_period') not in {'VISIT', '27', '', None}
             or row.get('places_of_service') and '11' not in row['places_of_service']
-            or not re.search(r'\boffice\b', note, re.I)
+            or not re.search(r'\b(?:office|visit)\b', note, re.I)
             or not re.search(r'\b(?:specialist|primary care|pcp)\b', note, re.I)):
         return None
     caps = [copay]
@@ -186,6 +186,8 @@ def potential(result: dict, review: dict | None = None) -> dict | None:
     if amount == 0:
         return None
     issues = []
+    if row.get('time_period') not in {'VISIT', '27'}:
+        issues.append({'code': 'copay_period_unverified'})
     identity = result.get('identity') or benefits.get('identity') or {}
     for difference in [*(identity.get('differences') or []),
                        *(identity.get('policy_differences') or [])]:
@@ -193,7 +195,8 @@ def potential(result: dict, review: dict | None = None) -> dict | None:
                 and 'ecw' in difference and 'payer' in difference):
             issues.append({'code': 'identity_difference', 'field': difference['field'],
                            'ecw': str(difference['ecw']), 'payer': str(difference['payer'])})
-    if identity.get('status') == 'review' and not issues:
+    if identity.get('status') == 'review' and not any(
+            issue['code'] == 'identity_difference' for issue in issues):
         issues.append({'code': 'patient_identity_unbound'})
     names = (((result.get('plan_details') or {}).get('stedi') or {}).get('names') or [])
     protection = result.get('billing_protection') or {}
@@ -260,5 +263,5 @@ def potential(result: dict, review: dict | None = None) -> dict | None:
             'oop_remaining_cents': min(oop_caps) if oop_caps else None,
             'separate_copay_remaining_cents': separate_copay_remaining,
             'verified_payments_cents': paid, 'office_code': line['code'],
-            'other_codes': other_codes, 'source': 'Stedi STC 98 office copay',
+            'other_codes': other_codes, 'source': 'Stedi STC 98 specialist visit copay',
             'issues': issues}

@@ -137,9 +137,9 @@ def test_nmct_reports_potential_office_copay_with_exact_blockers():
                                  patient_max_cents=None, service_issues=[])
     line = result['price_range']['lines'][0]
     row = {'id': 'office-copay', 'kind': 'copay', 'service_type_code': '98',
-           'network': 'IN_NETWORK', 'coverage_level': 'INDIVIDUAL', 'time_period': 'VISIT',
+           'network': 'IN_AND_OUT_OF_NETWORK', 'coverage_level': 'INDIVIDUAL', 'time_period': '',
            'amount_cents': 3000, 'places_of_service': ['11'],
-           'payer_note': 'Physician office visit specialist'}
+           'payer_note': 'Specialist visit'}
     line.update(code='99213', allowed_cents=9633, calculation=None)
     line['benefits'].update(copay_cents=3000, copay_id='office-copay', copay_period='VISIT',
         oop_remaining_cents=102747, reported_options=[row])
@@ -150,6 +150,7 @@ def test_nmct_reports_potential_office_copay_with_exact_blockers():
     assert medicare['potential_office_collection']['amount_cents'] == 3000
     assert medicare['potential_office_collection']['office_code'] == '99213'
     assert 'medicare_protection_unknown' in {issue['code'] for issue in medicare['potential_office_collection']['issues']}
+    assert 'copay_period_unverified' in {issue['code'] for issue in medicare['potential_office_collection']['issues']}
 
     mismatched = deepcopy(result)
     mismatched['plan_details']['stedi']['names'] = ['BP Choice PPO']
@@ -184,6 +185,8 @@ def test_nmct_reports_potential_office_copay_with_exact_blockers():
     imaging['price_range']['lines'][0]['benefits'].update(copay_cents=8000,
         oop_remaining_cents=319197)
     imaging['price_range']['lines'][0]['benefits']['reported_options'][0]['amount_cents'] = 8000
+    imaging['price_range']['lines'][0]['benefits']['reported_options'][0].update(
+        network='IN_NETWORK', coverage_level='EMPLOYEE_ONLY')
     imaging['price_range']['lines'].append({'id': 'imaging', 'code': '70552', 'units': 1,
         'description': 'Brain MRI', 'allowed_cents': None, 'issues': ['Rate unavailable']})
     imaging['benefits']['oop_remaining_cents'] = 319197
