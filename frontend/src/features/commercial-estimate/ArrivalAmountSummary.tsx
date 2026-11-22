@@ -19,7 +19,8 @@ import { uhcNmOfficeReference } from './uhcNmOfficeReference'
 import UhcNmOfficeArrival from './UhcNmOfficeArrival'
 import ClinicZeroArrival from './ClinicZeroArrival'
 import { isClinicZeroArrival } from './isClinicZeroArrival'
-import StediOfficeArrival, { isStediOfficeArrival } from './StediOfficeArrival'
+import StediOfficeArrival from './StediOfficeArrival'
+import { isStediOfficeArrival } from './arrivalEvidence'
 
 export default function ArrivalAmountSummary({
   model,

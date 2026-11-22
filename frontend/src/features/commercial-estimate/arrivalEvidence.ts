@@ -1,5 +1,13 @@
 import type { PrevisitEstimate } from '../../services/api/commercial-estimator'
+import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { networkSourceLabel } from './networkSourceLabel'
+
+export function isStediOfficeArrival(result: PrevisitEstimate, model: CommercialEstimateModel) {
+  return (
+    model.supportedAmount &&
+    result.collection_guidance?.collection_rule?.mode === 'nmct_stedi_provisional_office_copay'
+  )
+}
 
 export function arrivalNetworkSource(result: PrevisitEstimate | null | undefined) {
   const evidence = result?.network_evidence
