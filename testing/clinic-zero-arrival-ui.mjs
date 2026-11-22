@@ -47,6 +47,39 @@ const table = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
   { result, model }))
 assert.match(table, /Amount to collect at visit.*\$0\.00/s)
 
+for (const scenario of [
+  { amount: 3000, code: '99213', issues: [{ code: 'medicare_protection_unknown' }],
+    expected: /\$30\.00.*QMB billing-protection status is unknown/s },
+  { amount: 3000, code: '99203', issues: [
+    { code: 'identity_difference', field: 'first_name', ecw: 'Morgan', payer: 'Megan' },
+    { code: 'identity_difference', field: 'member_id', ecw: 'A123', payer: 'B456' },
+    { code: 'identity_difference', field: 'subscriber_first', ecw: 'Morgan', payer: 'Megan' }],
+    expected: /eCW patient first name.*Morgan.*Megan.*eCW member ID.*A123.*B456.*eCW subscriber first name/s },
+  { amount: 8000, code: '99203', issues: [
+    { code: 'office_not_selected', office_code: '99203' },
+    { code: 'other_service_unpriced', codes: ['70552'],
+      services: [{ code: '70552', description: 'Brain MRI without contrast' }], selection_status: 'preview' },
+    { code: 'mri_contrast_code_mismatch', reported_cpt: '70552', expected_code: '70551' }],
+    expected: /\$80\.00.*CPT 99203 is a proposal.*CPT 70552.*no resolved price.*70552 means brain MRI with contrast/s },
+]) {
+  const conditional = { ...result, collection_guidance: { ...result.collection_guidance,
+    potential_office_collection: { amount_cents: scenario.amount,
+      copay_cents: scenario.amount, allowed_cents: scenario.amount + 1325,
+      oop_remaining_cents: 100000, verified_payments_cents: 0,
+      office_code: scenario.code, other_codes: scenario.amount === 8000 ? ['70552'] : [],
+      source: 'Stedi STC 98 office copay', issues: scenario.issues } } }
+  const conditionalModel = deriveCommercialEstimateView({ result: conditional,
+    appointments: [], selectedVisit: '', busy: null, error: null, readOnly: true,
+    recovering: false })
+  const conditionalHeadline = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
+    { result: conditional, model: conditionalModel, partialCopay: null, visibleAmount: true }))
+  assert.match(conditionalHeadline, /Potential office amount to collect.*Amount to collect now:.*\$0\.00/s)
+  assert.match(conditionalHeadline, scenario.expected)
+  const conditionalTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+    { result: conditional, model: conditionalModel }))
+  assert.match(conditionalTable, /Potential office amount.*\$0\.00/s)
+}
+
 const returnedDate = { ...result,
   network_evidence: { source: 'clinic_product_roster', match_kind: 'shared_product_word',
     matched_words: ['gold'] },

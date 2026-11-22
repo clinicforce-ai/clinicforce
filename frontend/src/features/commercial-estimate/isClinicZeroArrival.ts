@@ -6,6 +6,12 @@ export const clinicFallbackReason =
 
 export function isClinicZeroArrival(result: PrevisitEstimate, model: CommercialEstimateModel) {
   if (
+    result.collection_guidance?.potential_office_collection &&
+    !model.previousEstimate &&
+    !model.calculating
+  )
+    return true
+  if (
     model.session?.arrival_collection_default_cents === 0 &&
     (model.previousEstimate || model.calculating || !model.supportedAmount)
   )

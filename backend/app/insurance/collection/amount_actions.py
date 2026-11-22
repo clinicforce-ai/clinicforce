@@ -26,6 +26,21 @@ def _mismatch_fields(result: dict) -> str:
     return ', '.join(label for field, label in labels.items() if field in fields)
 
 
+def _mismatch_details(result: dict) -> str:
+    """State the actual eCW and payer values behind an identity review."""
+    identity = result.get('identity') or (result.get('benefits') or {}).get('identity') or {}
+    labels = {'first_name': 'patient first name', 'last_name': 'patient surname',
+              'birth_date': 'patient date of birth', 'member_id': 'member ID',
+              'subscriber_first': 'subscriber first name', 'subscriber_last': 'subscriber surname',
+              'relationship': 'subscriber relationship'}
+    rows = [*(identity.get('differences') or []), *(identity.get('policy_differences') or [])]
+    return '; '.join(
+        f"{labels[row['field']]}: eCW {row.get('ecw') or 'not recorded'}, "
+        f"payer {row.get('payer') or 'not returned'}"
+        for row in rows if isinstance(row, dict) and row.get('field') in labels
+        and 'ecw' in row and 'payer' in row)
+
+
 def _collection_action(code: str, result: dict, source_errors: list[dict] | None = None) -> str:
     botox = (result.get('service_plan') or {}).get('kind') == 'botox' or result.get('botox_review') is not None
     line_blocker = selected_service_blocker((result.get('benefits') or {}).get('network_status') or 'unknown',
@@ -54,7 +69,7 @@ def _collection_action(code: str, result: dict, source_errors: list[dict] | None
         failure_reason = (result.get('eligibility_failure') or {}).get('reason_code')
         return ENROLLMENT_REASON_ACTION.get(failure_reason, ENROLLMENT_DEFAULT)[1]
     if code == 'multiple_active_policies':
-        mismatches = _mismatch_fields(result)
+        mismatches = _mismatch_details(result) or _mismatch_fields(result)
         recovery = result.get('recovery') or {}
         count = recovery.get('active_policy_count')
         if type(count) is not int:
@@ -118,8 +133,10 @@ def _collection_action(code: str, result: dict, source_errors: list[dict] | None
                 + (f' and reconcile {mismatches}' if mismatches else '') + ' before billing')
     if code == 'policy_identity_mismatch':
         mismatches = _mismatch_fields(result)
+        details = _mismatch_details(result)
         payer = _payer_label(result, 'the payer')
-        action = f'reconcile {mismatches or "patient identity"} with {payer}'
+        action = (f'reconcile {details} with {payer}' if details else
+                  f'reconcile {mismatches or "patient identity"} with {payer}')
         service_plan = result.get('service_plan') or {}
         if botox and not result.get('codes'):
             action += ', then select the documented injection, drug units and any separate E/M service'
