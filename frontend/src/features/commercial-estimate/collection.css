@@ -41,6 +41,28 @@
   max-width: 49ch;
 }
 
+.potential-office-review {
+  margin-top: 16px;
+  max-width: 590px;
+  color: var(--ve-muted);
+  font-size: 13px;
+}
+
+.potential-office-review summary {
+  color: var(--ve-ink);
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.potential-office-review ul {
+  padding-left: 20px;
+  line-height: 1.5;
+}
+
+.potential-office-review li + li {
+  margin-top: 6px;
+}
+
 .visit-cost-table {
   grid-column: 1 / -1;
   grid-row: 2;

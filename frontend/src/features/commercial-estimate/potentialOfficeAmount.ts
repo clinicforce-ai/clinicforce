@@ -24,6 +24,22 @@ export function potentialOfficeFormula(value: Potential): string {
   return `max($0.00, min(${caps.join(', ')}) − ${money(value.verified_payments_cents)} verified prior payments) = ${money(value.amount_cents)}. This covers CPT ${value.office_code} only.`
 }
 
+export function potentialOfficeIssueLabel(issue: Issue): string {
+  if (issue.code === 'identity_difference')
+    return identityLabels[issue.field || ''] || issue.field || 'identity'
+  return (
+    {
+      copay_period_unverified: 'copay period',
+      medicare_protection_unknown: 'QMB status',
+      qmb_protected: 'QMB protection',
+      office_not_selected: 'office CPT selection',
+      other_service_unpriced: 'other service price',
+      mri_contrast_code_mismatch: 'MRI code and description',
+      network_tier_unknown: 'network tier',
+    }[issue.code] || issue.code.replaceAll('_', ' ')
+  )
+}
+
 export function potentialOfficeIssue(issue: Issue, payer = 'payer'): string {
   const services = (issue.services || []).map(
     (service) => `CPT ${service.code}${service.description ? ` (${service.description})` : ''}`,
