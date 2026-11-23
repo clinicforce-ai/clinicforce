@@ -104,16 +104,15 @@ def build(result: dict, review: dict | None = None) -> dict:
         and set(recommended) == set(proposed_ids) == set(priced_ids))
     preview_office_copay = unapproved_services and preview_office_copay_applies(benefits, price, lines)
     preview_zero_oop = unapproved_services and preview_zero_individual_oop_applies(benefits, price, lines)
-    safe = (benefits.get('active') is True and benefits.get('service_date_matches') is not False
+    safe_without_order = (benefits.get('active') is True and benefits.get('service_date_matches') is not False
             and (result.get('card_check') or {}).get('independent_ecw_check') is not True and result.get('refresh_requires_selection') is not True
             and (not unapproved_services or suggested_plan or preview_office_copay or preview_zero_oop)
             and not benefits.get('coverage_status_conflict')
             and not benefits.get('coverage_dates_invalid')
-            and line_blocker is None
+            and (line_blocker is None or line_blocker[0] == 'service_secondary_coverage')
             and benefits.get('historical_only') is not True
             and (collection_benefits.get('network_status') != 'out_of_network' or verified_out_of_network(benefits))
             and not benefits.get('network_conflict')
-            and (not benefits.get('has_secondary') and not unresolved_order or primary_secondary_copay)
             and not same_policy_conflict and not (primary_secondary_copay and qmb_protected)
             and patient_benefits_bound(identity) and not price.get('service_issues') and not adverse
             and not qmb_unresolved
@@ -129,9 +128,10 @@ def build(result: dict, review: dict | None = None) -> dict:
             if value is not None and (type(value) is not int or not 0 <= value <= 100_000_000):
                 source_errors.append({'path': label + '.' + key, 'kind': 'invalid_calculation',
                                       'message': 'Invalid financial evidence: calculation returned an invalid amount.'})
-    safe = safe and not source_errors
-    medicare_office_share = secondary_order.original_medicare_office_share(result, safe=bool(safe), qmb_protected=bool(qmb_protected))
-    amount = None
+    safe_without_order = safe_without_order and not source_errors
+    safe = safe_without_order and line_blocker is None and (not benefits.get('has_secondary') and not unresolved_order or primary_secondary_copay)
+    medicare_office_share = secondary_order.original_medicare_office_share(result, safe=bool(safe_without_order), qmb_protected=bool(qmb_protected))
+    amount = secondary_order.apply_primary_medicare_advance(guidance, medicare_office_share if benefits.get('has_secondary') else None)
     cigna_oap_televisit = False
     if safe and preview_zero_oop and verified_in_network(benefits) and not primary_secondary_copay:
         amount = 0
@@ -260,7 +260,7 @@ def build(result: dict, review: dict | None = None) -> dict:
             reason='Provisional in-network advance from the clinic-approved BCBS Texas fee proxy and member diagnostic benefits. The payer allowed amount is unknown.')
         assumptions.append('The advance uses clinic BCBS Texas fee references, not a payer-confirmed allowance. Final responsibility follows the processed claim.')
     amount = secondary_order.allowed_advance(amount, medicare_secondary)
-    oon_advance = (not verified_out_of_network(benefits) or
+    oon_advance = (medicare_office_share is not None or not verified_out_of_network(benefits) or
         policy.get('allow_supported_oon_advance') is True and
         (not any(line.get('allowed_basis') == 'medicare_fee_schedule' for line in lines)
          or policy.get('allow_medicare_schedule_advance') is True))
@@ -306,7 +306,7 @@ def build(result: dict, review: dict | None = None) -> dict:
     if amount is not None and amount > 0 and medicare_office_share is not None: guidance['collection_rule'] = {'mode': 'original_medicare_office_coinsurance', 'reference': 'Clinic-approved Medicare fee schedule and dated Part B benefit'}
     if amount is not None and amount > 0 and uhc_registration_copay:
         guidance['collection_rule'] = {'mode': 'uhc_choice_plus_registration_copay', 'reference': 'Current member-bound Choice Plus specialist office benefit and clinic network agreement'}
-    elif amount is not None and amount > 0 and policy_approved and guidance['basis'] not in {'ecw_billing_note', 'cigna_refundable_office_copay'}:
+    elif amount is not None and amount > 0 and policy_approved and medicare_office_share is None and guidance['basis'] not in {'ecw_billing_note', 'cigna_refundable_office_copay'}:
         guidance['collection_rule'] = {'mode': policy_mode, 'reference': policy['reference'],
                                        'approved_at': policy['approved_at']}
     elif amount is not None and amount > 0 and clinic_delegated_copay:
@@ -463,7 +463,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         terms = (line.get('benefits') or {}) if mapped else {}
         guidance['services'].append({'id': line.get('id'), 'code': line.get('code'),
             'benefit_source': line.get('benefit_source') or result.get('benefit_source'), 'benefit': (line.get('benefit_basis') or 'Applicable service benefits') if mapped else 'Benefit determined when claim is processed',
-            'patient_cents': (line.get('calculation') or {}).get('patient_cents') if safe and amount is not None and guidance['basis'] != 'claim_after_service' else None,
+            'patient_cents': (guidance.get('primary_medicare_share_cents') if guidance['basis'] == 'medicare_primary_coinsurance_advance' else (line.get('calculation') or {}).get('patient_cents') if safe and amount is not None and guidance['basis'] != 'claim_after_service' else None),
             'oop_remaining_cents': terms.get('oop_remaining_cents'),
             'copay_cents': terms.get('copay_cents'), 'coinsurance_percent': terms.get('coinsurance_percent'),
             'deductible_remaining_cents': terms.get('deductible_remaining_cents'), 'deductible_annual_cents': terms.get('deductible_annual_cents'),

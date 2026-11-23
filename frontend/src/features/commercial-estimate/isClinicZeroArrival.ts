@@ -5,6 +5,7 @@ export const clinicFallbackReason =
   'No payment is requested at arrival under the clinic default. The current amount is unresolved; any lawful balance follows coverage, the processed claim, or applicable cash terms.'
 
 export function isClinicZeroArrival(result: PrevisitEstimate, model: CommercialEstimateModel) {
+  if (result.eligibility_request_state === 'pending') return false
   if (
     result.collection_guidance?.potential_office_collection &&
     !model.previousEstimate &&

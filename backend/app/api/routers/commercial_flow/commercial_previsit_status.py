@@ -328,7 +328,7 @@ def _recheck_saved_payer_allowance(result: dict, case: dict, practice_id: str) -
     result.pop('arrival_collection', None)
     result.pop('planning_estimate', None)
 def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
-    result = _api.deepcopy(case['previsit_context']['result'])
+    result = {**_api.deepcopy(case['previsit_context']['result']), 'eligibility_request_state': (case.get('previsit') or {}).get('request_state')}
     upgrade_saved_post_botox_followup(result, case)
     refresh_saved_aetna_identity(result, case)
     suppress_saved_ambiguous_combined_zero_oop(result)

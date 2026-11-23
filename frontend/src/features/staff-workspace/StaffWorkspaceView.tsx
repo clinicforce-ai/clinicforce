@@ -161,11 +161,7 @@ export default function StaffWorkspaceView({ model }: { model: StaffWorkspaceMod
 
   if (busy === 'lookup')
     return (
-      <CommercialEstimateLoading
-        practiceName={session.practice_name}
-        patient={lookupDetails}
-        arrivalCollectionDefaultCents={session.arrival_collection_default_cents}
-      />
+      <CommercialEstimateLoading practiceName={session.practice_name} patient={lookupDetails} />
     )
 
   if (screen === 'add' && camera)
@@ -326,7 +322,7 @@ export default function StaffWorkspaceView({ model }: { model: StaffWorkspaceMod
             onOpenIntake={openIntake}
           />
         )}
-        {screen === 'lookup' && <StaffEcwLookupScreen model={model} session={session} />}
+        {screen === 'lookup' && <StaffEcwLookupScreen model={model} />}
         {screen === 'add' && <StaffCardIntakeScreen model={model} session={session} />}
         {screen === 'review' && intake && (
           <StaffPatientReviewScreen model={model} session={session} intake={intake} />

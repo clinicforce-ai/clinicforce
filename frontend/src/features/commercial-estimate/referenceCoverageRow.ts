@@ -71,9 +71,9 @@ export function networkRow(
   if (originalMedicare && result.benefits?.active === true) {
     return {
       label: 'Provider billing status',
-      value: 'Not established by eligibility',
+      value: 'Original Medicare · no plan network tier',
       detail:
-        'Original Medicare has no plan network tier. Confirm the provider billing and assignment rules separately.',
+        'Original Medicare has no plan network tier. The clinic Medicare fee supports this estimate; eligibility does not establish claim assignment.',
     }
   }
   const texasEpo =
@@ -128,6 +128,18 @@ export function payerOrderRow(
   const ordered = (result.coverage_records || [])
     .filter((row) => row.status === 'active' && (row.order === 1 || row.order === 2))
     .sort((a, b) => (a.order || 0) - (b.order || 0))
+  if (
+    result.collection_guidance?.basis === 'medicare_primary_coinsurance_advance' &&
+    ordered.length === 2 &&
+    ordered[0].order === 1 &&
+    ordered[1].order === 2
+  )
+    return {
+      label: 'Payer order',
+      value: `Original Medicare first · ${ordered[1].payer?.join(' / ') || 'second policy'} second (eCW order)`,
+      detail:
+        'The Part B coinsurance is a provisional advance before secondary payment; final claim order and balance follow the remittances.',
+    }
   if (
     result.collection_guidance?.basis === 'healthselect_ma_zero_office_biopsy' &&
     ordered.length === 2 &&

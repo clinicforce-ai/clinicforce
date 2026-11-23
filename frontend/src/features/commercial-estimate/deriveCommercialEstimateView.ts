@@ -1,4 +1,4 @@
-import { coveragePolicyStatus } from './coveragePolicyStatus'
+import { coveragePolicyStatus, coveragePolicyTone } from './coveragePolicyStatus'
 import { money, range, visitDate, visitTime } from './format'
 import { patientBenefitsBound as hasPatientBinding } from './identityBinding'
 import { firstSelectedCptIssue } from './selectedCptIssue'
@@ -130,21 +130,18 @@ export function deriveCommercialEstimateView({
       ? `/api/staff/library/${encodeURIComponent(contractDocumentId)}/document?preview=true${contractPage ? `#page=${contractPage}` : ''}`
       : null
   const cash = result?.payment_mode === 'cash'
-  let coverageTone =
-    policyStatus === 'Coverage active' || policyStatus === 'Aetna office benefits · $0 check-in'
-      ? 'is-confirmed'
-      : policyStatus === 'Coverage dates differ from visit'
-        ? 'is-review'
-        : !result ||
-            tooEarly ||
-            result.recovery?.state === 'pending' ||
-            failure?.kind === 'provider_enrollment' ||
-            (cash && !result.cash_fallback)
-          ? ''
-          : 'is-missing'
-  if (referenceBenefits?.active === true) coverageTone = 'is-confirmed'
+  const coverageTone = coveragePolicyTone({
+    policyStatus,
+    result,
+    tooEarly,
+    failureKind: failure?.kind,
+    referenceActive: referenceBenefits?.active === true,
+  })
   const calculating =
-    (!!busy && busy !== 'delete') || recovering || (!!selected && !result && !error)
+    (!!busy && busy !== 'delete') ||
+    recovering ||
+    (!!selected && !result && !error) ||
+    result?.eligibility_request_state === 'pending'
   const previousEstimate = !!error && !!result
   const guidance =
     result?.collection_guidance?.status !== 'deferred' ? result?.collection_guidance : undefined
@@ -225,7 +222,8 @@ export function deriveCommercialEstimateView({
     !participationConflict &&
     patientBenefitsBound &&
     ((!benefits.has_secondary && result?.recovery?.reason_code !== 'multiple_active_policies') ||
-      guidance?.primary_secondary_copay === true) &&
+      guidance?.primary_secondary_copay === true ||
+      guidance?.basis === 'medicare_primary_coinsurance_advance') &&
     (networkConfirmed ||
       outOfNetworkCollection ||
       independentOfficeCopay ||

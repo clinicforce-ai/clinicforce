@@ -63,6 +63,11 @@ export function commercialOopRows(
   calculated: boolean,
   humanaReferenceCopay: number | null,
 ): CostBreakdownRow[] {
+  if (benefits?.original_medicare === true)
+    return [
+      { label: 'Individual out-of-pocket maximum', value: 'No Original Medicare annual maximum' },
+      { label: 'Family out-of-pocket maximum', value: 'Not applicable to Original Medicare' },
+    ]
   const ehr = humanaReferenceCopay == null ? result.ecw_eligibility_reference : undefined
   const individualReportedOop = limitSummary(reportedResult, 'out_of_pocket', 'INDIVIDUAL')
   const selectedOfficeLine =

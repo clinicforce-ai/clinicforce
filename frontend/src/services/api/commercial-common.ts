@@ -164,6 +164,7 @@ export type CollectionGuidance = {
   reference_total_cents?: number
   clinic_fee_reference_cents?: number
   primary_secondary_copay?: boolean
+  primary_medicare_share_cents?: number
   range_min_cents?: number | null
   range_max_cents?: number | null
   status: string

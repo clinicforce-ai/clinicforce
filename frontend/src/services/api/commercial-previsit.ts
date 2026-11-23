@@ -28,6 +28,7 @@ import type { PaymentExplanation } from './commercial-explanation'
 import type { CommercialNetworkEvidence } from './commercial-network-evidence'
 import type { AvailityVisitReference } from './availity-visit-reference'
 export type PrevisitEstimate = {
+  eligibility_request_state?: string
   ecw_eligibility_reference?: EcwEligibilityReference
   availity_visit_reference?: AvailityVisitReference
   telehealth?: { place_of_service: '10' | '02'; modality: 'audio_video' | 'audio_only' }
@@ -219,6 +220,7 @@ export type PrevisitEstimate = {
     }
   }
   insurance_details?: {
+    coverage_id?: string
     payer_patient?: { firstName?: string; lastName?: string; dateOfBirth?: string }
     payer_relationship?: string
     payer_coverage_period?: { start?: string; end?: string }

@@ -2,6 +2,10 @@
 from app.insurance.identity import patient_benefits_bound
 
 
+def _money(cents: int) -> str:
+    return f'${cents // 100:,}.{cents % 100:02d}'
+
+
 def missing_planned_cpt(result: dict, benefits: dict) -> bool:
     plan = result.get('service_plan') or {}
     return (benefits.get('active') is True and not plan.get('selected_codes') and not plan.get('alternatives')
@@ -36,3 +40,12 @@ def choice_plus_reported_terms(benefits: dict) -> str | None:
             return (f'The payer reported a $0.00 professional office copay, '
                     f'{in_rate}% in-network and {out_rate}% out-of-network coinsurance. ')
     return None
+
+
+def medicare_primary_sentence(amount: int, line: dict, guidance: dict) -> tuple[str, str]:
+    sentence = (f'Collect {_money(amount)} at arrival: Original Medicare Part B reports a met deductible, '
+                f'and 20% of the clinic Medicare fee {_money(line.get("allowed_cents") or 0)} '
+                f'for CPT {line.get("code") or "office visit"} is '
+                f'{_money(guidance.get("primary_medicare_share_cents") or 0)} before recorded payments. '
+                'eCW lists Medicare first; any secondary payment and final patient balance follow the claims')
+    return 'medicare_primary_coinsurance_advance', sentence

@@ -248,10 +248,20 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
                 'relatedEntities', 'serviceTypeCodes', 'messages', 'dates',
                 'benefitAmount')))
         for row in relevant)
-    qmb_ids = [row['evidence_path'] for row in entries if any(
-        re.search(r'\b(?:qualified medicare beneficiary|QMB)\b', note, re.I)
-        and not re.search(r'\b(?:not|no|non[- ]?)\s+(?:a\s+)?(?:qualified medicare beneficiary|QMB)\b', note, re.I)
-        for note in notes([row.get('messages'), row.get('additionalInformation')]))]
+    def qmb_period_applies(row: dict) -> bool:
+        dates = row.get('dates')
+        eligibility = dates.get('eligibility') if isinstance(dates, dict) else None
+        eligibility = eligibility if isinstance(eligibility, dict) else {}
+        return ((not eligibility.get('start') or str(eligibility['start'])[:10] <= str(service_date or ''))
+                and (not eligibility.get('end') or str(service_date or '') <= str(eligibility['end'])[:10]))
+
+    qmb_ids = [row['evidence_path'] for row in entries if (
+        str(row.get('insuranceTypeCode') or row.get('insuranceType') or '').upper() == 'QM'
+        and qmb_period_applies(row)
+        or any(re.search(r'\b(?:qualified medicare beneficiary|QMB)\b', note, re.I)
+               and not re.search(r'\b(?:not|no|non[- ]?)\s+(?:a\s+)?(?:qualified medicare beneficiary|QMB)\b', note, re.I)
+               for note in notes([row.get('messages'), row.get('additionalInformation')])))
+        ]
     multiple_plans = len({row["plan_index"] for row in entries if "plan_index" in row and row.get("code") in {"status", "A", "B", "C", "G"}}) > 1
     # Some plans track office copays separately from the general OOP balance.
     # Retain both buckets: a met general maximum must not erase that copay.

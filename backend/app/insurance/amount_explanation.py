@@ -10,9 +10,7 @@ from app.insurance.collection.pricing_actions import priced_line_issue, priced_p
 from app.insurance.collection.requirements import requirement_blocker
 from app.insurance.library_network_exclusions import product_kind
 from app.insurance.insurance_product import is_medicare_advantage
-from app.insurance.amount_explanation_terms import choice_plus_reported_terms as _choice_plus_reported_terms, identity_or_date_cause, identity_or_date_reason, missing_planned_cpt
-def _money(cents: int) -> str:
-    return f'${cents // 100:,}.{cents % 100:02d}'
+from app.insurance.amount_explanation_terms import choice_plus_reported_terms as _choice_plus_reported_terms, identity_or_date_cause, identity_or_date_reason, missing_planned_cpt, medicare_primary_sentence, _money
 def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network: str, benefits: dict, unpriced: list[str],
                 missing: str, source_errors: list[dict] | None = None) -> tuple[str, str]:
     reason = recovery.get('reason_code')
@@ -228,7 +226,9 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
                     if amount is not None else
                     f"NMCT has no cash rate for {', '.join(unpriced) if unpriced else 'the selected services'}, and insurance pricing is unavailable because {cause}")
     elif amount is not None:
-        if basis == 'claim_after_service':
+        if basis == 'medicare_primary_coinsurance_advance':
+            code, sentence = medicare_primary_sentence(amount, lines[0] if len(lines) == 1 else {}, guidance)
+        elif basis == 'claim_after_service':
             cause, code = _cash_cause(result, failure, recovery, card, network, benefits, unpriced, missing, guidance.get('source_errors'))
             if (guidance.get('collection_rule') or {}).get('mode') in {'clinic_zero_arrival_default', 'aetna_choice_family_oop_deferral', 'aetna_televisit_oop_deferral', 'uhc_choice_plus_family_oop_deferral', 'uhc_choice_plus_unassigned_oop_deferral', 'individual_oop_zero_deferral', 'bcbstx_plus_office_deferral', 'bcbstx_botox_family_oop_deferral', 'bcbstx_ppo_televisit_deferral'}:
                 sentence, code = (guidance['reason'], 'collection_deferred')
