@@ -22,8 +22,9 @@ export function firstSelectedCptIssue(result?: PrevisitEstimate | null): string 
         if (
           terms.has_secondary === true &&
           !(
-            result?.benefits?.primary_secondary_order?.status === 'verified' &&
-            /^992(?:0[2-5]|1[2-5])$/.test(line.code)
+            result?.collection_guidance?.basis === 'medicare_primary_coinsurance_advance' ||
+            (result?.benefits?.primary_secondary_order?.status === 'verified' &&
+              /^992(?:0[2-5]|1[2-5])$/.test(line.code))
           )
         )
           return `${code} has other coverage. Establish payer order and secondary benefits before collecting.`

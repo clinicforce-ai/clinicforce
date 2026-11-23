@@ -12,6 +12,11 @@ export function familyDeductibleRow(
   bluecard: ReturnType<typeof bluecardOfficeDeductibleScenario>,
   feeProxy: PrevisitEstimate['fee_proxy_estimate'],
 ): CostBreakdownRow {
+  if (reportedResult.benefits?.original_medicare === true)
+    return {
+      label: 'Family deductible',
+      value: 'Not applicable to this Original Medicare Part B office estimate',
+    }
   const family = limitSummary(reportedResult, 'deductible', 'FAMILY')
   const surgical = limitSummary(reportedResult, 'deductible', 'FAMILY', '2')
   const cignaFamily = feeProxy?.scenario_kind === 'oap_office_family_deductible'

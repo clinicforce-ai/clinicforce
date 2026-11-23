@@ -104,9 +104,9 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     cannot block a sourced zero remaining individual balance merely because
     its medical-plan association is unresolved. Saved reads recheck the
     protected 271 checksum before clearing a legacy year-to-date blocker.
-    A patient-bound office E/M response reporting Original Medicare Part B as
-    secondary returns a $0 check-in advance under cms_msp_part_b_deferral,
+    A patient-bound office E/M response reporting Original Medicare Part B as secondary returns a $0 check-in advance under cms_msp_part_b_deferral,
     while preserving its copay and leaving final liability to the claims.
+    A checksum-verified Original Medicare 271 is reparsed and repriced from the current clinic Medicare fee on saved reads. One eCW policy ordered second permits a provisional 20% primary Medicare office advance when the selected Medicare policy is first and the member deductible is met; the final patient balance remains unknown. Pending eligibility has no numeric collection amount.
     A patient-bound 2026 UHC group 16615 saved plan can project the published
     G.E.H.A High PSHB Medicare Advantage zero office benefit on read, without
     a new eligibility call or a change to the historical saved snapshot. For

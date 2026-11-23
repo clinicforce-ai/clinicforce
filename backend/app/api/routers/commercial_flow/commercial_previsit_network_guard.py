@@ -11,6 +11,7 @@ from app.insurance import identity as insurance_identity
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies
 from app.api.routers.commercial_flow.commercial_previsit_tpa import cigna_primary_route
 from app.api.routers.commercial_flow.aetna_office_network_attestation import apply_nmct_aetna_office_attestation
+from app.api.routers.commercial_flow.commercial_previsit_medicare import clear_commercial_network
 
 
 def scoped_admin_nonparticipation(practice_id: str, payer: dict | None, inputs: dict,
@@ -159,9 +160,9 @@ def apply_nmct_product_attestation(result: dict, benefits: dict, practice_id: st
     return not contract and apply_nmct_cigna_ppo_attestation(
         result, benefits, practice_id, payer, payload, inputs, source)
 
-
 def apply_nmct_contract_absence(result: dict, benefits: dict, payer: str, document: dict | None,
                                 service_date: str, plan_bound: bool) -> bool:
+    if benefits.get('original_medicare') is True: clear_commercial_network(result, benefits); return False
     card = result.get('card_check') or {}
     if (not document and not result.get('agreement_exclusion')
             and re.fullmatch(r'\s*Cigna\s*', payer, re.I)
@@ -348,10 +349,10 @@ def recheck_saved_inventory(result: dict, case: dict, practice_id: str, payer: d
         result['network_evidence'] = {**result['agreement_exclusion'],
             'reason': 'The product remains excluded under the uploaded agreement, but the inventory certification no longer applies to this visit.'}
 
-
 def recheck_saved_network_evidence(result: dict, case: dict, practice_id: str, payer: dict | None) -> None:
     """Project current contract support from saved case context without a payer call or write."""
     benefits = result.get('benefits') or {}
+    if benefits.get('original_medicare') is True: clear_commercial_network(result, benefits); return
     context = case.get('previsit_context') or {}
     source = ((case.get('previsit_discovery') or {}).get('pricing_source') or context.get('source') or {})
     plan = ((result.get('plan_details') or {}).get('stedi') or {})
@@ -479,7 +480,6 @@ def recheck_saved_network_evidence(result: dict, case: dict, practice_id: str, p
         record_confirmed_out_of_network(result, benefits)
     elif prior_group or prior_blue_absence:
         _clear_saved_tier(result, 'The signed clinic agreement no longer supports this network and visit.')
-
 
 def recheck_saved_payer_message(result: dict, case: dict) -> None:
     benefits = result.get('benefits') or {}

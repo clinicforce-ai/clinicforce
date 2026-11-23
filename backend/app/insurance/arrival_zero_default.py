@@ -6,6 +6,11 @@ from app.insurance.collection import stedi_office_copay
 
 def apply(result: dict, guidance: dict, review: dict | None = None) -> dict:
     guidance = stedi_office_copay.apply(result, guidance, review)
+    if result.get('eligibility_request_state') in {'pending', 'indeterminate'}:
+        return {**guidance, 'amount_cents': None, 'status': 'action_required',
+                'basis': 'eligibility_pending',
+                'reason': 'The payer eligibility check has not completed; the visit collection amount is pending.',
+                'patient_message': 'The visit payment amount will be available after the payer check completes.'}
     amount = guidance.get('amount_cents')
     if result.get('nmct_fixed_office_copay_advance_enabled') is not True:
         return guidance

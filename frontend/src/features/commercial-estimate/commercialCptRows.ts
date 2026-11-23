@@ -31,6 +31,13 @@ export function commercialAllowedTotalRow(
     botoxPreview,
   } = options
   const price = result.price_range
+  if (result.collection_guidance?.basis === 'medicare_primary_coinsurance_advance')
+    return {
+      label: 'Clinic Medicare fee for selected CPT',
+      value: lineAllowedTotal == null ? 'Fee unavailable' : money(lineAllowedTotal),
+      detail:
+        'Clinic-approved Medicare fee reference for the provisional Part B share; the processed claim determines the final allowance.',
+    }
   if (result.collection_guidance?.collection_rule?.mode === 'aetna_televisit_oop_deferral') {
     const fee =
       price?.allowed_min_cents === price?.allowed_max_cents

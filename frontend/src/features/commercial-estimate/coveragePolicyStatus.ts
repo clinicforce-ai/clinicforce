@@ -113,3 +113,34 @@ export function coveragePolicyStatus({
                                                             : 'Coverage not checked'
   return policyStatus
 }
+
+export function coveragePolicyTone({
+  policyStatus,
+  result,
+  tooEarly,
+  failureKind,
+  referenceActive,
+}: {
+  policyStatus: string
+  result: PrevisitEstimate | null
+  tooEarly: boolean
+  failureKind?: string
+  referenceActive: boolean
+}) {
+  if (
+    referenceActive ||
+    policyStatus === 'Coverage active' ||
+    policyStatus === 'Aetna office benefits · $0 check-in'
+  )
+    return 'is-confirmed'
+  if (policyStatus === 'Coverage dates differ from visit') return 'is-review'
+  if (
+    !result ||
+    tooEarly ||
+    result.recovery?.state === 'pending' ||
+    failureKind === 'provider_enrollment' ||
+    (result.payment_mode === 'cash' && !result.cash_fallback)
+  )
+    return ''
+  return 'is-missing'
+}

@@ -8,6 +8,7 @@ from app.insurance.identity import patient_benefits_bound
 from app.insurance.benefit_review import selected_service_blocker
 from app.insurance.collection.requirements import requirement_blocker
 from app.insurance.collection.stedi_office_copay import eligible as stedi_office_copay_eligible
+from app.insurance.collection.secondary_order import original_medicare_office_share
 
 
 def _coinsurance_rate(percent: object) -> Decimal | None:
@@ -118,6 +119,19 @@ def build(result: dict, review: dict | None = None) -> dict:
     collect = guidance.get('amount_cents')
     if type(collect) is not int or collect < 0:
         collect = None
+    primary_medicare_share = (original_medicare_office_share(result, safe=True,
+        qmb_protected=benefits.get('qmb_status') == 'protected' or
+            (result.get('billing_protection') or {}).get('status') == 'qmb')
+        if guidance.get('basis') == 'medicare_primary_coinsurance_advance' else None)
+    medicare_advance = (type(primary_medicare_share) is int
+        and guidance.get('primary_medicare_share_cents') == primary_medicare_share
+        and (guidance.get('collection_rule') or {}).get('mode') == 'original_medicare_office_coinsurance'
+        and collect == max(0, primary_medicare_share - (paid or 0))
+        and patient_benefits_bound(identity) and benefits.get('active') is True
+        and benefits.get('service_date_matches') is not False
+        and not benefits.get('source_errors')
+        and not any((line.get('benefits') or {}).get('source_errors') for line in lines)
+        and requirement_blocker(result) is None)
     clinic_zero_instruction = (collect == 0 and guidance.get('basis') in {
         'claim_after_service', 'cash_price_pending', 'ecw_billing_note', 'healthselect_ma_zero_televisit',
         'healthselect_ma_zero_office_biopsy'})
@@ -161,7 +175,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         and not benefits.get('source_errors') and not (office_line.get('benefits') or {}).get('source_errors')
         and selected_service_blocker(benefits.get('network_status') or 'unknown', identity, [office_line]) is None
         and not participation_conflict(benefits))
-    if (unsupported_insurance or requirement_blocker(result) is not None) and collect is not None and not clinic_zero_instruction and not office_only_collection and not stedi_office_copay:
+    if (unsupported_insurance or requirement_blocker(result) is not None) and collect is not None and not clinic_zero_instruction and not office_only_collection and not stedi_office_copay and not medicare_advance:
         collect = None
     office = [line for line in lines if str(line.get('code') or '').isdigit() and
               (99202 <= int(line['code']) <= 99205 or 99212 <= int(line['code']) <= 99215)]
@@ -174,6 +188,7 @@ def build(result: dict, review: dict | None = None) -> dict:
             and not independent_office_copay and not out_of_network_share
             and not out_of_network_office_copay and not proxy_advance
             and not original_medicare_share
+            and not medicare_advance
             and not stedi_office_copay
             and not (refundable_advance and not verified_out_of_network(benefits))):
         collect = None

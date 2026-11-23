@@ -7,6 +7,7 @@ from app.api.routers.commercial_flow.commercial_previsit_rate_reference import r
 from app.insurance import aetna_fees, blue_cross_proxy, choice_plus_emg_proxy, cigna_clinic_quote, group_contract_support, identity as insurance_identity, payer_fees, published_plan_benefits, uhc_dsnp_office_proxy
 from app.insurance.identity import patient_plan_applies
 from app.insurance.stedi_benefits.normalize import ambiguous_combined_zero_oop
+from app.api.routers.commercial_flow.commercial_previsit_medicare import refresh_saved_original_medicare, restore_saved_humana_hmo_product
 
 
 def refresh_saved_aetna_identity(result: dict, case: dict) -> None:
@@ -380,6 +381,7 @@ def guard_telehealth_guidance(result: dict, unresolved: bool) -> None:
 
 def _reprice_saved_new_network(result: dict, case: dict, practice_id: str, payer: dict | None) -> None:
     """Refresh per-CPT benefits after a saved 271 gains a supported network tier."""
+    benefits = result.get('benefits') or {}
     price = result.get('price_range') or {}
     price.update(complete=False, patient_min_cents=None, patient_max_cents=None,
                  allowed_min_cents=None, allowed_max_cents=None,
@@ -390,7 +392,8 @@ def _reprice_saved_new_network(result: dict, case: dict, practice_id: str, payer
     result.pop('arrival_collection', None)
     result.pop('planning_estimate', None)
     payer_name = str((payer or {}).get('display_name') or result.get('payer') or '')
-    is_schedule_payer = aetna_fees.is_aetna_payer(payer_name) or bool(payer_fees.schedule_for_result({**result, 'payer': payer_name}))
+    is_schedule_payer = (benefits.get('original_medicare') is True or
+        aetna_fees.is_aetna_payer(payer_name) or bool(payer_fees.schedule_for_result({**result, 'payer': payer_name})))
     if (not payer and not is_schedule_payer) or not case.get('previsit_raw_object_key') or not case.get('previsit_raw_sha256'):
         return
     try:
@@ -434,33 +437,14 @@ def _reprice_saved_new_network(result: dict, case: dict, practice_id: str, payer
                                     'single enabled clinic connection' in str(issue).lower())]
 
 
-def restore_saved_humana_hmo_product(result: dict, case: dict) -> None:
-    """Recover an older saved product category from its intact payer response."""
-    plan = ((result.get('plan_details') or {}).get('stedi') or {})
-    benefits = result.get('benefits') or {}
-    service_date = str(((case.get('previsit_context') or {}).get('inputs') or {}).get('service_date') or '')
-    if (payer_fees.payer_key(str(result.get('payer') or '')) == 'humana'
-            and plan.get('names') and not plan.get('medicare_hmo_evidence')
-            and benefits.get('active') is True
-            and patient_plan_applies(benefits, result.get('identity') or benefits.get('identity') or {}, service_date)
-            and case.get('previsit_raw_object_key') and case.get('previsit_raw_sha256')):
-        try:
-            raw = _api.object_store.get_object_bytes(case['previsit_raw_object_key'])
-            if _api.hashlib.sha256(raw).hexdigest() == case['previsit_raw_sha256']:
-                current = _api.commercial.plan_details(_api.json.loads(raw))
-                if current.get('names') == plan['names'] and current.get('medicare_hmo_evidence'):
-                    plan['medicare_hmo_evidence'] = current['medicare_hmo_evidence']
-                    if (benefits.get('plan_details') or {}).get('names') == plan['names']:
-                        benefits['plan_details']['medicare_hmo_evidence'] = current['medicare_hmo_evidence']
-        except Exception:
-            pass  # Retain the saved estimate when protected payer evidence is unavailable.
-
-
 def refresh_saved_network_pricing(result: dict, case: dict, practice_id: str,
                                   route_payer: dict | None, prior_network: tuple,
                                   identity_refreshed: bool = False) -> None:
     restore_saved_humana_hmo_product(result, case)
     benefits = result.get('benefits') or {}
+    if refresh_saved_original_medicare(result, case, practice_id, route_payer,
+                                       _reprice_saved_new_network):
+        return
     current_network = (benefits.get('network_status'), benefits.get('network_source'))
     network_changed = (prior_network != current_network and current_network[1] in {
         'clinic_library_contract', 'clinic_group_agreement', 'clinic_nonparticipation_rule',
@@ -478,6 +462,8 @@ def refresh_saved_cross_payer_planning(result: dict, case: dict, practice_id: st
     for key in ('fee_proxy_estimate', 'temporary_rate_reference', 'cigna_clinic_rates', 'cigna_rate_conflict', 'aetna_diagnostic_reference',
                 'provisional_collection_target'):
         result.pop(key, None)
+    if (result.get('benefits') or {}).get('original_medicare') is True:
+        return
     if payer_fees.schedule_for_result(result):
         result.pop('cigna_office_fee_scenarios', None)
         return

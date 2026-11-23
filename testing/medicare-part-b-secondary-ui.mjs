@@ -98,6 +98,47 @@ assert.match(primaryTable, /20%/)
 assert.match(primaryTable, /Provider billing status/)
 assert.match(primaryTable, /Original Medicare has no plan network tier/)
 
+const medicareWithSecondary = structuredClone(primary)
+medicareWithSecondary.benefits.has_secondary = true
+medicareWithSecondary.price_range.complete = false
+medicareWithSecondary.price_range.lines[0].calculation = null
+medicareWithSecondary.price_range.lines[0].benefits.has_secondary = true
+medicareWithSecondary.price_range.lines[0].rate_resolution = { status: 'RESOLVED' }
+medicareWithSecondary.recovery = { reason_code: 'multiple_active_policies', active_policy_count: 2 }
+medicareWithSecondary.coverage_records = [
+  { id: 'primary', status: 'active', order: 1, payer: ['Medicare of Texas'] },
+  { id: 'secondary', status: 'active', order: 2, payer: ['Supplement'] },
+]
+medicareWithSecondary.insurance_details = { coverage_id: 'primary' }
+medicareWithSecondary.collection_guidance = {
+  amount_cents: 2392, primary_medicare_share_cents: 2392,
+  status: 'estimated', basis: 'medicare_primary_coinsurance_advance',
+  reason: '20% of the clinic Medicare fee before secondary payment.', services: [],
+  collection_rule: { mode: 'original_medicare_office_coinsurance', reference: 'Clinic Medicare fee' },
+}
+medicareWithSecondary.encounter_summary = { collect_today_cents: 2392, complete: false }
+const secondaryModel = deriveCommercialEstimateView({ result: medicareWithSecondary,
+  appointments: [], selectedVisit: null, busy: false, error: null,
+  readOnly: false, recovering: false })
+assert.equal(secondaryModel.supportedAmount, true)
+assert.equal(secondaryModel.amountText, '$23.92')
+const secondaryTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+  { model: secondaryModel, result: medicareWithSecondary }))
+assert.match(secondaryTable, /\$23\.92/)
+assert.match(secondaryTable, /Medicare first/)
+assert.match(secondaryTable, /provisional Medicare share before secondary payment/)
+assert.match(secondaryTable, /No Original Medicare annual maximum/)
+
+const pendingMedicare = structuredClone(medicareWithSecondary)
+pendingMedicare.eligibility_request_state = 'pending'
+pendingMedicare.collection_guidance.amount_cents = null
+pendingMedicare.encounter_summary.collect_today_cents = null
+const pendingModel = deriveCommercialEstimateView({ result: pendingMedicare,
+  appointments: [], selectedVisit: null, busy: false, error: null,
+  readOnly: false, recovering: false })
+assert.equal(pendingModel.calculating, true)
+assert.notEqual(pendingModel.amountText, '$0.00')
+
 const texasPartB = structuredClone(primary)
 texasPartB.stedi_payer.id = '04412'
 texasPartB.benefits.original_medicare = true

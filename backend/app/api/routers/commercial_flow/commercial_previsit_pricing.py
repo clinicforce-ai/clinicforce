@@ -12,7 +12,7 @@ from app.api.routers.commercial_flow.commercial_previsit_tpa import merge_admini
 from app.insurance import aetna_fees, botox_review, cpt_rules, fep_preferred, insurance_product, inventory_certification, library_network_exclusions, group_contract_support, medicare_fees, payer_fees
 from app.insurance.stedi_benefits.payer_order import primary_secondary_order
 from app.insurance.stedi_benefits.linked import merge_linked_medical_oop
-from app.api.routers.commercial_flow.commercial_previsit_medicare import bind as bind_medicare_part_b
+from app.api.routers.commercial_flow.commercial_previsit_medicare import bind as bind_medicare_part_b, price_original_medicare
 def _commercial_slot(appointment_id: str) -> str:
     return "commercial:" + _api.hashlib.sha256(appointment_id.encode()).hexdigest()
 def _previsit_service_types(inputs: dict) -> list[str]:
@@ -41,7 +41,6 @@ def _previsit_service_types(inputs: dict) -> list[str]:
         ordered.remove('98')
         ordered.insert(0, '98')
     return list(dict.fromkeys([*ordered, '30']))
-
 def _payer_previsit_service_types(payer_id: str, inputs: dict) -> list[str]:
     requested = _previsit_service_types(inputs)
     # These Aetna routes return remaining office accumulators for STC 98 alone,
@@ -359,9 +358,10 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
         _attach_temporary_uhc_rates(result, practice_id, inputs, source)
     elif prudent_buyer_office_reference(result):
         attach_prudent_buyer_office_reference(result, practice_id, inputs, source)
-    elif (rate_payer_name := str(result.get('payer') or (route_payer or {}).get('display_name') or '')) and not _api.re.search(
+    elif (rate_payer_name := str(result.get('payer') or (route_payer or {}).get('display_name') or '')) and benefits.get('original_medicare') is not True and not _api.re.search(
             r'blue cross|bcbstx|blue shield|aetna', rate_payer_name, _api.re.I):
         _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, rate_payer_name)
+    if benefits.get('original_medicare') is True: return price_original_medicare(result, practice_id, inputs, source, payer_id, benefits, payload, review, payer_name)
     if payer_fees.schedule_for_service(payer_name, (payer_fees.fee_schedule_products(payer_name,
         benefits.get('plan_details')) or source.get('payer_plan_names')), service_date):
         if nmct_contract and source.get('payer_plan_bound') is True and not exclusion: apply_nmct_library_contract(result, benefits, nmct_contract)
