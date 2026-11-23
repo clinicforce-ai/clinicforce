@@ -56,9 +56,17 @@ export default function PayerReportedPlanFigures({ result }: { result: PrevisitE
         'clinic_nonparticipation_rule',
         'clinic_contract_inventory',
       ].includes(benefits.network_source || ''))
+  const conditionalOffice = result.collection_guidance?.potential_office_collection
   return (
     <section className="payer-reported-terms" aria-label="Payer-reported benefit terms">
-      <h3>Payer-reported benefit terms</h3>
+      <h3>Payer-reported benefit terms{conditionalOffice ? ' · conditional' : ''}</h3>
+      {conditionalOffice && (
+        <p>
+          These are the payer’s returned figures, not an approved charge. Resolve the checks above
+          before collecting; the current check-in amount is{' '}
+          {money(result.collection_guidance?.amount_cents || 0)}.
+        </p>
+      )}
       {!providerTierEstablished && (
         <p>
           Match this plan and rendering provider’s network tier before using these figures for

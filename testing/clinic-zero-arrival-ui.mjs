@@ -19,7 +19,9 @@ const { AvailityArrivalAmount } = await load('../frontend/src/features/commercia
 
 const result = {
   payer: 'Aetna', payment_mode: 'insurance', service_date: '2026-12-15',
-  identity: { status: 'matched', binding: 'fictional-binding', match_version: 2 },
+  codes: [],
+  identity: { status: 'matched', binding: 'fictional-binding', match_version: 2,
+    differences: [] },
   benefits: { active: true, service_date_matches: false, network_status: 'unknown',
     network_source: null, source_errors: [] },
   price_range: { complete: false, mode: 'services', lines: [{ id: 'office', code: '99213',
@@ -31,7 +33,7 @@ const result = {
   collection_guidance: { amount_cents: 0, status: 'zero_advance', basis: 'claim_after_service',
     collection_rule: { mode: 'clinic_zero_arrival_default' },
     reason: 'Collect $0 at arrival under the clinic default; final patient share is unknown.',
-    services: [] },
+    services: [], patient_actions: [], assumptions: [] },
   encounter_summary: { collect_today_cents: 0, complete: false,
     estimated_total_patient_min_cents: null },
 }
@@ -47,6 +49,7 @@ const table = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
   { result, model }))
 assert.match(table, /Amount to collect at visit.*\$0\.00/s)
 
+const conditionalCases = []
 for (const scenario of [
   { amount: 3000, code: '99213', issues: [{ code: 'medicare_protection_unknown' }],
     expected: /\$30\.00.*QMB billing-protection status is unknown/s },
@@ -62,7 +65,17 @@ for (const scenario of [
     { code: 'mri_contrast_code_mismatch', reported_cpt: '70552', expected_code: '70551' }],
     expected: /\$80\.00.*CPT 99203 is a proposal.*CPT 70552.*no resolved price.*70552 means brain MRI with contrast/s },
 ]) {
-  const conditional = { ...result, collection_guidance: { ...result.collection_guidance,
+  const conditional = { ...result,
+    benefits: { ...result.benefits,
+      historical_only: scenario.code === '99213' },
+    identity: scenario.issues.some(issue => issue.code === 'identity_difference')
+      ? { status: 'review', binding: null, match_version: 2,
+        differences: scenario.issues.filter(issue => issue.code === 'identity_difference') }
+      : result.identity,
+    price_range: { ...result.price_range, lines: [{ ...result.price_range.lines[0],
+      code: scenario.code, benefits: { ...result.price_range.lines[0].benefits,
+        copay_cents: scenario.amount } }] },
+    collection_guidance: { ...result.collection_guidance,
     potential_office_collection: { amount_cents: scenario.amount,
       copay_cents: scenario.amount, allowed_cents: scenario.amount + 1325,
       oop_remaining_cents: 100000, verified_payments_cents: 0,
@@ -73,8 +86,11 @@ for (const scenario of [
     recovering: false })
   const conditionalHeadline = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
     { result: conditional, model: conditionalModel, partialCopay: null, visibleAmount: true }))
-  assert.match(conditionalHeadline, /Potential office amount to collect.*Amount to collect now:.*\$0\.00/s)
+  assert.match(conditionalHeadline, /Potential office amount.*Amount to collect now:.*\$0\.00/s)
   assert.match(conditionalHeadline, scenario.expected)
+  assert.match(conditionalHeadline, /Review before collecting:/)
+  assert.doesNotMatch(conditionalHeadline.split('<details')[0], /max\(\$0\.00, min\(/)
+  conditionalCases.push({ result: conditional, model: conditionalModel, amount: scenario.amount })
   const conditionalTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
     { result: conditional, model: conditionalModel }))
   assert.match(conditionalTable, /Potential office amount.*\$0\.00/s)
@@ -152,12 +168,18 @@ await writeFile(renderFile, viewModule.output[0].code)
 let renderView, renderStaff, renderPrebooking
 try { ({ render: renderView, renderStaff, renderPrebooking } = await import(renderFile.href)) }
 finally { await unlink(renderFile) }
+for (const scenario of conditionalCases) {
+  const screen = renderView({ appointments: [], selectedVisit: '', busy: null,
+    error: null, readOnly: true, recovering: false, ...scenario.model,
+    result: scenario.result })
+  assert.match(screen, /Payer response source rows.*Payer-reported benefit terms/s)
+  assert.match(screen, new RegExp(`Office visit copay.*\\$${(scenario.amount / 100).toFixed(2)}`, 's'))
+}
 const waitingScreen = renderView({ ...waitingActions, ...waiting })
-assert.match(waitingScreen, /Amount to collect at visit.*\$0\.00/s)
-assert.match(waitingScreen, /No payment is requested at arrival/)
+assert.doesNotMatch(waitingScreen, /Amount to collect at visit.*\$0\.00/s)
 const failedVisitScreen = renderView({ ...waitingActions, busy: null, error: 'eCW unavailable',
   ...deriveCommercialEstimateView({ ...waitingActions, busy: null, error: 'eCW unavailable' }) })
-assert.match(failedVisitScreen, /Amount to collect at visit.*\$0\.00/s)
+assert.doesNotMatch(failedVisitScreen, /Amount to collect at visit.*\$0\.00/s)
 const otherPracticeScreen = renderView({ ...waitingActions,
   session: { arrival_collection_default_cents: null }, ...waiting })
 assert.doesNotMatch(otherPracticeScreen, /Amount to collect at visit.*\$0\.00/s)
@@ -183,7 +205,7 @@ const lookupScreen = renderStaff({
     birth_date: '1980-01-15' }, session: { practice_name: 'NMCT',
     arrival_collection_default_cents: 0 },
 })
-assert.match(lookupScreen, /Amount to collect at visit.*\$0\.00/s)
+assert.doesNotMatch(lookupScreen, /Amount to collect at visit.*\$0\.00/s)
 const otherLookupScreen = renderStaff({ restoring: false, busy: 'lookup',
   lookupDetails: { given_name: 'Pat', family_name: 'Example', birth_date: '1980-01-15' },
   session: { practice_name: 'Other clinic', arrival_collection_default_cents: null } })
@@ -196,7 +218,7 @@ const unresolvedPatientModel = { restoring: false, busy: null, screen: 'lookup',
   selectedEcwPatient: null, navigate() {}, changeEcwSearch() {}, startEcwLookup() {},
   lookupEcwPatient() {} }
 const unresolvedPatientScreen = renderStaff(unresolvedPatientModel)
-assert.match(unresolvedPatientScreen, /Amount to collect at visit.*\$0\.00/s)
+assert.doesNotMatch(unresolvedPatientScreen, /Amount to collect at visit.*\$0\.00/s)
 assert.doesNotMatch(renderStaff({ ...unresolvedPatientModel,
   session: { practice_id: 'other', practice_name: 'Other clinic',
     arrival_collection_default_cents: null, role: 'staff' } }),

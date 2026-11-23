@@ -223,10 +223,12 @@ export default function CommercialOverview({
           />
           {(!cash || automaticCashFallback) &&
             !previousEstimate &&
-            result.benefits?.active === true &&
-            patientBenefitsBound &&
-            !result.benefits.historical_only &&
-            !result.benefits.source_errors?.length &&
+            result.benefits &&
+            (result.collection_guidance?.potential_office_collection ||
+              (result.benefits.active === true &&
+                patientBenefitsBound &&
+                !result.benefits.historical_only &&
+                !result.benefits.source_errors?.length)) &&
             payerReportedPartialCents == null &&
             !paidClaim && (
               <details className="financial-breakdown" open>
