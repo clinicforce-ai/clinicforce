@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 import csv
 import hashlib
 import mimetypes
@@ -34,6 +35,38 @@ router = APIRouter(prefix="/api/staff", tags=["staff"])
 STAFF_COOKIE = "clinicforce_staff_session"
 NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache", "Referrer-Policy": "no-referrer"}
 CARD_PREVIEW_TIMEOUT_SECONDS = 55
+CARD_PREVIEW_CACHE_TTL_SECONDS = 120
+CARD_PREVIEW_CACHE_MAX_BYTES = 20_000_000
+_card_preview_cache: OrderedDict[tuple[str, str, str], tuple[float, str, bytes]] = OrderedDict()
+_card_preview_cache_bytes = 0
+
+
+def _cached_card(key: tuple[str, str, str]) -> tuple[bytes, str] | None:
+    global _card_preview_cache_bytes
+    item = _card_preview_cache.get(key)
+    if item is None:
+        return None
+    expires, mime, content = item
+    if expires <= time.monotonic():
+        _card_preview_cache.pop(key)
+        _card_preview_cache_bytes -= len(content)
+        return None
+    _card_preview_cache.move_to_end(key)
+    return content, mime
+
+
+def _remember_card(key: tuple[str, str, str], mime: str, content: bytes) -> None:
+    global _card_preview_cache_bytes
+    if len(content) > CARD_PREVIEW_CACHE_MAX_BYTES:
+        return
+    previous = _card_preview_cache.pop(key, None)
+    if previous:
+        _card_preview_cache_bytes -= len(previous[2])
+    while _card_preview_cache and _card_preview_cache_bytes + len(content) > CARD_PREVIEW_CACHE_MAX_BYTES:
+        _, (_, _, old_content) = _card_preview_cache.popitem(last=False)
+        _card_preview_cache_bytes -= len(old_content)
+    _card_preview_cache[key] = (time.monotonic() + CARD_PREVIEW_CACHE_TTL_SECONDS, mime, content)
+    _card_preview_cache_bytes += len(content)
 
 
 from app.api.schemas.staff import (
@@ -293,6 +326,8 @@ async def patient_cards(intake_id: str, request: Request):
     the eCW preview may have changed since a saved estimate. A missing eCW card
     is reported even when a ClinicForce upload is also available. The eCW scan
     has a 55-second deadline; an incomplete scan is never reported as no card.
+    Verified eCW bytes are held in a bounded, two-minute process cache so the
+    following PDF/image preview does not repeat the entire eCW search.
     """
     staff = await require_staff(request)
     intake = await owned_intake(intake_id, staff)
@@ -306,9 +341,14 @@ async def patient_cards(intake_id: str, request: Request):
     retryable = False
     if patient_id:
         try:
-            rows = await asyncio.wait_for(ecw_backend.insurance_cards(str(patient_id)),
+            rows = await asyncio.wait_for(ecw_backend.insurance_cards(str(patient_id), include_bytes=True),
                                           timeout=CARD_PREVIEW_TIMEOUT_SECONDS)
-            cards.extend({**item, 'source': 'ecw_current', 'url': f"/api/staff/intakes/{quote(intake_id, safe='')}/ecw-card?document_id={quote(item['id'], safe='')}"} for item in rows)
+            for item in rows:
+                content = item.pop('_content', None)
+                if isinstance(content, bytes):
+                    _remember_card((staff['practice_id'], str(patient_id), item['id']), item['content_type'], content)
+                cards.append({**item, 'source': 'ecw_current',
+                              'url': f"/api/staff/intakes/{quote(intake_id, safe='')}/ecw-card?document_id={quote(item['id'], safe='')}"})
             if not rows:
                 message = ('No insurance card was identified among the eCW FHIR documents returned for this patient. '
                            + ('Use the saved ClinicForce card below. ' if cards else
@@ -327,11 +367,16 @@ async def patient_cards(intake_id: str, request: Request):
 
 @router.get("/intakes/{intake_id}/ecw-card")
 async def ecw_card(intake_id: str, document_id: str, request: Request):
-    """Read one patient-bound eCW card within 55 seconds, including scanned or embedded cards."""
-    intake = await owned_intake(intake_id, await require_staff(request))
+    """Read one patient-bound eCW card from the short-lived preview cache or eCW within 55 seconds."""
+    staff = await require_staff(request)
+    intake = await owned_intake(intake_id, staff)
     patient_id = (intake.get('patient') or {}).get('ecw_patient_id') or intake.get('fields', {}).get('ecw_patient_id')
     if not patient_id:
         raise HTTPException(404, 'No eCW patient is linked to this intake.')
+    cached = _cached_card((staff['practice_id'], str(patient_id), document_id))
+    if cached is not None:
+        content, mime = cached
+        return Response(content, media_type=mime, headers={**NO_STORE, 'Content-Disposition': 'inline', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': 'sandbox'})
     try:
         content, mime = await asyncio.wait_for(
             ecw_backend.insurance_cards(str(patient_id), document_id=document_id),

@@ -159,6 +159,71 @@ def test_generic_card_at_end_of_patient_documents_finishes_within_preview_budget
     asyncio.run(run())
 
 
+def test_short_generic_card_is_checked_before_unrelated_long_pdf_ocr():
+    with fitz.open() as pdf:
+        for _ in range(20):
+            pdf.new_page().insert_text((40, 40), 'Unrelated synthetic clinical document')
+        long_pdf = pdf.tobytes()
+    with fitz.open() as pdf:
+        pdf.new_page().insert_text((40, 40), 'Member ID Card\nSubscriber Name: SAMPLE PATIENT\n'
+                                   'Identification Number: ABC123456\nGroup Number: G12345\nRxBIN: 123456')
+        pdf.new_page()
+        card_pdf = pdf.tobytes()
+
+    documents = [
+        {'resourceType': 'DocumentReference', 'id': identifier, 'status': 'current',
+         'subject': {'reference': 'Patient/synthetic'},
+         'content': [{'attachment': {'contentType': 'application/pdf',
+                                     'data': base64.b64encode(content).decode()}}]}
+        for identifier, content in [('long', long_pdf), ('card', card_pdf)]
+    ]
+
+    async def run():
+        def handler(request):
+            rows = [] if request.url.params.get('type') == '64290-0' else documents
+            return httpx.Response(200, json={'resourceType': 'Bundle',
+                                             'entry': [{'resource': row} for row in rows]})
+        original_pdf_text = golden._pdf_text
+
+        def checked_pdf_text(content):
+            with fitz.open(stream=content, filetype='pdf') as pdf:
+                assert not any('Unrelated synthetic clinical document' in page.get_text() for page in pdf), 'long PDF OCR started'
+            return original_pdf_text(content)
+
+        with patch.object(ecw, 'settings', return_value=('client', 'https://ehr.example.test/fhir')), \
+             patch.object(ecw, '_access_token', AsyncMock(return_value='synthetic-token')), \
+             patch('app.insurance.golden._pdf_text', side_effect=checked_pdf_text):
+            cards = await ecw.insurance_cards('synthetic', transport=httpx.MockTransport(handler))
+        assert [item['id'] for item in cards] == ['card:0']
+    asyncio.run(run())
+
+
+def test_card_document_searches_overlap_and_keep_patient_wide_results():
+    document = {'resourceType': 'DocumentReference', 'id': 'card', 'status': 'current',
+                'subject': {'reference': 'Patient/synthetic'}, 'description': 'Insurance card',
+                'content': [{'attachment': {'contentType': 'image/png',
+                                            'data': base64.b64encode(b'synthetic-card').decode()}}]}
+    active = maximum_active = 0
+
+    async def handler(request):
+        nonlocal active, maximum_active
+        active += 1
+        maximum_active = max(maximum_active, active)
+        await asyncio.sleep(.1)
+        active -= 1
+        rows = [document] if request.url.params.get('type') is None else []
+        return httpx.Response(200, json={'resourceType': 'Bundle',
+                                         'entry': [{'resource': row} for row in rows]})
+
+    async def run():
+        with patch.object(ecw, 'settings', return_value=('client', 'https://ehr.example.test/fhir')), \
+             patch.object(ecw, '_access_token', AsyncMock(return_value='synthetic-token')):
+            cards = await ecw.insurance_cards('synthetic', transport=httpx.MockTransport(handler))
+        assert [item['id'] for item in cards] == ['card:0']
+        assert maximum_active == 2
+    asyncio.run(run())
+
+
 def test_unlabelled_scanned_card_with_standard_member_fields_is_previewed():
     image = io.BytesIO()
     Image.new('RGB', (400, 240), 'white').save(image, format='PNG')

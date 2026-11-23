@@ -105,6 +105,33 @@ class FileBoundaryTests(unittest.TestCase):
         self.assertIn('timed out before every patient document could be checked', data['message'])
         self.assertNotIn('returned no patient-bound', data['message'])
 
+    def test_current_ecw_card_preview_reuses_verified_bytes_from_listing(self):
+        intake = {'id': 'synthetic-intake', 'patient': {'id': 'synthetic-patient',
+                  'ecw_patient_id': 'synthetic-ecw'}, 'fields': {}, 'documents': []}
+        user = {'practice_id': 'synthetic-practice'}
+        content = card_pdf()
+        staff._card_preview_cache.clear()
+        staff._card_preview_cache_bytes = 0
+        try:
+            with patch.object(staff, 'require_staff', AsyncMock(return_value=user)), \
+                 patch.object(staff, 'owned_intake', AsyncMock(return_value=intake)), \
+                 patch.object(staff.staff_store, 'patient_card_intakes', return_value=[]), \
+                 patch.object(staff.ecw_backend, 'insurance_cards', AsyncMock(return_value=[
+                     {'id': 'ecw-card:0', 'title': 'Insurance card',
+                      'content_type': 'application/pdf', '_content': content}])) as lookup:
+                listed = json.loads(asyncio.run(staff.patient_cards('synthetic-intake', None)).body)
+                self.assertIsNone(staff._cached_card(('other-practice', 'synthetic-ecw', 'ecw-card:0')))
+                self.assertIsNone(staff._cached_card(('synthetic-practice', 'other-patient', 'ecw-card:0')))
+                preview = asyncio.run(staff.ecw_card('synthetic-intake', 'ecw-card:0', None))
+            self.assertEqual(len(listed['cards']), 1)
+            self.assertNotIn('_content', listed['cards'][0])
+            self.assertEqual(preview.body, content)
+            self.assertEqual(preview.media_type, 'application/pdf')
+            lookup.assert_awaited_once_with('synthetic-ecw', include_bytes=True)
+        finally:
+            staff._card_preview_cache.clear()
+            staff._card_preview_cache_bytes = 0
+
     def test_ecw_card_read_timeout_returns_gateway_timeout(self):
         intake = {'patient': {'ecw_patient_id': 'synthetic-ecw'}, 'fields': {}}
 

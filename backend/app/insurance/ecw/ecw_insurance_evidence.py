@@ -197,10 +197,9 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
         token = await backend._access_token(client, client_id, issuer, ('system/DocumentReference.read',))
         # eCW's card and patient-document endpoints require the type parameter;
         # a patient-only search can return only CCDs and clinical notes.
-        groups = []
-        for document_type in ('64290-0', '103140-0'):
+        async def typed_documents(document_type: str):
             try:
-                groups.append(await backend._search(client, issuer, token, 'DocumentReference', {'patient': patient_id, 'type': document_type}))
+                return await backend._search(client, issuer, token, 'DocumentReference', {'patient': patient_id, 'type': document_type})
             except (backend.EcwBackendError, httpx.HTTPError) as exc:
                 cause = exc.__cause__
                 if ((isinstance(exc, backend.EcwResourceUnavailable) and exc.http_status == 404)
@@ -208,16 +207,21 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
                             and cause.response.status_code in {400, 404, 422})):
                     # Some eCW endpoints reject a typed filter while the
                     # patient-only DocumentReference view remains available.
-                    continue
-                if not groups or document_type == '64290-0':
+                    return []
+                if document_type == '64290-0':
                     raise
                 # Optional patient-document access must not hide a returned insurance card.
+                return []
+
+        # Check primary card access first; a denial must stop optional searches.
+        # The patient-document and patient-wide views can expose different files.
+        primary_documents = await typed_documents('64290-0')
+        optional_groups = await asyncio.gather(
+            typed_documents('103140-0'),
+            backend._search(client, issuer, token, 'DocumentReference', {'patient': patient_id}),
+        )
+        groups = [primary_documents, *optional_groups]
         rows = [row for group in groups for row in group]
-        # eCW's typed and patient-wide views can expose different documents.
-        # Inspect their union even when a typed card was already found.
-        patient_documents = await backend._search(client, issuer, token, 'DocumentReference', {'patient': patient_id})
-        groups.append(patient_documents)
-        rows.extend(patient_documents)
         binaries = {row.get('id'): row for row in rows if row.get('resourceType') == 'Binary' and row.get('id')}
         unique_included = {}
         for group in groups:
@@ -393,35 +397,66 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
                 examined.add(key)
                 generic.append((row, attachment, key, mime))
 
-        async def inspect_generic(row, attachment, _key, mime):
-            try:
-                data = await attachment_bytes(row, attachment)
-            except (backend.EcwBackendError, httpx.HTTPError):
-                return None
-            return await asyncio.to_thread(verified_generic_cards, mime, data)
+        read_limit = asyncio.Semaphore(3)
 
-        # A later generic PDF can be the card; bound parallel reads and OCR so
-        # earlier non-card documents do not consume the entire preview deadline.
-        for offset in range(0, len(generic), 3):
-            batch = generic[offset:offset + 3]
-            inspected = await asyncio.gather(*(inspect_generic(*item) for item in batch))
-            for (_, _, key, mime), matches in zip(batch, inspected):
-                if matches is None:
+        async def read_generic(item):
+            row, attachment, _, _ = item
+            async with read_limit:
+                try:
+                    return await attachment_bytes(row, attachment)
+                except (backend.EcwBackendError, httpx.HTTPError):
+                    return None
+
+        def generic_priority(mime: str, data: bytes) -> int:
+            if mime.startswith('image/'):
+                return 2
+            try:
+                with fitz.open(stream=data, filetype='pdf') as document:
+                    if document.page_count > golden.MAX_PDF_PAGES:
+                        return 0
+                    return 2 if any(
+                        1.2 <= image['width'] / image['height'] <= 2.5
+                        for page in document for image in page.get_image_info(xrefs=True)
+                        if image['height'] > 0
+                    ) else 1
+            except (fitz.FileDataError, fitz.EmptyFileError, ValueError):
+                return 1
+
+        # Rank only by shape, then verify contents. Long packets remain a fallback.
+        for offset in range(0, len(generic), 6):
+            batch = generic[offset:offset + 6]
+            downloaded = await asyncio.gather(*(read_generic(item) for item in batch))
+            candidates = []
+            for (_, _, key, mime), data in zip(batch, downloaded):
+                if data is None:
                     unreadable = True
-                    continue
-                for page, card_bytes in matches:
-                    card_id = key if page is None else f'{key}:{page}'
-                    if document_id is not None and card_id != document_id:
-                        continue
-                    seen.add(card_id)
-                    if document_id is not None:
-                        return card_bytes, mime
-                    card = {'id': card_id, 'title': 'eCW insurance card', 'content_type': mime}
-                    if include_bytes:
-                        card['_content'] = card_bytes
-                    cards.append(card)
-                if matches and document_id is None:
-                    return cards
+                else:
+                    candidates.append((generic_priority(mime, data), key, mime, data))
+            for priority in (2, 1, 0):
+                ranked = [item for item in candidates if item[0] == priority]
+                for start in range(0, len(ranked), 3):
+                    selected = ranked[start:start + 3]
+                    inspected = await asyncio.gather(*(
+                        asyncio.to_thread(verified_generic_cards, mime, data)
+                        for _, _, mime, data in selected
+                    ))
+                    for (_, key, mime, _), matches in zip(selected, inspected):
+                        if matches is None:
+                            unreadable = True
+                            continue
+                        for page, card_bytes in matches:
+                            card_id = key if page is None else f'{key}:{page}'
+                            if document_id is not None and card_id != document_id:
+                                continue
+                            seen.add(card_id)
+                            if document_id is not None:
+                                return card_bytes, mime
+                            card = {'id': card_id, 'title': 'eCW insurance card', 'content_type': mime}
+                            if include_bytes:
+                                card['_content'] = card_bytes
+                            cards.append(card)
+                        if matches and document_id is None:
+                            return cards
         if document_id is not None:
             raise backend.EcwBackendError('No matching insurance card was returned for this patient.')
         if not cards and unreadable:
