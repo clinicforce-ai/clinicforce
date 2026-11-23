@@ -11,6 +11,32 @@ try {
   const { default: CommercialCostBreakdown } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/CommercialCostBreakdown.tsx',
   )
+  const { default: CommercialEstimateView } = await server.ssrLoadModule(
+    '/src/features/commercial-estimate/CommercialEstimateView.tsx',
+  )
+  const noVisit = renderToStaticMarkup(
+    React.createElement(CommercialEstimateView, {
+      model: {
+        result: null,
+        appointments: [],
+        selectedVisit: '',
+        loaded: true,
+        busy: null,
+        error: '',
+        readOnly: false,
+        patient: { given_name: 'Example', family_name: 'Patient' },
+        coverageTone: '',
+        policyStatus: 'Coverage not checked',
+        amountLabel: 'Amount to collect at visit',
+        amountText: '$0.00',
+        explanation: 'No payment is requested at arrival under the clinic default.',
+        load: () => {},
+      },
+    }),
+  )
+  assert.match(noVisit, /No upcoming visit returned/)
+  assert.doesNotMatch(noVisit, /aria-label="Arrival collection"/)
+  assert.doesNotMatch(noVisit, /\$0\.00/)
   const identity = { status: 'matched', match_version: 2, binding: 'synthetic' }
   const benefits = {
     active: true,

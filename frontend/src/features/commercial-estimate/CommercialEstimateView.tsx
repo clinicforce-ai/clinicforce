@@ -61,9 +61,6 @@ export default function CommercialEstimateView({
     calculating,
     previousEstimate,
     emg,
-    amountText,
-    amountLabel,
-    explanation,
     provider,
   } = model
   const financials = usePaidClaimFinancials(result, model.intakeId, !cash && !previousEstimate)
@@ -316,17 +313,6 @@ export default function CommercialEstimateView({
               </button>
             )}
           </p>
-        )}
-        {(!result || busy === 'estimate' || busy === 'visits') && (
-          <section className="visit-overview" aria-label="Arrival collection">
-            <div className="arrival-total">
-              <span>{amountLabel}</span>
-              <strong className="amount-pending" role="status">
-                {amountText}
-              </strong>
-              <p>{explanation}</p>
-            </div>
-          </section>
         )}
         {busy === 'estimate' || busy === 'visits' ? (
           <div className="visit-empty" role="status">
