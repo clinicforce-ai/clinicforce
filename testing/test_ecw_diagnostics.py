@@ -119,6 +119,46 @@ def test_generic_ecw_patient_pdf_is_returned_only_when_its_bytes_are_a_card():
     asyncio.run(run())
 
 
+def test_generic_card_at_end_of_patient_documents_finishes_within_preview_budget():
+    with fitz.open() as pdf:
+        page = pdf.new_page()
+        page.insert_text((40, 40), 'Member ID Card\nSubscriber Name: SAMPLE PATIENT\n'
+                         'Identification Number: ABC123456\nGroup Number: G12345\nRxBIN: 123456')
+        card_bytes = pdf.tobytes()
+
+    documents = [
+        {'resourceType': 'DocumentReference', 'id': f'doc-{index}', 'status': 'current',
+         'subject': {'reference': 'Patient/synthetic'},
+         'content': [{'attachment': {'contentType': 'application/pdf', 'url': f'Binary/file-{index}'}}]}
+        for index in range(7)
+    ]
+    active = 0
+    maximum_active = 0
+
+    async def handler(request):
+        nonlocal active, maximum_active
+        if request.url.path.startswith('/fhir/Binary/'):
+            active += 1
+            maximum_active = max(maximum_active, active)
+            await asyncio.sleep(.2)
+            active -= 1
+            index = int(request.url.path.rsplit('-', 1)[-1])
+            return httpx.Response(200, json={'resourceType': 'Binary', 'contentType': 'application/pdf',
+                                             'data': base64.b64encode(card_bytes if index == 6 else b'not-a-pdf').decode()})
+        rows = [] if request.url.params.get('type') == '64290-0' else documents
+        return httpx.Response(200, json={'resourceType': 'Bundle',
+                                         'entry': [{'resource': row} for row in rows]})
+
+    async def run():
+        with patch.object(ecw, 'settings', return_value=('client', 'https://ehr.example.test/fhir')), \
+             patch.object(ecw, '_access_token', AsyncMock(return_value='synthetic-token')):
+            cards = await asyncio.wait_for(
+                ecw.insurance_cards('synthetic', transport=httpx.MockTransport(handler)), timeout=1.1)
+        assert [item['id'] for item in cards] == ['doc-6:0']
+        assert 1 < maximum_active <= 3
+    asyncio.run(run())
+
+
 def test_unlabelled_scanned_card_with_standard_member_fields_is_previewed():
     image = io.BytesIO()
     Image.new('RGB', (400, 240), 'white').save(image, format='PNG')

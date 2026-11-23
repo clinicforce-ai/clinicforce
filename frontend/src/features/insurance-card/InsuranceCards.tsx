@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import './InsuranceCards.css'
-import { request } from '../../services/api/client'
+import { ApiError, request } from '../../services/api/client'
 import { deleteStaffCardDocument } from '../../services/api/staff-intake'
 
 type Cards = {
@@ -33,15 +33,23 @@ export default function InsuranceCards({
   const [error, setError] = useState('')
   const [deletingId, setDeletingId] = useState('')
   const read = useCallback(async (): Promise<Cards> => {
-    return request<Cards>(`/api/staff/intakes/${encodeURIComponent(intakeId)}/cards`)
+    return request<Cards>(
+      `/api/staff/intakes/${encodeURIComponent(intakeId)}/cards`,
+      {},
+      { timeoutMs: 65_000 },
+    )
   }, [intakeId])
   const load = useCallback(async () => {
     setBusy(true)
     setError('')
     try {
       setData(await read())
-    } catch {
-      setError('Card previews could not be loaded.')
+    } catch (caught) {
+      setError(
+        caught instanceof ApiError && caught.status === 401
+          ? 'Your clinic session ended. Sign in again to load card previews.'
+          : 'Card previews could not be loaded.',
+      )
     } finally {
       setBusy(false)
     }
@@ -53,9 +61,13 @@ export default function InsuranceCards({
       .then((value) => {
         if (active) setData(value)
       })
-      .catch(() => {
+      .catch((caught) => {
         if (active)
-          setError('Card preview unavailable. The estimate uses the policy and payer response.')
+          setError(
+            caught instanceof ApiError && caught.status === 401
+              ? 'Your clinic session ended. Sign in again to load card previews.'
+              : 'Card preview unavailable. The estimate uses the policy and payer response.',
+          )
       })
     return () => {
       active = false

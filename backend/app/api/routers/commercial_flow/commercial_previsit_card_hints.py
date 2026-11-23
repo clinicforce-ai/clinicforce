@@ -33,7 +33,7 @@ async def _read_card_hints(session: dict, patient_id: str | None, *, allow_pendi
             source = 'patient_upload_pending' if reference_only else 'clinicforce_card'
         elif patient_id:
             source = 'ecw_card'
-            cards = await _api.asyncio.wait_for(_api.ecw_backend.insurance_cards(patient_id, include_bytes=True), timeout=24)
+            cards = await _api.asyncio.wait_for(_api.ecw_backend.insurance_cards(patient_id, include_bytes=True), timeout=35)
             if len(cards) > 2:
                 return {'status': 'multiple_cards', 'fields': {}, 'count': 0}
             for card in cards:

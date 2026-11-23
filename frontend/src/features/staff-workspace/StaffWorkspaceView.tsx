@@ -282,6 +282,7 @@ export default function StaffWorkspaceView({ model }: { model: StaffWorkspaceMod
         {alerts}
         {screen === 'patients' && (
           <ClinicalPatientDashboard
+            visible={model.active !== false}
             initialPatientId={historyPatientId}
             onPullEcw={() => navigate('lookup')}
             onOpenIntake={openIntake}

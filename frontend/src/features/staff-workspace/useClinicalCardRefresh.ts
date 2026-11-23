@@ -9,9 +9,10 @@ export function useClinicalCardRefresh(
   dashboard: ClinicalDashboard | null,
   setDashboard: Dispatch<SetStateAction<ClinicalDashboard | null>>,
   setSelected: Dispatch<SetStateAction<ClinicalPatient | null>>,
+  visible: boolean,
 ) {
   useEffect(() => {
-    if (!dashboard) return
+    if (!dashboard || !visible) return
     let active = true
     const timer = window.setInterval(() => {
       if (document.visibilityState !== 'visible') return
@@ -40,5 +41,5 @@ export function useClinicalCardRefresh(
       active = false
       window.clearInterval(timer)
     }
-  }, [dashboard, setDashboard, setSelected])
+  }, [dashboard, setDashboard, setSelected, visible])
 }

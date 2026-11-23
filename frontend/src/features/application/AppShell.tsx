@@ -174,6 +174,7 @@ export function AppShell() {
           {(view === 'staff' || (view === 'commercial-estimator' && !!staffIntakeId)) && (
             <div hidden={view !== 'staff'}>
               <StaffWorkspace
+                active={view === 'staff'}
                 onBack={returnHome}
                 onCreateClinic={() => openEntry('staff-create', '/?staff=create')}
                 onJoinClinic={() => openEntry('staff-join', '/?join')}

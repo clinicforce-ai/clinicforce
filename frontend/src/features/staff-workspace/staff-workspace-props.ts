@@ -1,4 +1,5 @@
 export interface StaffWorkspaceProps {
+  active?: boolean
   onBack: () => void
   onOpenInsurance: (
     intakeId: string,

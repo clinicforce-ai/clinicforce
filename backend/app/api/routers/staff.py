@@ -33,7 +33,7 @@ from app.logs.collection_audit import collection_event
 router = APIRouter(prefix="/api/staff", tags=["staff"])
 STAFF_COOKIE = "clinicforce_staff_session"
 NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache", "Referrer-Policy": "no-referrer"}
-CARD_PREVIEW_TIMEOUT_SECONDS = 35
+CARD_PREVIEW_TIMEOUT_SECONDS = 55
 
 
 from app.api.schemas.staff import (
@@ -292,7 +292,7 @@ async def patient_cards(intake_id: str, request: Request):
     ClinicForce uploads include their source intake ID for clinician deletion.
     the eCW preview may have changed since a saved estimate. A missing eCW card
     is reported even when a ClinicForce upload is also available. The eCW scan
-    has a 35-second deadline; an incomplete scan is never reported as no card.
+    has a 55-second deadline; an incomplete scan is never reported as no card.
     """
     staff = await require_staff(request)
     intake = await owned_intake(intake_id, staff)
@@ -327,7 +327,7 @@ async def patient_cards(intake_id: str, request: Request):
 
 @router.get("/intakes/{intake_id}/ecw-card")
 async def ecw_card(intake_id: str, document_id: str, request: Request):
-    """Read one patient-bound eCW card within 35 seconds, including scanned or embedded cards."""
+    """Read one patient-bound eCW card within 55 seconds, including scanned or embedded cards."""
     intake = await owned_intake(intake_id, await require_staff(request))
     patient_id = (intake.get('patient') or {}).get('ecw_patient_id') or intake.get('fields', {}).get('ecw_patient_id')
     if not patient_id:

@@ -11,7 +11,6 @@ import {
   type ClinicalPatient,
   type DateAppointments,
 } from '../../services/api/staff-patients'
-
 import ClinicalPatientDateGroup from './ClinicalPatientDateGroup'
 import ClinicalPatientHeader from './ClinicalPatientHeader'
 import ClinicalPatientEmpty from './ClinicalPatientEmpty'
@@ -30,6 +29,7 @@ import {
   type VisitResult,
 } from './clinical-patient-groups'
 interface Props {
+  visible: boolean
   initialPatientId?: string
   onOpenIntake: (id: string) => void
   onRecheckEstimate: (intakeId: string, appointmentId: string) => void
@@ -38,8 +38,8 @@ interface Props {
   onPullEcw: () => void
 }
 const CACHE_AGE_MS = 15 * 60_000
-const DATE_CHECK_BATCH_SIZE = 200
 export default function ClinicalPatientDashboard({
+  visible,
   initialPatientId,
   onOpenIntake,
   onRecheckEstimate,
@@ -110,9 +110,9 @@ export default function ClinicalPatientDashboard({
       active = false
     }
   }, [initialPatientId])
-  useClinicalCardRefresh(dashboard, setDashboard, setSelected)
+  useClinicalCardRefresh(dashboard, setDashboard, setSelected, visible)
   useEffect(() => {
-    if (!dashboard) return
+    if (!dashboard || !visible || selected) return
     let active = true
     getTodayAppointments()
       .then((result) => {
@@ -125,9 +125,9 @@ export default function ClinicalPatientDashboard({
     return () => {
       active = false
     }
-  }, [dashboard])
+  }, [dashboard, visible, selected])
   useEffect(() => {
-    if (!dashboard) return
+    if (!dashboard || !visible || selected) return
     const results = { ...visitResultsRef.current }
     const now = Date.now()
     const todayVisits = new Map<string, VisitResult>()
@@ -185,7 +185,7 @@ export default function ClinicalPatientDashboard({
         todayVisits.has(patient.clinic_patient_id || '') ? 0 : patient.ecw_visit_cache ? 2 : 1
       return priority(first) - priority(second)
     })
-    const batch = linked.slice(0, DATE_CHECK_BATCH_SIZE)
+    const batch = linked.slice(0, 25)
     setRemainingDateChecks(linked.length - batch.length)
     setVisitProgress({ done: 0, total: batch.length, failed: 0 })
     const run = ++visitRun.current
@@ -221,7 +221,7 @@ export default function ClinicalPatientDashboard({
     return () => {
       if (visitRun.current === run) visitRun.current += 1
     }
-  }, [dashboard, dateCheckBatch, todaySnapshot, todayReadFinished])
+  }, [dashboard, dateCheckBatch, todaySnapshot, todayReadFinished, visible, selected])
   async function refresh(reloadVisits = true) {
     setBusy(true)
     setError('')

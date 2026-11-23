@@ -227,6 +227,7 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
                 unique_included[documents[0].get('id')] = images[0]
 
         binary_token = None
+        binary_token_lock = asyncio.Lock()
 
         async def attachment_bytes(row: dict, attachment: dict) -> bytes:
             nonlocal binary_token
@@ -244,7 +245,9 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
                         resource = included
                 if resource is None:
                     if binary_token is None:
-                        binary_token = await backend._access_token(client, client_id, issuer, ('system/Binary.read',))
+                        async with binary_token_lock:
+                            if binary_token is None:
+                                binary_token = await backend._access_token(client, client_id, issuer, ('system/Binary.read',))
                     with backend._stage('resource_read', resource='binary') as facts:
                         response = await client.get(url, headers={'Authorization': 'Bearer ' + binary_token, 'Accept': 'application/fhir+json'})
                         facts['http_status'] = response.status_code
@@ -372,6 +375,7 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
         # eCW can omit card wording and file cards under other document types.
         # Inspect every supported patient-bound attachment before exposing it.
         examined = set()
+        generic = []
         for row in rows:
             codes = {item.get('code') for item in (row.get('type') or {}).get('coding', []) if isinstance(item, dict)}
             if (row.get('resourceType') != 'DocumentReference' or row.get('status') != 'current'
@@ -387,12 +391,21 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
                 if document_id is not None and document_id != key and not document_id.startswith(key + ':'):
                     continue
                 examined.add(key)
-                try:
-                    data = await attachment_bytes(row, attachment)
-                except (backend.EcwBackendError, httpx.HTTPError):
-                    unreadable = True
-                    continue
-                matches = await asyncio.to_thread(verified_generic_cards, mime, data)
+                generic.append((row, attachment, key, mime))
+
+        async def inspect_generic(row, attachment, _key, mime):
+            try:
+                data = await attachment_bytes(row, attachment)
+            except (backend.EcwBackendError, httpx.HTTPError):
+                return None
+            return await asyncio.to_thread(verified_generic_cards, mime, data)
+
+        # A later generic PDF can be the card; bound parallel reads and OCR so
+        # earlier non-card documents do not consume the entire preview deadline.
+        for offset in range(0, len(generic), 3):
+            batch = generic[offset:offset + 3]
+            inspected = await asyncio.gather(*(inspect_generic(*item) for item in batch))
+            for (_, _, key, mime), matches in zip(batch, inspected):
                 if matches is None:
                     unreadable = True
                     continue

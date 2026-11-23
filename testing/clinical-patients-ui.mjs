@@ -115,7 +115,8 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
   } else if (path.endsWith('/appointments')) {
     appointmentReads += 1
     visitRequestOrder.push('history')
-    if (process.env.HOLD_APPOINTMENTS) await appointmentsHeld
+    if ((process.env.HOLD_APPOINTMENTS || process.env.PAUSE_ON_ESTIMATE) &&
+        new URL(route.request().url()).searchParams.get('include_ecw') === 'true') await appointmentsHeld
     const patientId = path.split('/')[4]
     body = {
       ecw_status: patientId === '5' ? 'incomplete' : 'complete',
@@ -186,24 +187,36 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
 
 try {
   await page.goto(process.env.UI_URL || 'http://127.0.0.1:5182/?staff')
-  if (process.env.LARGE_DIRECTORY) {
+  if (process.env.PAUSE_ON_ESTIMATE) {
+    await page.locator('#clinical-today-title + .clinical-visit-group .clinical-patient-open')
+      .filter({ hasText: 'Patient 06' }).click()
+    await page.getByRole('button', { name: 'Open insurance review' }).first().click()
+    await page.locator('section[aria-labelledby="visit-estimate-title"]').waitFor()
+    const readsAtNavigation = appointmentReads
+    releaseAppointments()
+    await new Promise((resolve) => setTimeout(resolve, 350))
+    assert.equal(appointmentReads, readsAtNavigation)
+    assert.deepEqual(errors, [])
+    console.log('PASS: hidden patient dashboard stops background eCW appointment reads')
+    process.exitCode = 0
+  } else if (process.env.LARGE_DIRECTORY) {
     await page.getByRole('button', { name: 'Previous patients' }).waitFor({ timeout: 10_000 })
     await page.locator('#clinical-today-title + .clinical-visit-group .clinical-patient-open strong').getByText('Patient 06').waitFor()
     assert.equal(todayReads, 1)
     assert.equal(visitRequestOrder[0], 'today')
     assert((await page.getByLabel('Patients awaiting appointment dates').locator('.clinical-patient-open').count()) <= 50)
-    await page.getByRole('button', { name: 'Check appointment dates for 200 more patients' }).waitFor({ timeout: 10_000 })
-    assert.equal(appointmentReads, 200)
-    await page.getByRole('button', { name: 'Check appointment dates for 200 more patients' }).click()
-    for (let attempt = 0; attempt < 200 && appointmentReads < 400; attempt += 1) {
+    await page.getByRole('button', { name: 'Check appointment dates for 25 more patients' }).waitFor({ timeout: 10_000 })
+    assert.equal(appointmentReads, 25)
+    await page.getByRole('button', { name: 'Check appointment dates for 25 more patients' }).click()
+    for (let attempt = 0; attempt < 200 && appointmentReads < 50; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
-    assert.equal(appointmentReads, 400)
+    assert.equal(appointmentReads, 50)
     await page.getByLabel('Find a clinical patient').fill('Patient 10000')
     await waitForSingleSearchResult('Patient 10000')
     assert.deepEqual(await page.locator('.clinical-patient-open strong').allTextContents(), ['Patient 10000'])
     assert.deepEqual(errors, [])
-    console.log('PASS: 10,000 patients remain searchable and only 200 date checks are started')
+    console.log('PASS: 10,000 patients remain searchable and only 25 date checks start automatically')
     process.exitCode = 0
   } else {
   if (process.env.HOLD_APPOINTMENTS) {

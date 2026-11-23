@@ -31,7 +31,7 @@ export default function ClinicalPatientListStatus({
     <>
       {remainingDateChecks > 0 && progress.done === progress.total && (
         <button onClick={onNextBatch}>
-          Check appointment dates for {Math.min(remainingDateChecks, 200)} more patients
+          Check appointment dates for {Math.min(remainingDateChecks, 25)} more patients
         </button>
       )}
       {period && (
