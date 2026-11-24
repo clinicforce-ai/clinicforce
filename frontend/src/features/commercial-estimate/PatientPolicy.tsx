@@ -226,6 +226,8 @@ export default function PatientPolicy({
                     : 'Card OCR supplied policy details before the payer check.',
                   matched:
                     'Card OCR matched the available eCW policy details before the payer check.',
+                  payer_verified:
+                    'The payer confirmed the card-based policy for this visit. Update the differing eCW coverage details.',
                   conflict: result.card_check.independent_ecw_check
                     ? 'The saved card differs from eCW. ClinicForce checked the selected first eCW policy independently; review the card before changing policy details.'
                     : result.recovery?.outcome === 'recovered'
@@ -262,7 +264,10 @@ export default function PatientPolicy({
         {result.card_check?.payer_comparison && (
           <p className="visit-muted">
             Insurer comparison: eCW says {result.card_check.payer_comparison.ecw}. Card says{' '}
-            {result.card_check.payer_comparison.card}. Confirm which route covers this visit.
+            {result.card_check.payer_comparison.card}.{' '}
+            {result.card_check.status === 'payer_verified'
+              ? 'The card-issuer route was confirmed for this visit; correct eCW for future checks.'
+              : 'Confirm which route covers this visit.'}
           </p>
         )}
       </section>
