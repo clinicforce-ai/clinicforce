@@ -160,6 +160,9 @@ export function ApplicableBenefits({
                       }[row.deductible_applicability || 'UNKNOWN']
                     }
                     {responseRow(terms?.deductible_applicability_ids?.join(' · '))}
+                    {terms?.deductible_default_source === 'clinic_in_network_policy' && (
+                      <small>Clinic policy assumption; payer did not specify this CPT.</small>
+                    )}
                   </dd>
                 </div>
                 {row.oop_remaining_cents != null && (
@@ -224,7 +227,6 @@ export function ApplicableBenefits({
     </section>
   )
 }
-
 export function AppointmentNotes({ result }: { result: PrevisitEstimate }) {
   const fields = result.appointment_context?.imported_fields || []
   const isStatus = (label: string) =>
@@ -257,7 +259,6 @@ export function AppointmentNotes({ result }: { result: PrevisitEstimate }) {
     </section>
   )
 }
-
 export function CostPicture({ result }: { result: PrevisitEstimate }) {
   const price = result.price_range
   const patient = price?.patient_min_cents,

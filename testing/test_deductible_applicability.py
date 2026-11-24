@@ -66,12 +66,13 @@ def test_service_zero_deductible_without_level_differs_from_zero_remaining():
     assert price['patient_max_cents'] == 5000
 
 
-def test_unknown_interaction_returns_disclosed_copay_not_annual_deductible_charge():
+def test_in_network_clinic_default_applies_remaining_deductible_to_office_cpt():
     benefits, price, guidance = run(payload())
-    assert benefits['deductible_applicability'] == 'UNKNOWN'
-    assert not price['complete']
-    assert guidance['amount_cents'] == 5000 and guidance['basis'] == 'office_copay'
-    assert any('did not establish whether the deductible applies' in text for text in guidance['assumptions'])
+    assert benefits['deductible_applicability'] == 'APPLIES'
+    assert benefits['deductible_default_source'] == 'clinic_in_network_policy'
+    assert price['complete'] and price['patient_max_cents'] == 20000
+    assert guidance['amount_cents'] == 20000
+    assert any('Clinic policy assumes' in text for text in guidance['assumptions'])
 
 
 def test_after_deductible_uses_allowed_amount_and_requires_rate():
@@ -80,6 +81,28 @@ def test_after_deductible_uses_allowed_amount_and_requires_rate():
     assert benefits['deductible_applicability'] == 'APPLIES'
     assert price['patient_max_cents'] == 20000 and guidance['amount_cents'] == 20000
     assert run(raw, rates=[])[2]['amount_cents'] is None
+
+
+def test_in_network_default_allocates_one_remaining_deductible_across_diagnostic_cpts():
+    raw = {'benefitsInformation': [
+        row('1', stc='30'), row('C', '3303.09', stc='30', period='29'),
+        row('G', '5000', stc='30', period='29'), row('B', '0', stc='73', period='27'),
+        {**row('A', stc='73'), 'benefitPercent': '.20'},
+    ]}
+    benefits = commercial.normalize_stedi_271(raw, '73', True,
+        procedure_code='95908', service_date=DAY)
+    benefits.update(identity={'status': 'matched', 'binding': 'synthetic-binding', 'match_version': 2},
+                    network_source='clinic_library_contract')
+    codes = [{'id': 'ncs', 'code': '95908', 'units': 1},
+             {'id': 'emg', 'code': '95886', 'units': 1}]
+    rates = [{'code': '95908', 'allowed_cents': 10511},
+             {'code': '95886', 'allowed_cents': 8628}]
+    price = visit_estimate.price_lines(codes, rates, benefits,
+        {'cost_share': 'payer_returned'}, payload=raw, service_date=DAY)
+    assert price['complete']
+    assert price['patient_max_cents'] == price['allowed_max_cents'] == 19139
+    assert all(line['benefits']['deductible_default_source'] == 'clinic_in_network_policy'
+               for line in price['lines'])
 
 
 def test_three_unit_procedure_uses_per_unit_contract_rates_before_deductible():
@@ -134,7 +157,10 @@ def test_new_stedi_shape_keeps_same_waiver_semantics():
 def test_waiver_for_different_service_or_out_of_network_is_not_applied():
     for other in (row('C', '0', stc='73'), {**row('C', '0'), 'inPlanNetworkIndicatorCode': 'N'}):
         raw = payload(); raw['benefitsInformation'].append(deepcopy(other))
-        assert run(raw)[0]['deductible_applicability'] == 'UNKNOWN'
+        benefits, price, _ = run(raw)
+        assert benefits['deductible_applicability'] == 'APPLIES'
+        assert benefits['deductible_waiver_ids'] == []
+        assert price['patient_max_cents'] == 20000
 
 
 def test_sanitized_neurology_visit_keeps_copay_when_testing_rates_are_missing():

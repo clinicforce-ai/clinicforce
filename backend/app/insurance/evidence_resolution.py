@@ -89,12 +89,19 @@ def build(result: dict, source: dict) -> list[dict]:
         'Obtain an applicable member and service-specific office cost-share decision; restricted benefit rows cannot be substituted.')
 
     deductible = benefits.get('deductible_applicability')
-    deductible_resolved = deductible in {'DOES_NOT_APPLY', 'ALREADY_MET'} or (
-        deductible == 'APPLIES' and benefits.get('deductible_remaining_cents') is not None)
+    assumed_lines = [row for row in lines if (row.get('benefits') or {}).get('deductible_default_source') == 'clinic_in_network_policy']
+    line_deductibles_resolved = bool(lines) and all(
+        (terms := row.get('benefits') or {}).get('deductible_applicability') in {'DOES_NOT_APPLY', 'ALREADY_MET'}
+        or terms.get('deductible_applicability') == 'APPLIES' and terms.get('deductible_remaining_cents') is not None
+        for row in lines)
+    deductible_resolved = (deductible in {'DOES_NOT_APPLY', 'ALREADY_MET'} or
+        deductible == 'APPLIES' and benefits.get('deductible_remaining_cents') is not None or line_deductibles_resolved)
     record('deductible', deductible_resolved, [
         ('saved payer benefit rows', f'applicability {deductible or "not returned"}'),
         ('individual accumulator', 'remaining balance returned' if benefits.get('deductible_remaining_cents') is not None
          else 'applicable remaining balance not returned'),
+        ('clinic in-network policy', f'deductible assumed for {len(assumed_lines)} selected CPT(s)' if assumed_lines
+         else 'no clinic deductible assumption applied'),
         ('published plan rule', '2026 FEP Basic has no annual medical deductible'
          if benefits.get('published_plan_rule') else 'no exact-product rule applied'),
     ], 'Deductible applicability and remaining individual balance for this service',

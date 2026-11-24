@@ -205,6 +205,7 @@ export type VisitPricedLine = VisitCode & {
     benefit_summary?: string
     visits_remaining?: number
     deductible_applies?: boolean
+    deductible_default_source?: 'clinic_in_network_policy' | null
     copay_id?: string | null
     coinsurance_id?: string | null
     deductible_id?: string | null

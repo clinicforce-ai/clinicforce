@@ -24,6 +24,7 @@ def normalize(raw, code='99203'):
 
 def test_plan_name_does_not_supply_missing_procedure_benefits_or_clear_conditions():
     raw = fep_payload()
+    assert normalize(raw)['deductible_applicability'] == 'UNKNOWN'
     codes = [{'id': code, 'code': code, 'units': 1} for code in ('99203', '95910', '95886')]
     rates = [{'code': code, 'allowed_cents': 10000} for code in ('99203', '95910', '95886')]
     result = visit_estimate.price_lines(codes, rates, normalize(raw), {'cost_share': 'payer_returned'}, payload=raw, service_date='2026-09-28')
