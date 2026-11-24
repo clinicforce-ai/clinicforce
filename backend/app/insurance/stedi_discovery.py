@@ -375,10 +375,9 @@ def card_candidate(fields: dict, inputs: dict, source: dict | None = None) -> di
 
 
 def card_followup_confirms(card: dict, response: dict, inputs: dict, route: str) -> bool:
-    """Bind a fresh Cigna 271 to the patient-bound card rather than a stale eCW policy."""
+    """Bind a fresh 271 to the patient-bound card rather than a stale eCW policy."""
     if (card.get('evidence_source') != 'insurance_card'
-            or response.get('tradingPartnerServiceId') != route
-            or route not in {'HGJLR', '62308'}):
+            or not route or response.get('tradingPartnerServiceId') != route):
         return False
     first, second = candidate_identity(card, inputs), candidate_identity(response, inputs)
     if not first or not second or first['relationship'] != second['relationship']:
