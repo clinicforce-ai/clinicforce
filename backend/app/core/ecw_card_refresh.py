@@ -22,6 +22,17 @@ def _fresh(row: dict, moment: datetime) -> bool:
     return bool(row.get('checked_at') and row['checked_at'] > moment - timedelta(hours=FRESH_HOURS))
 
 
+def linked_practices() -> dict[str, set[str]]:
+    """Confirmed practice-to-eCW links for scheduled near-term warmup."""
+    with staff_store._connection() as connection:
+        rows = connection.execute("""SELECT DISTINCT practice_id,ecw_patient_id FROM staff_patients
+            WHERE identity_status='confirmed' AND ecw_patient_id IS NOT NULL""").fetchall()
+    linked: dict[str, set[str]] = {}
+    for row in rows:
+        linked.setdefault(row['practice_id'], set()).add(row['ecw_patient_id'])
+    return linked
+
+
 def enqueue(practice_id: str, patient_id: str, *, force: bool = False, priority: int = 10) -> dict:
     """Deduplicate refreshes across requests and app tasks; preserve last good result."""
     moment = _now()

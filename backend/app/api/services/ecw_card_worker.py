@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi.concurrency import run_in_threadpool
 
-from app.core import ecw_card_refresh, object_store, staff_store
+from app.core import ecw_card_refresh, object_store
 from app.insurance import ecw_backend
 from app.logs.logger import log_warning
 
@@ -61,7 +61,7 @@ async def prefetch_loop() -> None:
     while True:
         try:
             from app.api.routers.commercial_estimator import _ecw_practice_config
-            linked = await run_in_threadpool(staff_store.linked_ecw_practices)
+            linked = await run_in_threadpool(ecw_card_refresh.linked_practices)
             if linked:
                 practice_days = {}
                 for practice_id in linked:

@@ -426,9 +426,7 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
             with backend._stage('card_inspect', resource=size):
                 return verified_generic_cards(mime, data)
 
-        # Check short/card-shaped attachments across the whole patient result
-        # before OCRing any long packet. Long PDF OCR dominated the timed-out
-        # first batch while the actual card was in a later short attachment.
+        # Defer long-packet OCR until all short candidates are checked.
         deferred_long = []
         for offset in range(0, len(generic), 6):
             batch = generic[offset:offset + 6]
@@ -469,8 +467,7 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
                             cards.append(card)
                         if matches and document_id is None:
                             return cards
-        # Only if no short candidate yielded the requested card, revisit long
-        # packets. Re-read them rather than retaining large PHI buffers in RAM.
+        # Re-read long packets to bound memory.
         for offset in range(0, len(deferred_long), 3):
             batch = deferred_long[offset:offset + 3]
             downloaded = await asyncio.gather(*(read_generic(item) for item in batch))
