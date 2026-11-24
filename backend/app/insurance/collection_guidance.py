@@ -6,7 +6,7 @@ from app.insurance.collection.requirements import summarize_requirements
 from app.insurance.collection.refundable_advance import apply as apply_refundable_advance, advance_patient_message
 from app.insurance.collection.bluecard_family_deposit import apply as apply_bluecard_family_deposit
 from app.insurance.collection.bluecard_epo import neurology_office_copay
-from app.insurance.collection.contract_advance import applies as contract_advance_applies
+from app.insurance.collection.contract_advance import applies as contract_advance_applies, note_bcbstx_fallback
 from app.insurance.collection.blue_ppo_family_quote import apply as apply_blue_ppo_family_quote
 from app.insurance.collection.cigna_quotes import apply as apply_cigna_quotes
 from app.insurance.collection.office_copay import (cigna_oap_televisit_office_copay, diagnostic_day_copay_amount, office_copay_amount, preview_office_copay_applies, uhc_choice_plus_registration_copay)
@@ -492,11 +492,7 @@ def build(result: dict, review: dict | None = None) -> dict:
                             patient_message='The clinic needs to recalculate the insurance advance for this visit.')
             for service in guidance['services']:
                 service['patient_cents'] = None
-    if any(line.get('allowed_basis') == 'bcbstx_rate_fallback' for line in lines):
-        assumptions.append('A matching BCBSTX clinic fee replaces a missing insurer fee for this provisional estimate; the insurer allowed amount follows the claim.')
-        if guidance['amount_cents'] is not None and guidance['amount_cents'] > 0:
-            guidance['reason'] += ' The estimate uses a BCBSTX fee for a CPT without an insurer-specific rate.'
-    guidance['assumptions'] = list(dict.fromkeys(assumptions))
+    note_bcbstx_fallback(guidance, assumptions, lines)
     if (guidance['basis'] == 'office_copay' and guidance['amount_cents'] is not None
             and len(lines) == len([line for line in lines if str(line.get('code') or '').isdigit()
                  and (99202 <= int(line['code']) <= 99205 or 99212 <= int(line['code']) <= 99215)])):

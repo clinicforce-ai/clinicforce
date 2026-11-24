@@ -451,9 +451,11 @@ def refresh_saved_network_pricing(result: dict, case: dict, practice_id: str,
         'clinic_attested_phcs_roster'})
     payer_name = str((route_payer or {}).get('display_name') or result.get('payer') or '')
     is_schedule_payer = aetna_fees.is_aetna_payer(payer_name) or bool(payer_fees.schedule_for_result({**result, 'payer': payer_name}))
-    rate_needs_refresh = any((line.get('rate_resolution') or {}).get('status') == 'RATE_UNAVAILABLE'
-                             or line.get('allowed_basis') == 'bcbstx_rate_fallback'
-                             for line in (result.get('price_range') or {}).get('lines') or [])
+    rate_needs_refresh = (benefits.get('network_status') == 'in_network'
+        and (case.get('previsit_context') or {}).get('source', {}).get('payer_plan_bound') is True
+        and any((line.get('rate_resolution') or {}).get('status') == 'RATE_UNAVAILABLE'
+                or line.get('allowed_basis') == 'bcbstx_rate_fallback'
+                for line in (result.get('price_range') or {}).get('lines') or []))
     if network_changed or identity_refreshed or saved_fep_standard_office_needs_reprice(result) or is_schedule_payer or rate_needs_refresh:
         payer_id = str((case.get('previsit_context') or {}).get('payer_id') or '')
         route = group_contract_support.eligibility_route(result, payer_id, route_payer)

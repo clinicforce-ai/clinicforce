@@ -334,7 +334,7 @@ def test_missing_insurer_cpt_uses_scoped_bcbstx_fee_and_retains_insurer_fee():
 
     with patch.object(payer_fees, 'active_schedule', return_value=True), \
          patch.object(payer_fees, 'matching_rates', return_value=[insurer]), \
-         patch('app.api.routers.commercial_flow.commercial_previsit_pricing._attach_temporary_blue_cross_rates',
+         patch('app.api.routers.commercial_flow.commercial_previsit_rate_fallback._attach_temporary_blue_cross_rates',
                side_effect=bcbstx):
         priced, issues = _previsit_range('synthetic-practice', inputs, source,
             'synthetic-route', codes, benefits, payer_name='United Healthcare')
@@ -360,7 +360,7 @@ def test_missing_both_rate_sources_names_cpt_and_insurer():
               'rendering_provider': {'npi': '1234567890'}}
     with patch.object(payer_fees, 'active_schedule', return_value=True), \
          patch.object(payer_fees, 'matching_rates', return_value=[]), \
-         patch('app.api.routers.commercial_flow.commercial_previsit_pricing._attach_temporary_blue_cross_rates'):
+         patch('app.api.routers.commercial_flow.commercial_previsit_rate_fallback._attach_temporary_blue_cross_rates'):
         priced, issues = _previsit_range('synthetic-practice', inputs,
             {'payer_plan_bound': True}, 'synthetic-route', [code], benefits,
             payer_name='United Healthcare')

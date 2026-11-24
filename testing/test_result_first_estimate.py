@@ -245,7 +245,8 @@ def test_saved_visit_reprices_after_a_fee_is_added(monkeypatch, basis, status):
               'benefits': {'network_status': 'in_network', 'network_source': 'clinic_library_contract'},
               'price_range': {'lines': [{'allowed_basis': basis,
                                          'rate_resolution': {'status': status}}]}}
-    case = {'previsit_context': {'payer_id': 'synthetic-route'}}
+    case = {'previsit_context': {'payer_id': 'synthetic-route',
+                                 'source': {'payer_plan_bound': True}}}
     route = {'id': 'synthetic-route', 'display_name': 'Synthetic insurer'}
     calls = []
     monkeypatch.setattr(saved_pricing.payer_fees, 'schedule_for_result', lambda _: None)

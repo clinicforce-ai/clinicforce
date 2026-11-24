@@ -13,3 +13,11 @@ def applies(benefits: dict, price: dict, lines: list[dict],
             and all(line.get('rate_resolution', {}).get('status') == 'RESOLVED'
                     and line.get('allowed_basis') in {'clinic_contract', 'payer_fee_schedule', 'bcbstx_rate_fallback'}
                     and line.get('allowed_cents') is not None for line in lines))
+
+
+def note_bcbstx_fallback(guidance: dict, assumptions: list[str], lines: list[dict]) -> None:
+    if any(line.get('allowed_basis') == 'bcbstx_rate_fallback' for line in lines):
+        assumptions.append('A matching BCBSTX clinic fee replaces a missing insurer fee for this provisional estimate; the insurer allowed amount follows the claim.')
+        if guidance['amount_cents'] is not None and guidance['amount_cents'] > 0:
+            guidance['reason'] += ' The estimate uses a BCBSTX fee for a CPT without an insurer-specific rate.'
+    guidance['assumptions'] = list(dict.fromkeys(assumptions))
