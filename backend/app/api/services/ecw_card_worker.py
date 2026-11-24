@@ -18,7 +18,7 @@ async def _refresh(job: dict) -> None:
     saved: list[dict] = []
     try:
         rows = await asyncio.wait_for(
-            ecw_backend.insurance_cards(job['ecw_patient_id'], include_bytes=True), timeout=180,
+            ecw_backend.insurance_cards(job['ecw_patient_id'], include_bytes=True), timeout=55,
         )
         partition = hashlib.sha256((job['practice_id'] + ':' + job['ecw_patient_id']).encode()).hexdigest()
         for row in rows:

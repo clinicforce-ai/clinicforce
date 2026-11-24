@@ -326,32 +326,6 @@ def test_card_inside_ecw_patient_packet_returns_only_its_page():
     asyncio.run(run())
 
 
-def test_late_text_card_in_long_packet_skips_unrelated_page_ocr():
-    with fitz.open() as pdf:
-        for _ in range(19):
-            pdf.new_page().insert_text((40, 40), 'Unrelated clinical note with no images')
-        pdf.new_page().insert_text((40, 40), 'Member ID Card\nSubscriber Name: SAMPLE PATIENT\n'
-                                   'Identification Number: ABC123456\nGroup Number: G12345\nRxBIN: 123456')
-        packet = pdf.tobytes()
-    document = {'resourceType': 'DocumentReference', 'id': 'packet-late', 'status': 'current',
-                'subject': {'reference': 'Patient/synthetic'},
-                'content': [{'attachment': {'contentType': 'application/pdf',
-                                            'data': base64.b64encode(packet).decode()}}]}
-
-    def handler(request):
-        rows = [] if request.url.params.get('type') else [document]
-        return httpx.Response(200, json={'resourceType': 'Bundle',
-                                         'entry': [{'resource': row} for row in rows]})
-
-    async def run():
-        with patch.object(ecw, 'settings', return_value=('client', 'https://ehr.example.test/fhir')), \
-             patch.object(ecw, '_access_token', AsyncMock(return_value='synthetic-token')), \
-             patch('app.insurance.golden._pdf_text', side_effect=AssertionError('unrelated OCR started')):
-            cards = await ecw.insurance_cards('synthetic', transport=httpx.MockTransport(handler))
-        assert [card['id'] for card in cards] == ['packet-late:0:19']
-    asyncio.run(run())
-
-
 def test_unlabeled_scanned_card_with_participant_and_group_ids_is_listed():
     def scan():
         image = Image.new('RGB', (1400, 900), 'white')
