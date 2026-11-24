@@ -600,6 +600,10 @@ PCP $0 Specialist $50''')])
     async def test_empty_ecw_coverage_uses_four_area_cash_price_without_stedi(self):
         await self._flow(date.today().isoformat(), empty_coverage=True)
 
+    async def test_nmct_empty_ecw_coverage_uses_cash_without_stedi(self):
+        with patch('app.insurance.network_participation.is_nmct_practice', return_value=True):
+            await self._flow(date.today().isoformat(), empty_coverage=True)
+
     async def test_four_area_cash_price_with_documented_ncs_emg_codes(self):
         await self._flow(date.today().isoformat(), empty_coverage=True, scheduled_code='95908,95886')
 
