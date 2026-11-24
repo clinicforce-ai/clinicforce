@@ -59,12 +59,23 @@ def test_card_followup_requires_same_route_and_subscriber_identity():
                     subscriber={**response['subscriber'], 'memberId': 'CARD-123',
                                 'groupNumber': 'GROUP-1'})
     assert discovery.card_followup_confirms(card, response, inputs, 'RMOUC')
+    current_response = deepcopy(response)
+    current_response.pop('tradingPartnerServiceId')
+    current_response['payerId'] = 'PREHP'
+    assert discovery.card_followup_confirms(card, current_response, inputs, 'RMOUC', 'PREHP')
+    current_response['subscriber']['groupNumber'] = 'GROUP-1-0001'
+    assert discovery.card_followup_confirms(card, current_response, inputs, 'RMOUC', 'PREHP')
     for field, value in [('memberId', 'OTHER'), ('lastName', 'Different'),
                          ('dateOfBirth', '19800102'), ('groupNumber', 'OTHER')]:
         changed = deepcopy(response)
         changed['subscriber'][field] = value
         assert not discovery.card_followup_confirms(card, changed, inputs, 'RMOUC')
+    wrong_subgroup = deepcopy(current_response)
+    wrong_subgroup['subscriber']['groupNumber'] = 'OTHER-0001'
+    assert not discovery.card_followup_confirms(card, wrong_subgroup, inputs, 'RMOUC', 'PREHP')
     assert not discovery.card_followup_confirms(card, response, inputs, 'OTHER-ROUTE')
+    assert not discovery.card_followup_confirms(card, current_response, inputs, 'RMOUC', 'OTHER-PAYER')
+    assert not discovery.card_followup_confirms(card, current_response, inputs, 'RMOUC')
 
 
 def test_recovered_route_replaces_stale_directory_payer_identity():
@@ -503,11 +514,12 @@ class RecoveryTest(IsolatedAsyncioTestCase):
         case['previsit_context']['result']['card_check'] = api._compare_card_hints(
             {'status': 'read', 'count': 1, 'fields': fields}, inputs.copy(), source)
         assert case['previsit_context']['result']['card_check']['alternative_supported'] is True
-        response.update(tradingPartnerServiceId='RMOUC',
+        response.update(payerId='PREHP',
                         payer={'name': 'Presbyterian Health Plan'},
                         subscriber={**response['subscriber'], 'memberId': 'CARD-123',
-                                    'groupNumber': 'GROUP-1'},
+                                    'groupNumber': 'GROUP-1-0001'},
                         planDateInformation={'planBegin': '20260101', 'planEnd': '20261231'})
+        response.pop('tradingPartnerServiceId', None)
         client = MagicMock(); client.__aenter__ = AsyncMock(return_value=client)
         client.__aexit__ = AsyncMock(return_value=None)
         client.post = AsyncMock(return_value=httpx.Response(200, json=response))
@@ -516,7 +528,7 @@ class RecoveryTest(IsolatedAsyncioTestCase):
              patch.object(staff, 'inspect_file', return_value=('image/png', 1)), \
              patch.object(v1_sources, 'read_card_fields', return_value=(fields, {}, [1])), \
              patch.object(api.httpx, 'AsyncClient', return_value=client), \
-             patch.object(api.stedi_payers, 'search_payer', AsyncMock(return_value={'stediId': 'RMOUC', 'displayName': 'Presbyterian Health Plan (Commercial)'})) as payer_lookup, \
+             patch.object(api.stedi_payers, 'search_payer', AsyncMock(return_value={'stediId': 'RMOUC', 'primaryPayerId': 'PREHP', 'displayName': 'Presbyterian Health Plan (Commercial)'})) as payer_lookup, \
              patch.object(api.object_store, 'put_staff_document', return_value='protected'), \
              patch.object(api, '_save', side_effect=lambda value, *_: value):
             await api._recover_previsit(case, session, provider)
