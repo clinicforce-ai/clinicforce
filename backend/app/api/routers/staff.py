@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from collections import OrderedDict
 import csv
 import hashlib
 import mimetypes
 import os
-import time
 from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
@@ -24,7 +22,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.api.settings import ALLOWED_ORIGINS, CLINICIAN_SHARE_COOKIE, MAX_INSURANCE_CARD_BYTES, MAX_UPLOAD_BYTES, PUBLIC_BASE_URL
-from app.core import clinic_email, object_store, staff_store, staff_deletions, library_files
+from app.core import clinic_email, ecw_card_refresh, object_store, staff_store, staff_deletions, library_files
 from app.core.patient_store import get_patient_profile
 from app.core.request_address import request_address
 from app.insurance import commercial, commercial_store, ecw_backend, era835, golden, missing_rates, network_participation, store, v1_sources
@@ -35,40 +33,6 @@ router = APIRouter(prefix="/api/staff", tags=["staff"])
 STAFF_COOKIE = "clinicforce_staff_session"
 NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache", "Referrer-Policy": "no-referrer"}
 CARD_PREVIEW_TIMEOUT_SECONDS = 55
-CARD_PREVIEW_CACHE_TTL_SECONDS = 120
-CARD_PREVIEW_CACHE_MAX_BYTES = 20_000_000
-_card_preview_cache: OrderedDict[tuple[str, str, str], tuple[float, str, bytes]] = OrderedDict()
-_card_preview_cache_bytes = 0
-
-
-def _cached_card(key: tuple[str, str, str]) -> tuple[bytes, str] | None:
-    global _card_preview_cache_bytes
-    item = _card_preview_cache.get(key)
-    if item is None:
-        return None
-    expires, mime, content = item
-    if expires <= time.monotonic():
-        _card_preview_cache.pop(key)
-        _card_preview_cache_bytes -= len(content)
-        return None
-    _card_preview_cache.move_to_end(key)
-    return content, mime
-
-
-def _remember_card(key: tuple[str, str, str], mime: str, content: bytes) -> None:
-    global _card_preview_cache_bytes
-    if len(content) > CARD_PREVIEW_CACHE_MAX_BYTES:
-        return
-    previous = _card_preview_cache.pop(key, None)
-    if previous:
-        _card_preview_cache_bytes -= len(previous[2])
-    while _card_preview_cache and _card_preview_cache_bytes + len(content) > CARD_PREVIEW_CACHE_MAX_BYTES:
-        _, (_, _, old_content) = _card_preview_cache.popitem(last=False)
-        _card_preview_cache_bytes -= len(old_content)
-    _card_preview_cache[key] = (time.monotonic() + CARD_PREVIEW_CACHE_TTL_SECONDS, mime, content)
-    _card_preview_cache_bytes += len(content)
-
-
 from app.api.schemas.staff import (
     Model,
     MissingRateGap,
@@ -80,6 +44,31 @@ from app.api.schemas.staff import (
     PatientSearch,
     EcwLookup,
 )
+
+
+class CardPreviewItem(BaseModel):
+    id: str
+    intake_id: str | None = None
+    title: str
+    content_type: str
+    source: Literal['clinicforce_upload', 'ecw_current']
+    url: str
+
+
+class CardPreviewList(BaseModel):
+    cards: list[CardPreviewItem]
+    message: str = ''
+    retryable: bool = False
+    status: Literal['queued', 'running', 'ready', 'failed', 'unavailable'] | None = None
+    checked_at: str | None = None
+
+
+class EcwCardStatus(BaseModel):
+    cards: list[CardPreviewItem]
+    status: Literal['queued', 'running', 'ready', 'failed', 'unavailable']
+    checked_at: str | None
+    message: str
+    retryable: bool
 
 
 def check_origin(request: Request) -> None:
@@ -313,21 +302,14 @@ async def get_document(intake_id: str, document_id: str, request: Request):
     return Response(content, media_type=document["content_type"], headers={**NO_STORE, "X-Content-Type-Options": "nosniff", "Content-Disposition": "inline", "Content-Security-Policy": "sandbox"})
 
 
-@router.get("/intakes/{intake_id}/cards")
-async def patient_cards(intake_id: str, request: Request):
+@router.get("/intakes/{intake_id}/cards", response_model=CardPreviewList)
+async def patient_cards(intake_id: str, request: Request, saved_only: bool = False):
     """List patient-bound ClinicForce cards and eCW health insurance card previews.
 
-    Merge eCW card-type, patient-document and patient-wide DocumentReference views.
-    Labelled cards and content-verified PDF/images, including scanned cards without
-    an insurance-card heading, are listed; government IDs are excluded.
-    Embedded cards in larger PDFs are returned as card-only PDF previews.
-    Each card names its upload or current eCW source;
-    ClinicForce uploads include their source intake ID for clinician deletion.
-    the eCW preview may have changed since a saved estimate. A missing eCW card
-    is reported even when a ClinicForce upload is also available. The eCW scan
-    has a 55-second deadline; an incomplete scan is never reported as no card.
-    Verified eCW bytes are held in a bounded, two-minute process cache so the
-    following PDF/image preview does not repeat the entire eCW search.
+    Return saved ClinicForce cards immediately and any fresh, verified eCW
+    previews from shared storage. An eCW refresh is queued outside this request;
+    poll /ecw-cards/status for its result. saved_only=true avoids even the
+    refresh queue. Every card remains bound to this clinic and patient.
     """
     staff = await require_staff(request)
     intake = await owned_intake(intake_id, staff)
@@ -336,47 +318,75 @@ async def patient_cards(intake_id: str, request: Request):
     cards = [{"id": item['id'], "intake_id": source['id'], "title": item['filename'], "content_type": item['content_type'], "source": "clinicforce_upload",
               "url": f"/api/staff/intakes/{quote(source['id'], safe='')}/documents/{quote(item['id'], safe='')}"}
              for source in sources for item in source['documents']]
+    if saved_only:
+        return JSONResponse({'cards': cards, 'message': '', 'retryable': False}, headers=NO_STORE)
     patient_id = (intake.get('patient') or {}).get('ecw_patient_id') or intake.get('fields', {}).get('ecw_patient_id')
-    message = ''
-    retryable = False
-    if patient_id:
-        try:
-            rows = await asyncio.wait_for(ecw_backend.insurance_cards(str(patient_id), include_bytes=True),
-                                          timeout=CARD_PREVIEW_TIMEOUT_SECONDS)
-            for item in rows:
-                content = item.pop('_content', None)
-                if isinstance(content, bytes):
-                    _remember_card((staff['practice_id'], str(patient_id), item['id']), item['content_type'], content)
-                cards.append({**item, 'source': 'ecw_current',
-                              'url': f"/api/staff/intakes/{quote(intake_id, safe='')}/ecw-card?document_id={quote(item['id'], safe='')}"})
-            if not rows:
-                message = ('No insurance card was identified among the eCW FHIR documents returned for this patient. '
-                           + ('Use the saved ClinicForce card below. ' if cards else
-                              'Check the card in eCW and upload its front and back here, or obtain the card from the patient. ')
-                           + 'An eCW registration card may not be available through this FHIR connection.')
-        except (TimeoutError, asyncio.TimeoutError):
-            retryable = True
-            message = ('The eCW card search timed out before every patient document could be checked. '
-                       'Retry later or use a saved ClinicForce card below.')
-        except Exception:
-            retryable = True
-            message = ('The eCW card search is incomplete. Any saved ClinicForce cards appear below. '
-                       'Retry the eCW preview or upload the card here.')
-    return JSONResponse({'cards': cards, 'message': message, 'retryable': retryable}, headers=NO_STORE)
+    if patient_id and ecw_backend.configured():
+        row = await run_in_threadpool(ecw_card_refresh.current_or_enqueue, staff['practice_id'], str(patient_id))
+        ecw = _ecw_card_status(intake_id, row)
+        return JSONResponse({**ecw, 'cards': cards + ecw['cards']}, headers=NO_STORE)
+    return JSONResponse({'cards': cards, 'message': '', 'retryable': False}, headers=NO_STORE)
+
+
+def _ecw_card_status(intake_id: str, row: dict | None) -> dict:
+    from datetime import datetime, timedelta, timezone
+    fresh = bool(row and row.get('checked_at') and
+                 row['checked_at'] > datetime.now(timezone.utc) - timedelta(hours=ecw_card_refresh.FRESH_HOURS))
+    cards = [{k: card[k] for k in ('id', 'title', 'content_type')}
+             | {'source': 'ecw_current',
+                'url': f"/api/staff/intakes/{quote(intake_id, safe='')}/ecw-card?document_id={quote(card['id'], safe='')}"}
+             for card in (row['cards'] if fresh else [])]
+    state = row['status'] if row else 'unavailable'
+    message = ('eCW card search is running.' if state in ('queued', 'running') else
+               'The eCW card search is incomplete. Retry the eCW preview.' if state == 'failed' else
+               'No insurance card was identified among the eCW FHIR documents returned for this patient.'
+               if state == 'ready' and not cards else '')
+    return {'cards': cards, 'status': state, 'checked_at': row['checked_at'].isoformat() if fresh else None,
+            'message': message, 'retryable': state == 'failed'}
+
+
+@router.get('/intakes/{intake_id}/ecw-cards/status', response_model=EcwCardStatus)
+async def ecw_cards_status(intake_id: str, request: Request):
+    """Start a deduplicated refresh if stale; poll only PostgreSQL, never eCW."""
+    staff = await require_staff(request)
+    intake = await owned_intake(intake_id, staff)
+    patient_id = (intake.get('patient') or {}).get('ecw_patient_id') or intake.get('fields', {}).get('ecw_patient_id')
+    if not patient_id or not ecw_backend.configured():
+        return JSONResponse({'cards': [], 'status': 'unavailable', 'checked_at': None,
+                             'message': 'No eCW card connection is available.', 'retryable': False}, headers=NO_STORE)
+    row = await run_in_threadpool(ecw_card_refresh.current_or_enqueue, staff['practice_id'], str(patient_id))
+    return JSONResponse(_ecw_card_status(intake_id, row), headers=NO_STORE)
+
+
+@router.post('/intakes/{intake_id}/ecw-cards/refresh', response_model=EcwCardStatus)
+async def refresh_ecw_cards(intake_id: str, request: Request):
+    """Queue one explicit retry; subsequent status reads do not repeat the scan."""
+    staff = await require_staff(request)
+    intake = await owned_intake(intake_id, staff)
+    patient_id = (intake.get('patient') or {}).get('ecw_patient_id') or intake.get('fields', {}).get('ecw_patient_id')
+    if not patient_id or not ecw_backend.configured():
+        raise HTTPException(404, 'No eCW patient is linked to this intake.')
+    row = await run_in_threadpool(ecw_card_refresh.enqueue, staff['practice_id'], str(patient_id), force=True)
+    return JSONResponse(_ecw_card_status(intake_id, row), headers=NO_STORE)
 
 
 @router.get("/intakes/{intake_id}/ecw-card")
 async def ecw_card(intake_id: str, document_id: str, request: Request):
-    """Read one patient-bound eCW card from the short-lived preview cache or eCW within 55 seconds."""
+    """Read a fresh patient-bound eCW preview from private S3; a cold direct read has a 55-second limit."""
     staff = await require_staff(request)
     intake = await owned_intake(intake_id, staff)
     patient_id = (intake.get('patient') or {}).get('ecw_patient_id') or intake.get('fields', {}).get('ecw_patient_id')
     if not patient_id:
         raise HTTPException(404, 'No eCW patient is linked to this intake.')
-    cached = _cached_card((staff['practice_id'], str(patient_id), document_id))
-    if cached is not None:
-        content, mime = cached
-        return Response(content, media_type=mime, headers={**NO_STORE, 'Content-Disposition': 'inline', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': 'sandbox'})
+    shared = await run_in_threadpool(ecw_card_refresh.status, staff['practice_id'], str(patient_id))
+    if shared and shared.get('checked_at') and shared['checked_at'] > datetime.now(timezone.utc) - timedelta(hours=ecw_card_refresh.FRESH_HOURS):
+        artifact = next((card for card in shared['cards'] if card['id'] == document_id), None)
+        if artifact:
+            try:
+                content = await run_in_threadpool(object_store.get_object_bytes, artifact['object_key'])
+            except Exception as exc:
+                raise HTTPException(503, 'The saved eCW preview is unavailable. Retry the eCW card search.') from exc
+            return Response(content, media_type=artifact['content_type'], headers={**NO_STORE, 'Content-Disposition': 'inline', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': 'sandbox'})
     try:
         content, mime = await asyncio.wait_for(
             ecw_backend.insurance_cards(str(patient_id), document_id=document_id),

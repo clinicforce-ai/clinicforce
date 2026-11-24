@@ -14,6 +14,11 @@ type Cards = {
   }>
   message: string
   retryable?: boolean
+  checked_at?: string | null
+}
+type EcwStatus = Cards & {
+  status: 'queued' | 'running' | 'ready' | 'failed' | 'unavailable'
+  checked_at: string | null
 }
 export default function InsuranceCards({
   intakeId,
@@ -29,37 +34,43 @@ export default function InsuranceCards({
   onCardDeleted?: (cleanupPending: boolean) => Promise<void>
 }) {
   const [data, setData] = useState<Cards | null>(null)
-  const [busy, setBusy] = useState(false)
+  const [busy, setBusy] = useState(background)
   const [error, setError] = useState('')
   const [deletingId, setDeletingId] = useState('')
+  const [enabled, setEnabled] = useState(background)
+  const [generation, setGeneration] = useState(0)
   const read = useCallback(async (): Promise<Cards> => {
     return request<Cards>(
-      `/api/staff/intakes/${encodeURIComponent(intakeId)}/cards`,
+      `/api/staff/intakes/${encodeURIComponent(intakeId)}/cards?saved_only=true`,
       {},
-      { timeoutMs: 65_000 },
+      { timeoutMs: 10_000 },
     )
   }, [intakeId])
-  const load = useCallback(async () => {
+  const statusUrl = `/api/staff/intakes/${encodeURIComponent(intakeId)}/ecw-cards/status`
+  const refreshUrl = `/api/staff/intakes/${encodeURIComponent(intakeId)}/ecw-cards/refresh`
+  const load = useCallback(() => {
     setBusy(true)
     setError('')
-    try {
-      setData(await read())
-    } catch (caught) {
-      setError(
-        caught instanceof ApiError && caught.status === 401
-          ? 'Your clinic session ended. Sign in again to load card previews.'
-          : 'Card previews could not be loaded.',
-      )
-    } finally {
-      setBusy(false)
-    }
-  }, [read])
+    setEnabled(true)
+    setGeneration((value) => value + 1)
+  }, [])
   useEffect(() => {
-    if (!background) return
+    if (!enabled) return
     let active = true
+    let timer: ReturnType<typeof setTimeout> | undefined
     read()
       .then((value) => {
-        if (active) setData(value)
+        if (active)
+          setData((current) => ({
+            ...value,
+            cards: [
+              ...value.cards,
+              ...(current?.cards.filter((card) => card.source === 'ecw_current') || []),
+            ],
+            message: current?.message || value.message,
+            retryable: current?.retryable || value.retryable,
+            checked_at: current?.checked_at,
+          }))
       })
       .catch((caught) => {
         if (active)
@@ -69,13 +80,42 @@ export default function InsuranceCards({
               : 'Card preview unavailable. The estimate uses the policy and payer response.',
           )
       })
+      .finally(() => {
+        if (active) setBusy(false)
+      })
+    const poll = async () => {
+      try {
+        const value = await request<EcwStatus>(statusUrl, {}, { timeoutMs: 10_000 })
+        if (!active) return
+        setData((current) => ({
+          cards: [
+            ...(current?.cards.filter((card) => card.source !== 'ecw_current') || []),
+            ...value.cards,
+          ],
+          message: value.message,
+          retryable: value.retryable,
+          checked_at: value.checked_at,
+        }))
+        if (value.status === 'queued' || value.status === 'running')
+          timer = setTimeout(() => void poll(), 2_000)
+      } catch (caught) {
+        if (active)
+          setError(
+            caught instanceof ApiError && caught.status === 401
+              ? 'Your clinic session ended. Sign in again to load card previews.'
+              : 'The eCW card search status could not be read.',
+          )
+      }
+    }
+    void poll()
     return () => {
       active = false
+      if (timer) clearTimeout(timer)
     }
-  }, [background, read])
+  }, [enabled, generation, read, statusUrl])
   const content = (
     <>
-      {busy && <p role="status">Reading saved cards and eCW card attachments…</p>}
+      {busy && <p role="status">Reading saved cards…</p>}
       {error && (
         <p role="alert">
           {error} <button onClick={() => void load()}>Retry</button>
@@ -89,7 +129,22 @@ export default function InsuranceCards({
       )}
       {data && !!data.cards.length && data.message && <p>{data.message}</p>}
       {data?.retryable && !error && (
-        <button type="button" disabled={busy} onClick={() => void load()}>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={async () => {
+            try {
+              await request<EcwStatus>(refreshUrl, { method: 'POST' }, { timeoutMs: 10_000 })
+              load()
+            } catch (caught) {
+              setError(
+                caught instanceof ApiError && caught.status === 401
+                  ? 'Your clinic session ended. Sign in again to load card previews.'
+                  : 'The eCW card refresh could not be started.',
+              )
+            }
+          }}
+        >
           Retry eCW card preview
         </button>
       )}
@@ -103,7 +158,9 @@ export default function InsuranceCards({
         <figure key={`${card.source || 'card'}:${card.id}`}>
           <figcaption>
             {card.title} ·{' '}
-            {card.source === 'ecw_current' ? 'Current eCW card' : 'ClinicForce upload'}
+            {card.source === 'ecw_current'
+              ? `eCW card${data.checked_at ? ` · checked ${new Date(data.checked_at).toLocaleString()}` : ''}`
+              : 'ClinicForce upload'}
           </figcaption>
           <div className="insurance-card-actions">
             <a className="insurance-card-open" href={card.url} target="_blank" rel="noreferrer">
@@ -170,7 +227,7 @@ export default function InsuranceCards({
     <details
       className="insurance-card-preview"
       onToggle={(event) => {
-        if (event.currentTarget.open && !background && !data && !busy && !error) void load()
+        if (event.currentTarget.open && !background && !enabled) load()
       }}
     >
       <summary>Insurance card preview</summary>

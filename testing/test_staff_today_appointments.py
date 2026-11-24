@@ -11,7 +11,7 @@ import pytest
 from app.api.routers import staff as _staff
 from app.api.routers.staff_flow import staff_appointments
 from app.api.routers import commercial_estimator
-from app.core import staff_store
+from app.core import ecw_card_refresh, staff_store
 from app.insurance import ecw_backend
 
 
@@ -64,12 +64,15 @@ def test_today_route_maps_only_confirmed_practice_links(monkeypatch):
     monkeypatch.setattr(commercial_estimator, '_ecw_practice_config', lambda _id: {'timezone': 'UTC'})
     monkeypatch.setattr(staff_store, 'linked_ecw_patient_ids', lambda practice_id: {'ecw-a': ['patient-a']} if practice_id == 'clinic-a' else {})
     monkeypatch.setattr(ecw_backend, 'practice_appointment_date', provider)
+    queued = []
+    monkeypatch.setattr(ecw_card_refresh, 'enqueue_many', lambda practice_id, patients: queued.append((practice_id, patients)))
     response = asyncio.run(staff_appointments.today_appointments(Request({'type': 'http'})))
     body = json.loads(response.body)
     assert body['date'] == datetime.now(timezone.utc).date().isoformat()
     assert body['visits'] == [{'clinic_patient_id': 'patient-a', 'date': body['date'],
                                'start': f"{body['date']}T09:00:00-05:00", 'status': 'booked'}]
     assert response.headers['cache-control'] == 'no-store'
+    assert queued == [('clinic-a', {'ecw-a'})]
 
 
 def test_selected_previous_date_uses_one_scoped_date_search(monkeypatch):

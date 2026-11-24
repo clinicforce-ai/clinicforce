@@ -102,6 +102,7 @@ export default function LatestSavedEstimate({
           )}
           {cardIntakeId && (
             <InsuranceCards
+              key={cardIntakeId}
               intakeId={cardIntakeId}
               background
               inline

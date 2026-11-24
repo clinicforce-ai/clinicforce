@@ -320,6 +320,17 @@ def linked_ecw_patient_ids(practice_id: str) -> dict[str, list[str]]:
     return linked
 
 
+def linked_ecw_practices() -> dict[str, set[str]]:
+    """Minimal confirmed links for the scheduled near-term card warmup."""
+    with _connection() as connection:
+        rows = connection.execute("""SELECT DISTINCT practice_id,ecw_patient_id FROM staff_patients
+            WHERE identity_status='confirmed' AND ecw_patient_id IS NOT NULL""").fetchall()
+    linked: dict[str, set[str]] = {}
+    for row in rows:
+        linked.setdefault(row['practice_id'], set()).add(row['ecw_patient_id'])
+    return linked
+
+
 from app.core.staff_dashboard import patient_dashboard as _patient_dashboard
 
 

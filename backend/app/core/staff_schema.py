@@ -41,6 +41,15 @@ def initialize(connection) -> None:
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     )""")
     connection.execute("CREATE INDEX IF NOT EXISTS staff_intakes_practice_idx ON staff_intakes (practice_id, updated_at DESC)")
+    connection.execute("""CREATE TABLE IF NOT EXISTS staff_ecw_card_refresh (
+        practice_id TEXT NOT NULL, ecw_patient_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('queued','running','ready','failed')),
+        cards JSONB NOT NULL DEFAULT '[]', checked_at TIMESTAMPTZ, finished_at TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ NOT NULL, lease_until TIMESTAMPTZ,
+        PRIMARY KEY (practice_id,ecw_patient_id)
+    )""")
+    connection.execute("CREATE INDEX IF NOT EXISTS staff_ecw_card_refresh_queue_idx ON staff_ecw_card_refresh (status, updated_at)")
+    connection.execute("CREATE INDEX IF NOT EXISTS staff_ecw_card_refresh_finished_idx ON staff_ecw_card_refresh (finished_at DESC) WHERE finished_at IS NOT NULL")
     connection.execute("ALTER TABLE staff_intakes ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'insurance_card'")
     connection.execute("ALTER TABLE staff_intakes ADD COLUMN IF NOT EXISTS source_portal_patient_id TEXT")
     connection.execute("ALTER TABLE staff_intakes ALTER COLUMN created_by DROP NOT NULL")

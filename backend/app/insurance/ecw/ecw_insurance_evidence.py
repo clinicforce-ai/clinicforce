@@ -422,22 +422,34 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
             except (fitz.FileDataError, fitz.EmptyFileError, ValueError):
                 return 1
 
-        # Rank only by shape, then verify contents. Long packets remain a fallback.
+        def inspect_generic(mime: str, data: bytes, size: str):
+            with backend._stage('card_inspect', resource=size):
+                return verified_generic_cards(mime, data)
+
+        # Check short/card-shaped attachments across the whole patient result
+        # before OCRing any long packet. Long PDF OCR dominated the timed-out
+        # first batch while the actual card was in a later short attachment.
+        deferred_long = []
         for offset in range(0, len(generic), 6):
             batch = generic[offset:offset + 6]
             downloaded = await asyncio.gather(*(read_generic(item) for item in batch))
             candidates = []
-            for (_, _, key, mime), data in zip(batch, downloaded):
+            for item, data in zip(batch, downloaded):
+                _, _, key, mime = item
                 if data is None:
                     unreadable = True
                 else:
-                    candidates.append((generic_priority(mime, data), key, mime, data))
-            for priority in (2, 1, 0):
+                    priority = generic_priority(mime, data)
+                    if priority == 0:
+                        deferred_long.append(item)
+                    else:
+                        candidates.append((priority, key, mime, data))
+            for priority in (2, 1):
                 ranked = [item for item in candidates if item[0] == priority]
                 for start in range(0, len(ranked), 3):
                     selected = ranked[start:start + 3]
                     inspected = await asyncio.gather(*(
-                        asyncio.to_thread(verified_generic_cards, mime, data)
+                        asyncio.to_thread(inspect_generic, mime, data, 'short')
                         for _, _, mime, data in selected
                     ))
                     for (_, key, mime, _), matches in zip(selected, inspected):
@@ -457,6 +469,33 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
                             cards.append(card)
                         if matches and document_id is None:
                             return cards
+        # Only if no short candidate yielded the requested card, revisit long
+        # packets. Re-read them rather than retaining large PHI buffers in RAM.
+        for offset in range(0, len(deferred_long), 3):
+            batch = deferred_long[offset:offset + 3]
+            downloaded = await asyncio.gather(*(read_generic(item) for item in batch))
+            selected = [(item[2], item[3], data) for item, data in zip(batch, downloaded) if data is not None]
+            unreadable = unreadable or len(selected) != len(batch)
+            inspected = await asyncio.gather(*(
+                asyncio.to_thread(inspect_generic, mime, data, 'long') for _, mime, data in selected
+            ))
+            for (key, mime, _), matches in zip(selected, inspected):
+                if matches is None:
+                    unreadable = True
+                    continue
+                for page, card_bytes in matches:
+                    card_id = key if page is None else f'{key}:{page}'
+                    if document_id is not None and card_id != document_id:
+                        continue
+                    seen.add(card_id)
+                    if document_id is not None:
+                        return card_bytes, mime
+                    card = {'id': card_id, 'title': 'eCW insurance card', 'content_type': mime}
+                    if include_bytes:
+                        card['_content'] = card_bytes
+                    cards.append(card)
+                if matches and document_id is None:
+                    return cards
         if document_id is not None:
             raise backend.EcwBackendError('No matching insurance card was returned for this patient.')
         if not cards and unreadable:

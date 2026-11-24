@@ -40,6 +40,9 @@ let todayReads = 0
 let exactDateReads = 0
 const visitRequestOrder = []
 const cardReads = []
+let cardStatusReads = 0
+let releaseCardStatus
+const cardStatusHeld = new Promise((resolve) => { releaseCardStatus = resolve })
 let useCache = false
 let releaseAppointments
 const appointmentsHeld = new Promise((resolve) => { releaseAppointments = resolve })
@@ -168,8 +171,18 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
       encounter_summary: { collect_today_cents: projectedAmount },
     }
   } else if (path === '/api/staff/intakes/current-card-intake/cards') {
-    cardReads.push(path)
+    cardReads.push(route.request().url())
     body = { cards: [{ id: 'synthetic-card', intake_id: 'current-card-intake', title: 'synthetic-card.pdf', content_type: 'application/pdf', source: 'clinicforce_upload', url: '/api/staff/intakes/current-card-intake/documents/synthetic-card' }], message: '' }
+  } else if (path === '/api/staff/intakes/current-card-intake/ecw-cards/status') {
+    if (cardPreviewCase) await cardStatusHeld
+    cardStatusReads += 1
+    body = cardPreviewCase && cardStatusReads < 3
+      ? { cards: [], status: cardStatusReads === 1 ? 'queued' : 'running', checked_at: null, message: 'eCW card search is running.', retryable: false }
+      : cardPreviewCase
+        ? { cards: [{ id: 'ecw-card:0', title: 'eCW insurance card', content_type: 'application/pdf', source: 'ecw_current', url: '/api/staff/intakes/current-card-intake/ecw-card?document_id=ecw-card%3A0' }], status: 'ready', checked_at: '2026-11-23T12:00:00Z', message: '', retryable: false }
+        : { cards: [], status: 'unavailable', checked_at: null, message: '', retryable: false }
+  } else if (path === '/api/staff/intakes/synthetic-intake/ecw-cards/status') {
+    body = { cards: [], status: 'unavailable', checked_at: null, message: '', retryable: false }
   } else if (path === '/api/staff/intakes/synthetic-intake/cards') {
     if (cardPreviewCase) {
       cardReads.push(path)
@@ -177,6 +190,8 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
     }
     body = { cards: [], message: 'No synthetic card preview.' }
   } else if (path === '/api/staff/intakes/current-card-intake/documents/synthetic-card') {
+    return route.fulfill({ status: 200, body: '%PDF-1.4\n%%EOF', headers: { 'Content-Type': 'application/pdf' } })
+  } else if (path === '/api/staff/intakes/current-card-intake/ecw-card') {
     return route.fulfill({ status: 200, body: '%PDF-1.4\n%%EOF', headers: { 'Content-Type': 'application/pdf' } })
   } else {
     throw new Error(`Unexpected API ${path}`)
@@ -334,11 +349,14 @@ try {
   if (cardPreviewCase) {
     const cardPanel = summary.getByText('Detailed benefits, insurance & card').locator('..')
     await cardPanel.locator('iframe[src="/api/staff/intakes/current-card-intake/documents/synthetic-card"]').waitFor()
-    assert.equal(await cardPanel.getByRole('link', { name: 'Open card' }).count(), 1)
+    releaseCardStatus()
+    await cardPanel.locator('iframe[src="/api/staff/intakes/current-card-intake/ecw-card?document_id=ecw-card%3A0"]').waitFor()
+    assert.equal(cardStatusReads, 3)
+    assert.equal(await cardPanel.getByRole('link', { name: 'Open card' }).count(), 2)
     assert.equal(await cardPanel.getByRole('button', { name: 'Delete insurance card' }).count(), 1)
     assert.equal(await cardPanel.getByRole('button', { name: 'Retry' }).count(), 0)
     assert.equal(await page.locator('.staff-narrow > .insurance-card-preview').count(), 0)
-    assert(cardReads.length > 0 && cardReads.every((path) => path === '/api/staff/intakes/current-card-intake/cards'))
+    assert(cardReads.length > 0 && cardReads.every((url) => new URL(url).pathname === '/api/staff/intakes/current-card-intake/cards' && new URL(url).searchParams.get('saved_only') === 'true'))
     assert.deepEqual(errors, [])
     console.log('PASS: current patient card previews inside detailed benefits without an older intake lookup')
   } else {

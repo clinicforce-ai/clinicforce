@@ -175,7 +175,7 @@ def test_short_generic_card_is_checked_before_unrelated_long_pdf_ocr():
          'subject': {'reference': 'Patient/synthetic'},
          'content': [{'attachment': {'contentType': 'application/pdf',
                                      'data': base64.b64encode(content).decode()}}]}
-        for identifier, content in [('long', long_pdf), ('card', card_pdf)]
+        for identifier, content in [(f'long-{index}', long_pdf) for index in range(6)] + [('card', card_pdf)]
     ]
 
     async def run():

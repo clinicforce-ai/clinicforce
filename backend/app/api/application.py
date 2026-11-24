@@ -139,10 +139,12 @@ from app.api.settings import (
     SOURCE_TAGS as _SOURCE_TAGS, insurance_beta_enabled,
 )
 from app.api.developer_docs import OPENAPI_DESCRIPTION, enrich_openapi, render_docs, docs_sessions, guard_docs_execution
-from app.insurance import golden as insurance_golden
+from app.insurance import ecw_backend, golden as insurance_golden
 
 
 _epic_endpoint_sync_task: asyncio.Task[None] | None = None
+_ecw_card_refresh_task: asyncio.Task[None] | None = None
+_ecw_card_prefetch_task: asyncio.Task[None] | None = None
 
 
 app = FastAPI(
@@ -253,18 +255,28 @@ async def _epic_endpoint_sync_loop() -> None:
 
 @app.on_event("startup")
 async def start_epic_endpoint_sync() -> None:
-    global _epic_endpoint_sync_task
+    global _epic_endpoint_sync_task, _ecw_card_refresh_task, _ecw_card_prefetch_task
     install_access_log_filter()
     if EPIC_ENDPOINT_SYNC_ENABLED:
         _epic_endpoint_sync_task = asyncio.create_task(_epic_endpoint_sync_loop())
+    if ecw_backend.configured():
+        from app.api.services.ecw_card_worker import prefetch_loop, refresh_loop
+        _ecw_card_refresh_task = asyncio.create_task(refresh_loop())
+        _ecw_card_prefetch_task = asyncio.create_task(prefetch_loop())
 
 
 @app.on_event("shutdown")
 async def stop_epic_endpoint_sync() -> None:
-    global _epic_endpoint_sync_task
+    global _epic_endpoint_sync_task, _ecw_card_refresh_task, _ecw_card_prefetch_task
     if _epic_endpoint_sync_task is not None:
         _epic_endpoint_sync_task.cancel()
         _epic_endpoint_sync_task = None
+    if _ecw_card_refresh_task is not None:
+        _ecw_card_refresh_task.cancel()
+        _ecw_card_refresh_task = None
+    if _ecw_card_prefetch_task is not None:
+        _ecw_card_prefetch_task.cancel()
+        _ecw_card_prefetch_task = None
 
 
 from app.api.services.patient_helpers import (

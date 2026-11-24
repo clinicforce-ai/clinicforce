@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date as Date, datetime
+from datetime import date as Date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, Request
@@ -12,7 +12,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from app.core import staff_store, staff_deletions
+from app.core import ecw_card_refresh, staff_store, staff_deletions
 from app.insurance import ecw_backend, store
 
 from app.api.routers import staff as _staff
@@ -44,6 +44,12 @@ async def _appointments_for_date(practice_id: str, day: str) -> JSONResponse:
         raise HTTPException(503, 'The eCW appointment date could not be verified. Retry the date.') from None
     visits = [{**{key: encounter[key] for key in ('date', 'start', 'status')}, 'clinic_patient_id': patient_id}
               for encounter in encounters for patient_id in linked.get(encounter['patient_id'], [])]
+    # Dashboard/date reads warm tomorrow's cards without adding an eCW document
+    # scan to this response. The shared queue deduplicates repeated list reads.
+    if Date.fromisoformat(day) in {datetime.now(timezone.utc).date() + timedelta(days=offset) for offset in (0, 1, 2)}:
+        await run_in_threadpool(ecw_card_refresh.enqueue_many, practice_id,
+                                {encounter['patient_id'] for encounter in encounters
+                                 if encounter['patient_id'] in linked})
     return JSONResponse({'date': day, 'visits': visits}, headers=NO_STORE)
 
 
