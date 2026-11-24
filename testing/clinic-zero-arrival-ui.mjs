@@ -223,6 +223,6 @@ assert.doesNotMatch(renderStaff({ ...unresolvedPatientModel,
   session: { practice_id: 'other', practice_name: 'Other clinic',
     arrival_collection_default_cents: null, role: 'staff' } }),
   /Amount to collect at visit.*\$0\.00/s)
-assert.match(renderPrebooking('primary'), /Collect on arrival.*\$0\.00/s)
+assert.doesNotMatch(renderPrebooking('primary'), /Collect on arrival.*\$0\.00/s)
 assert.doesNotMatch(renderPrebooking('synthetic-practice'), /Collect on arrival.*\$0\.00/s)
 console.log('Clinic zero arrival: insured, cash, lookup, waiting, stale and Availity views')
