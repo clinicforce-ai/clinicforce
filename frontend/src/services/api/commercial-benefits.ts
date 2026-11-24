@@ -86,6 +86,7 @@ export type PrevisitBenefits = null | {
     binding?: string | null
     match_version?: number
     reconciliation_rule?: string | null
+    policy_differences?: Array<{ field: string; ecw: string; payer: string }>
   }
   reported_options?: Array<{
     id?: string

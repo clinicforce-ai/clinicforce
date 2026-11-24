@@ -11,6 +11,23 @@ def apply(result: dict, guidance: dict, review: dict | None = None) -> dict:
                 'basis': 'eligibility_pending',
                 'reason': 'The payer eligibility check has not completed; the visit collection amount is pending.',
                 'patient_message': 'The visit payment amount will be available after the payer check completes.'}
+    identity = result.get('identity') or (result.get('benefits') or {}).get('identity') or {}
+    unresolved_identity = identity.get('status') == 'review' and (
+        identity.get('differences') or identity.get('policy_differences'))
+    rechecked_without_advance = (identity.get('reconciliation_rule') == 'payer_name_recheck'
+        and guidance.get('amount_cents') is None)
+    if result.get('payment_mode') != 'cash' and (unresolved_identity or rechecked_without_advance):
+        pending = {**guidance, 'amount_cents': None, 'status': 'action_required',
+                   'basis': 'identity_recheck_required' if unresolved_identity else 'collection_review_required',
+                   'reason': ('The payer and eCW member details differ. Reconcile the member and plan with the payer before setting a visit collection amount.'
+                              if unresolved_identity else
+                              'The payer-name recheck matched this member, but the visit collection requirements remain unresolved. Review the sourced office benefit and planned service before collecting.'),
+                   'patient_message': 'The visit payment amount is pending a member-detail check.'}
+        pending.pop('collection_rule', None)
+        potential = stedi_office_copay.potential(result, review)
+        if potential:
+            pending['potential_office_collection'] = potential
+        return pending
     amount = guidance.get('amount_cents')
     if result.get('nmct_fixed_office_copay_advance_enabled') is not True:
         return guidance
@@ -20,27 +37,13 @@ def apply(result: dict, guidance: dict, review: dict | None = None) -> dict:
             if potential:
                 return {**guidance, 'potential_office_collection': potential}
         return guidance
-    cash = result.get('payment_mode') == 'cash'
-    unresolved = guidance.get('reason') or ('The cash price is unresolved.' if cash else 'The insured patient share is unresolved.')
-    decision = {**guidance,
-        'amount_cents': 0,
-        'status': 'zero_advance',
-        'basis': 'cash_price_pending' if cash else 'claim_after_service',
-        'reason': ('Collect $0 at arrival under the clinic no-upfront-collection default. '
-                   'The cash price is still unresolved; provide the self-pay estimate '
-                   'and settle only the agreed lawful balance later.' if cash else
-                   'Collect $0 at arrival under the clinic no-upfront-collection default. '
-                   'The final patient share is not calculated; any lawful balance follows '
-                   'coverage reconciliation and claim processing or applicable self-pay terms.'),
-        'unresolved_collection_reason': unresolved,
-        'patient_message': ('No payment is requested at arrival. The cash price has not been settled.'
-                            if cash else 'No payment is requested at arrival. This does not mean the visit is free; '
-                            'any later balance depends on coverage, the processed claim or self-pay terms, '
-                            'and applicable billing protections.'),
-        'collection_rule': {'mode': 'clinic_zero_arrival_default',
-                            'reference': 'NMCT default: no advance without supported evidence'},
-        'policy_setup_required': False}
+    pending = {**guidance}
+    if amount is not None:
+        pending.update(amount_cents=None, status='action_required', basis='invalid_collection_amount',
+                       reason='The visit collection amount is invalid. Recalculate the estimate before collecting.',
+                       patient_message='The visit payment amount is pending a corrected estimate.')
+        pending.pop('collection_rule', None)
     potential = stedi_office_copay.potential(result, review)
     if potential:
-        decision['potential_office_collection'] = potential
-    return decision
+        pending['potential_office_collection'] = potential
+    return pending

@@ -374,11 +374,15 @@ def card_candidate(fields: dict, inputs: dict, source: dict | None = None) -> di
     return item
 
 
-def card_followup_confirms(card: dict, response: dict, inputs: dict, route: str) -> bool:
-    """Bind a fresh Cigna 271 to the patient-bound card rather than a stale eCW policy."""
-    if (card.get('evidence_source') != 'insurance_card'
-            or response.get('tradingPartnerServiceId') != route
-            or route not in {'HGJLR', '62308'}):
+def card_followup_confirms(card: dict, response: dict, inputs: dict, route: str,
+                           primary_payer_id: str | None = None) -> bool:
+    """Bind a fresh 271 to the patient-bound card rather than a stale eCW policy."""
+    returned_route = response.get('tradingPartnerServiceId')
+    returned_payer_id = response.get('payerId')
+    if (card.get('evidence_source') != 'insurance_card' or not route
+            or (returned_route and returned_route != route)
+            or (returned_payer_id and primary_payer_id and returned_payer_id != primary_payer_id)
+            or (not returned_route and (not primary_payer_id or returned_payer_id != primary_payer_id))):
         return False
     first, second = candidate_identity(card, inputs), candidate_identity(response, inputs)
     if not first or not second or first['relationship'] != second['relationship']:
@@ -387,7 +391,12 @@ def card_followup_confirms(card: dict, response: dict, inputs: dict, route: str)
     if any(not first.get(key) or not second.get(key) or normalized(first[key]) != normalized(second[key])
            for key in required):
         return False
-    return not first.get('group_number') or normalized(first['group_number']) == normalized(second.get('group_number'))
+    if not first.get('group_number'):
+        return True
+    card_group = str(first['group_number']).strip().upper()
+    payer_group = str(second.get('group_number') or '').strip().upper()
+    return (normalized(card_group) == normalized(payer_group)
+            or route == 'RMOUC' and bool(re.fullmatch(re.escape(card_group) + r'-\d{4}', payer_group)))
 
 
 def candidates(payload: dict, inputs: dict, source: dict | None = None) -> list[dict]:

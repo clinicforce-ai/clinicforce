@@ -48,6 +48,36 @@ def setup():
     return case, session, provider, item
 
 
+def test_card_followup_requires_same_route_and_subscriber_identity():
+    case, _, _, response = setup()
+    inputs = case['previsit_context']['inputs']
+    card = {'evidence_source': 'insurance_card',
+            'subscriber': {'firstName': 'Pat', 'lastName': 'Example',
+                           'dateOfBirth': '1980-01-01', 'memberId': 'CARD-123',
+                           'groupNumber': 'GROUP-1'}}
+    response.update(tradingPartnerServiceId='RMOUC',
+                    subscriber={**response['subscriber'], 'memberId': 'CARD-123',
+                                'groupNumber': 'GROUP-1'})
+    assert discovery.card_followup_confirms(card, response, inputs, 'RMOUC')
+    current_response = deepcopy(response)
+    current_response.pop('tradingPartnerServiceId')
+    current_response['payerId'] = 'PREHP'
+    assert discovery.card_followup_confirms(card, current_response, inputs, 'RMOUC', 'PREHP')
+    current_response['subscriber']['groupNumber'] = 'GROUP-1-0001'
+    assert discovery.card_followup_confirms(card, current_response, inputs, 'RMOUC', 'PREHP')
+    for field, value in [('memberId', 'OTHER'), ('lastName', 'Different'),
+                         ('dateOfBirth', '19800102'), ('groupNumber', 'OTHER')]:
+        changed = deepcopy(response)
+        changed['subscriber'][field] = value
+        assert not discovery.card_followup_confirms(card, changed, inputs, 'RMOUC')
+    wrong_subgroup = deepcopy(current_response)
+    wrong_subgroup['subscriber']['groupNumber'] = 'OTHER-0001'
+    assert not discovery.card_followup_confirms(card, wrong_subgroup, inputs, 'RMOUC', 'PREHP')
+    assert not discovery.card_followup_confirms(card, response, inputs, 'OTHER-ROUTE')
+    assert not discovery.card_followup_confirms(card, current_response, inputs, 'RMOUC', 'OTHER-PAYER')
+    assert not discovery.card_followup_confirms(card, current_response, inputs, 'RMOUC')
+
+
 def test_recovered_route_replaces_stale_directory_payer_identity():
     case, session, _, item = setup()
     case['previsit_context']['result']['stedi_payer'] = {'name': 'UnitedHealthcare', 'id': 'old-route'}
@@ -470,6 +500,52 @@ def test_united_healthcare_missing_insured_price_does_not_switch_to_cash():
 
 
 class RecoveryTest(IsolatedAsyncioTestCase):
+    async def test_presbyterian_card_recovers_when_ecw_lists_aetna_network(self):
+        from app.api.routers import staff
+        from app.insurance import v1_sources
+        case, session, provider, response = setup()
+        inputs, source = case['previsit_context']['inputs'], case['previsit_context']['source']
+        inputs.update(member_id='CARD-123', group_number='GROUP-1', service_date='2026-11-24',
+                      visit_type='follow_up')
+        source.update(_patient_id='synthetic-patient', payer='Aetna')
+        case['previsit_discovery']['identity_binding'] = api._recovery_binding(inputs, source)
+        fields = {'member_name': 'Pat Example', 'member_id': 'CARD-123',
+                  'group_number': 'GROUP-1', 'payer': 'Presbyterian Health Plan'}
+        case['previsit_context']['result']['card_check'] = api._compare_card_hints(
+            {'status': 'read', 'count': 1, 'fields': fields}, inputs.copy(), source)
+        assert case['previsit_context']['result']['card_check']['alternative_supported'] is True
+        response.update(payerId='PREHP',
+                        payer={'name': 'Presbyterian Health Plan'},
+                        subscriber={**response['subscriber'], 'memberId': 'CARD-123',
+                                    'groupNumber': 'GROUP-1-0001'},
+                        planDateInformation={'planBegin': '20260101', 'planEnd': '20261231'})
+        response.pop('tradingPartnerServiceId', None)
+        client = MagicMock(); client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=None)
+        client.post = AsyncMock(return_value=httpx.Response(200, json=response))
+        with patch.object(api.staff_store, 'patient_card_intakes', return_value=[]), \
+             patch.object(api.ecw_backend, 'insurance_cards', AsyncMock(return_value=[{'id': 'card:0', '_content': b'synthetic'}])), \
+             patch.object(staff, 'inspect_file', return_value=('image/png', 1)), \
+             patch.object(v1_sources, 'read_card_fields', return_value=(fields, {}, [1])), \
+             patch.object(api.httpx, 'AsyncClient', return_value=client), \
+             patch.object(api.stedi_payers, 'search_payer', AsyncMock(return_value={'stediId': 'RMOUC', 'primaryPayerId': 'PREHP', 'displayName': 'Presbyterian Health Plan (Commercial)'})) as payer_lookup, \
+             patch.object(api.object_store, 'put_staff_document', return_value='protected'), \
+             patch.object(api, '_save', side_effect=lambda value, *_: value):
+            await api._recover_previsit(case, session, provider)
+        assert client.post.await_count == 1
+        assert payer_lookup.await_args.args[0] == 'Presbyterian Health Plan'
+        assert client.post.call_args.kwargs['json']['subscriber']['memberId'] == 'CARD-123'
+        assert case['previsit_discovery']['outcome'] == 'recovered'
+        result = api._previsit_result(case)
+        assert result['coverage_status'] == 'VERIFIED'
+        assert result['payment_mode'] == 'insurance'
+        assert result['card_check']['status'] == 'payer_verified'
+        assert result['card_check']['conflicts'] == []
+        assert result['card_check']['payer_comparison'] == {
+            'ecw': 'Aetna', 'card': 'Presbyterian Health Plan'}
+        assert result.get('eligibility_failure') is None
+        assert result['stedi_payer']['id'] == 'RMOUC'
+
     async def test_cigna_card_recovers_active_policy_when_ecw_selected_another(self):
         from app.api.routers import staff
         from app.insurance import v1_sources

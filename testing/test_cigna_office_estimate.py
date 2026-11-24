@@ -365,8 +365,8 @@ def test_cigna_missing_ecw_group_binds_exact_00_suffix_and_delegated_copay():
     assert deferred['collection_guidance']['amount_cents'] == 0
     inputs['reason'] = 'Mental health follow-up'
     mental = finish(payload, inputs, source, payer='Cigna', practice_id='primary')
-    assert mental['collection_guidance']['amount_cents'] == 0
-    assert mental['collection_guidance']['collection_rule']['mode'] == 'clinic_zero_arrival_default'
+    assert mental['collection_guidance']['amount_cents'] is None
+    assert 'collection_rule' not in mental['collection_guidance']
     assert mental['encounter_summary']['estimated_total_patient_min_cents'] is None
 
     conflicting_group = deepcopy(inputs)
@@ -1040,8 +1040,8 @@ def test_current_cigna_office_copay_is_refundable_when_provider_tier_is_unconfir
          patch.object(api.staff_store, 'list_library', return_value=[]), \
          patch.object(api.practice_prices, 'current', return_value=None):
         unverified = api._previsit_result(case, 'primary')
-    assert unverified['collection_guidance']['amount_cents'] == 0
-    assert unverified['collection_guidance']['collection_rule']['mode'] == 'clinic_zero_arrival_default'
+    assert unverified['collection_guidance']['amount_cents'] is None
+    assert 'collection_rule' not in unverified['collection_guidance']
     assert unverified['encounter_summary']['estimated_total_patient_min_cents'] is None
 
 

@@ -18,6 +18,7 @@ export type CommercialCardCheck = {
   status:
     | 'read'
     | 'matched'
+    | 'payer_verified'
     | 'filled_missing'
     | 'conflict'
     | 'unverified'
@@ -30,6 +31,7 @@ export type CommercialCardCheck = {
   failure_reason?: string | null
   fields_added?: string[]
   conflicts: string[]
+  resolved_conflicts?: string[]
   differences: string[]
   alternative_supported?: boolean
   independent_ecw_check?: boolean

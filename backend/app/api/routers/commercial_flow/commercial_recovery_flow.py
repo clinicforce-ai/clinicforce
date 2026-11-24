@@ -97,6 +97,10 @@ async def _accept_recovered_coverage(case: dict, session: dict, verified: dict, 
                      pricing_source=pricing_source, checked_at=_api._now(), reason_code='coverage_recovered', selection_error=None)
     result = _api.deepcopy(context['result'])
     result.pop('eligibility_failure', None); result.pop('eligibility_error', None)
+    if discovery.get('identity_pathway') == 'card_eligibility_followup' and result.get('card_check'):
+        card_check = result['card_check']
+        card_check['resolved_conflicts'] = card_check.get('conflicts') or []
+        card_check.update(status='payer_verified', conflicts=[], differences=[])
     # A prior route's blocked enrollment does not describe verified reused
     # benefits or a successful check through another route. Snapshots retain it.
     result.pop('enrollment', None)
@@ -271,8 +275,8 @@ async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict
         identity_matches = False
         recorded = _api.insurance_identity.compare(verified, _api._coverage_snapshot(inputs, source))
         card_confirmed = bool(item.get('evidence_source') == 'insurance_card'
-            and (context.get('result') or {}).get('card_check', {}).get('cigna_card_policy') is True
-            and _api.stedi_discovery.card_followup_confirms(item, verified, inputs, payer['stediId']))
+            and (context.get('result') or {}).get('card_check', {}).get('alternative_supported') is True
+            and _api.stedi_discovery.card_followup_confirms(item, verified, inputs, payer['stediId'], payer.get('primaryPayerId')))
         if returned_identity:
             identity_matches = bool((not coverage.get('member_id') or _api.stedi_discovery.normalized(returned_identity['member_id']) == _api.stedi_discovery.normalized(coverage['member_id'])) and
                 all(_api.stedi_discovery.normalized(returned_identity[key]) == _api.stedi_discovery.normalized(coverage.get(key))
@@ -332,6 +336,8 @@ async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict
             coverage = _api._discovered_coverage(inputs, source, verified)
         if payer_confirmed:
             discovery['identity_pathway'] = 'payer_eligibility_followup'
+        elif card_confirmed:
+            discovery['identity_pathway'] = 'card_eligibility_followup'
         await _api._accept_recovered_coverage(case, session, verified, payer, coverage, http_status=response.status_code)
     except (_api.httpx.HTTPError, ValueError, KeyError, TypeError, StopIteration, IndexError, _api.commercial.CommercialError):
         selection_error = ('The follow-up payer check outcome is unknown. Check Stedi activity before another payer request.'

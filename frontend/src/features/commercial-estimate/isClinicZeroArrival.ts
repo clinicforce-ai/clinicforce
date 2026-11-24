@@ -2,7 +2,7 @@ import type { PrevisitEstimate } from '../../services/api/commercial-estimator'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 
 export const clinicFallbackReason =
-  'No payment is requested at arrival under the clinic default. The current amount is unresolved; any lawful balance follows coverage, the processed claim, or applicable cash terms.'
+  'The visit collection amount is pending review of the payer and service details.'
 
 export function isClinicZeroArrival(result: PrevisitEstimate, model: CommercialEstimateModel) {
   if (result.eligibility_request_state === 'pending') return false
@@ -10,11 +10,6 @@ export function isClinicZeroArrival(result: PrevisitEstimate, model: CommercialE
     result.collection_guidance?.potential_office_collection &&
     !model.previousEstimate &&
     !model.calculating
-  )
-    return true
-  if (
-    model.session?.arrival_collection_default_cents === 0 &&
-    (model.previousEstimate || model.calculating || !model.supportedAmount)
   )
     return true
   return (

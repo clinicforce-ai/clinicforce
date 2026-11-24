@@ -180,8 +180,11 @@ def card_fields(pages: list[tuple[int, str]]) -> tuple[dict, dict]:
                 add("payer", "Blue Cross Blue Shield of Texas", page, match[0])
             elif match := re.search(r"\bUnited\s*Healthcare\b", joined, re.I):
                 add("payer", "UnitedHealthcare", page, match[0])
-            elif match := re.search(r"\b(Aetna|Cigna|Humana)\b", joined, re.I):
+            elif match := re.search(r"\bPresbyterian (?:Health Plan|Insurance Company)\b", joined, re.I):
                 add("payer", match[0], page, match[0])
+            elif match := re.search(r"\b(Aetna|Cigna|Humana)\b", joined, re.I):
+                if match[1].casefold() != 'aetna' or not re.search(r"\bAetna Signature Administrators\b", joined, re.I):
+                    add("payer", match[0], page, match[0])
         if re.search(r'\bCigna\b', joined, re.I):
             # The two-column eCW printout can put another benefit after Name.
             if match := re.search(r"\bN(?:a|o)me:\s*([A-Za-z][A-Za-z .'-]{2,80}?)(?=\s+(?:Urgent|Hospital|PCP|Rx|Network)\b|$)", joined, re.I):
