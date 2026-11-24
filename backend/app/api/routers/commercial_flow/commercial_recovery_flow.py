@@ -276,7 +276,7 @@ async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict
         recorded = _api.insurance_identity.compare(verified, _api._coverage_snapshot(inputs, source))
         card_confirmed = bool(item.get('evidence_source') == 'insurance_card'
             and (context.get('result') or {}).get('card_check', {}).get('alternative_supported') is True
-            and _api.stedi_discovery.card_followup_confirms(item, verified, inputs, payer['stediId']))
+            and _api.stedi_discovery.card_followup_confirms(item, verified, inputs, payer['stediId'], payer.get('primaryPayerId')))
         if returned_identity:
             identity_matches = bool((not coverage.get('member_id') or _api.stedi_discovery.normalized(returned_identity['member_id']) == _api.stedi_discovery.normalized(coverage['member_id'])) and
                 all(_api.stedi_discovery.normalized(returned_identity[key]) == _api.stedi_discovery.normalized(coverage.get(key))
