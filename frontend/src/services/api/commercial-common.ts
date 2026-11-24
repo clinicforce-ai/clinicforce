@@ -76,7 +76,6 @@ export type PrevisitIdentity = {
   can_confirm: boolean
   differences: Array<{ field: string; ecw: string; payer: string }>
   policy_differences?: Array<{ field: string; ecw: string; payer: string }>
-  reconciliation_rule?: string | null
   evidence?: { reference: string; verified_at: string }
 }
 
