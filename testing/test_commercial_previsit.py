@@ -15,6 +15,27 @@ from app.api.routers.commercial_flow.commercial_previsit_reuse import retain_sav
 
 
 class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
+    def test_saved_optum_uhc_dual_policy_keeps_insurance_review_after_empty_discovery(self):
+        source = {'active_coverages': 2, 'coverage_records': [
+            {'status': 'active', 'payer': ['Optum Care'], 'member_id': 'M123', 'group_number': 'G9'},
+            {'status': 'active', 'payer': ['UnitedHealthcare'], 'member_id': 'M123', 'group_number': 'G9'},
+        ]}
+        case = {'revision': 1, 'previsit_context': {
+            'result': {'payer': 'Optum Care', 'service_date': '2026-11-20', 'payment_mode': 'insurance',
+                       'benefits': {'active': None}, 'codes': [{'code': '99213', 'units': 1}], 'selected_ids': []},
+            'inputs': {'service_date': '2026-11-20'}, 'source': source},
+            'previsit_discovery': {'request_state': 'complete', 'outcome': 'no_match', 'exhausted': True},
+            'previsit': {'request_state': 'rejected'}}
+        result = _previsit_result(case)
+        self.assertEqual(result['payment_mode'], 'insurance')
+        self.assertNotIn('cash_fallback', result)
+        self.assertIsNone(result['collection_guidance']['amount_cents'])
+        source['coverage_records'][1]['member_id'] = 'DIFFERENT'
+        self.assertEqual(_previsit_result(case)['payment_mode'], 'cash')
+        source['coverage_records'][1]['member_id'] = 'M123'
+        case['visit_review'] = {'payment_mode': 'cash'}
+        self.assertEqual(_previsit_result(case)['payment_mode'], 'cash')
+
     async def test_confirmed_card_read_overlaps_ecw_appointment_read(self):
         from fastapi import HTTPException
         from app.insurance.ecw_backend import EcwBackendError

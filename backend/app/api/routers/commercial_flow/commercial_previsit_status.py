@@ -443,7 +443,8 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         result['payment_mode'] = explicit_payment_mode
         result.pop('cash_fallback', None)
     coverage_conflict = retain_conflicted_insurance(result, case)
-    united_healthcare = _api.commercial.is_united_healthcare_payer(result, {'displayName': route_payer.get('display_name')} if route_payer else None)
+    united_healthcare = (_api.commercial.is_united_healthcare_payer(result, {'displayName': route_payer.get('display_name')} if route_payer else None)
+                         or _api.commercial.has_optum_uhc_dual_ehr_evidence(source, str(result.get('service_date') or '')))
     original_medicare = _api.stedi_payers.original_medicare_result(result, source)
     if ((united_healthcare or original_medicare or result.get('nmct_fixed_office_copay_advance_enabled')) and result.get('cash_fallback') is not None
             and (case.get('visit_review') or {}).get('payment_mode') != 'cash'):

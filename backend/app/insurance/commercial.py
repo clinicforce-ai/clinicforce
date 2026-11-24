@@ -62,6 +62,30 @@ def is_united_healthcare_payer(result: dict, directory_payer: dict | None = None
     return bool(label and _UHC_NAME.search(str(label)))
 
 
+def has_optum_uhc_dual_ehr_evidence(source: dict, day: str) -> bool:
+    """Keep unresolved linked Optum/UHC eCW policies in insurance review."""
+    records = source.get('coverage_records') or []
+    if len(records) != 2 or source.get('active_coverages') != 2:
+        return False
+    labels = []
+    members = set()
+    groups = set()
+    for row in records:
+        period = row.get('period') or {}
+        if (str(row.get('status') or '').casefold() != 'active'
+                or period.get('start') and str(period['start'])[:10] > day
+                or period.get('end') and str(period['end'])[:10] < day):
+            return False
+        labels.append(' '.join(row.get('payer') or []))
+        members.add(re.sub(r'\W', '', str(row.get('member_id') or '')).upper())
+        group = re.sub(r'\W', '', str(row.get('group_number') or '')).upper()
+        if group:
+            groups.add(group)
+    return (len(members) == 1 and '' not in members and len(groups) <= 1
+            and any('optum' in label.casefold() for label in labels)
+            and any(_UHC_NAME.search(label) for label in labels))
+
+
 def eligibility_failure(payload: dict) -> dict:
     """Safe, actionable explanations; arbitrary response text stays protected."""
     errors = eligibility_errors(payload)
