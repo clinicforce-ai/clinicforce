@@ -278,6 +278,22 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(check['conflicts'], ['member_id'])
         self.assertEqual(inputs['member_id'], 'ECW-123')
 
+    def test_presbyterian_card_with_aetna_network_logo_starts_card_payer_review(self):
+        from app.insurance.v1_sources import card_fields
+        fields, _ = card_fields([(1, 'Presbyterian Health Plan\nMember Name: Pat Example\n'
+                                   'Member ID: PHP123456\nGroup Number: GRP123'),
+                                  (2, 'Aetna Signature Administrators network outside New Mexico')])
+        inputs = {'member_id': 'PHP123456', 'group_number': 'GRP123', 'relationship': '18',
+                  'patient': {'patient_first_name': 'Pat', 'patient_last_name': 'Example',
+                              'patient_birth_date': '1980-01-02'}, 'subscriber': {}}
+        source = {'payer': 'Aetna', '_patient_id': 'patient-1', 'coverage_id': 'policy-1',
+                  'active_coverages': 1}
+        check = _compare_card_hints({'status': 'read', 'count': 1, 'fields': fields}, inputs, source)
+        self.assertEqual(check['status'], 'conflict')
+        self.assertEqual(check['payer_comparison'], {'ecw': 'Aetna', 'card': 'Presbyterian Health Plan'})
+        self.assertTrue(check['alternative_supported'])
+        self.assertEqual(source['payer'], 'Aetna')
+
     def test_card_matching_one_other_active_ecw_policy_starts_payer_recovery(self):
         inputs = {'service_date': '2026-11-09', 'member_id': 'SELECTED-1',
                   'group_number': 'SELECTED-GROUP', 'relationship': '18',

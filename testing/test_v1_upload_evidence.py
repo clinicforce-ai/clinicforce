@@ -100,6 +100,19 @@ class SourceTests(unittest.TestCase):
                          {"member_name": "PAT EXAMPLE", "member_id": "UHC123456", "group_number": "704321",
                           "birth_date": "1980-01-02", "payer": "UnitedHealthcare"})
 
+    def test_presbyterian_card_does_not_route_through_aetna_network_logo(self):
+        fields, evidence = v1_sources.card_fields([
+            (1, "Presbyterian Health Plan\nMember Name: PAT EXAMPLE\nMember ID: PHP123456\nGroup Number: GRP123"),
+            (2, "Aetna Signature Administrators network outside New Mexico\nSubmit claims to Presbyterian Health Plan"),
+        ])
+        self.assertEqual(fields['payer'], 'Presbyterian Health Plan')
+        self.assertIn('Presbyterian Health Plan', evidence['payer']['quote'])
+        self.assertEqual(fields['member_id'], 'PHP123456')
+
+    def test_aetna_signature_network_logo_alone_is_not_payer_evidence(self):
+        fields, _ = v1_sources.card_fields([(1, 'Aetna Signature Administrators network outside New Mexico')])
+        self.assertNotIn('payer', fields)
+
     def test_humana_card_binds_unlabeled_name_and_cms_plan_id(self):
         text = ("HUMANA VALUE CHOICE (PPO)\nA Medicare Health Plan\n"
                 "PAT Q EXAMPLE\nMember ID: H12345678\nCMS H7617 057")
