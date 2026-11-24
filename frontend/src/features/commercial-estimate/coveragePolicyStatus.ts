@@ -17,6 +17,14 @@ export function coveragePolicyStatus({
   candidateStatus?: string
   patientBenefitsBound: boolean
 }) {
+  if (
+    !tooEarly &&
+    result?.payment_mode === 'cash' &&
+    !result.payer &&
+    !result.insurance_hints?.length &&
+    result.insurance_diagnosis?.reasonCodes.includes('ECW_UPSTREAM_NO_COVERAGE')
+  )
+    return 'No eCW insurance on file · Self Pay'
   const benefits = result?.benefits
   const policyStatus = tooEarly
     ? 'Check closer to visit'

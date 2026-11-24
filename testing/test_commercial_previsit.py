@@ -600,6 +600,14 @@ PCP $0 Specialist $50''')])
     async def test_empty_ecw_coverage_uses_four_area_cash_price_without_stedi(self):
         await self._flow(date.today().isoformat(), empty_coverage=True)
 
+    async def test_nmct_empty_ecw_coverage_uses_cash_without_stedi(self):
+        with patch('app.insurance.network_participation.is_nmct_practice', return_value=True):
+            await self._flow(date.today().isoformat(), empty_coverage=True)
+
+    async def test_nmct_saved_empty_coverage_reprices_office_visit_as_cash(self):
+        with patch('app.insurance.network_participation.is_nmct_practice', return_value=True):
+            await self._flow(date.today().isoformat(), empty_coverage=True, empty_office=True)
+
     async def test_four_area_cash_price_with_documented_ncs_emg_codes(self):
         await self._flow(date.today().isoformat(), empty_coverage=True, scheduled_code='95908,95886')
 
@@ -684,7 +692,11 @@ PCP $0 Specialist $50''')])
     async def test_newer_conflicting_ecw_check_refreshes_cached_stedi_evidence(self):
         await self._flow(date.today().isoformat(), newer_ecw=True)
 
-    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None, pos=None, scheduled_code=None, emg_review=False, expect_preliminary=False, visit_type='new', combined_emg=False, secondary_mismatch=False, cash_office=False, telehealth=False, confirmed_card=False, aetna_payer_id=None, cash_package=False, two_coverages=False, empty_coverage=False, stale_cash_selection=False, four_area_reason_only=False, duplicate_full_study=False):
+    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None, pos=None, scheduled_code=None, emg_review=False, expect_preliminary=False, visit_type='new', combined_emg=False, secondary_mismatch=False, cash_office=False, telehealth=False, confirmed_card=False, aetna_payer_id=None, cash_package=False, two_coverages=False, empty_coverage=False, empty_office=False, stale_cash_selection=False, four_area_reason_only=False, duplicate_full_study=False):
+        if empty_office:
+            self.cash_current.return_value = {'id': 'synthetic-office-cash', 'filename': 'synthetic.csv',
+                'effective_from': '2026-01-01', 'rows': [{'code': '99203', 'cash_cents': 25000,
+                    'description': 'Office consultation'}]}
         if cash_office:
             self.cash_current.return_value = {'id': 'synthetic-cash', 'filename': 'synthetic.csv',
                 'effective_from': '2026-01-01', 'rows': [{'code': '99204', 'cash_cents': 25000,
@@ -695,7 +707,7 @@ PCP $0 Specialist $50''')])
                     {'code': '99203', 'cash_cents': 25000, 'description': 'Office consultation'},
                     {'code': 'named:onehand', 'cash_cents': 50000, 'price_kind': 'named_package',
                      'label': 'One-hand carpal tunnel', 'description': 'One-hand carpal tunnel'}]}
-        if empty_coverage:
+        if empty_coverage and not empty_office:
             self.cash_current.return_value = {'id': 'synthetic-cash', 'filename': 'synthetic.docx',
                 'effective_from': '2026-09-04', 'rows': [
                     {'code': 'named:full-study', 'cash_cents': 130000, 'price_kind': 'named_package',
@@ -726,8 +738,12 @@ PCP $0 Specialist $50''')])
         if cash_package:
             inputs['reason'] = 'One-hand carpal tunnel EMG/NCS'
         if empty_coverage:
-            inputs.update(reason='Reason: EMG 4 Areas', appointment_reason='EMG 4 Areas',
+            inputs.update(reason='new patient consultation' if empty_office else 'Reason: EMG 4 Areas',
+                          appointment_reason='new patient consultation' if empty_office else 'EMG 4 Areas',
                           member_id=None, relationship=None, subscriber={})
+            if empty_office:
+                inputs['lines'] = [{'id': 'documented-office', 'code': '99203',
+                                    'service_status': 'scheduled', 'units': 1, 'source': 'eCW ServiceRequest'}]
         if four_area_reason_only:
             inputs.update(reason='Reason: EMG 4 Areas; Visit type: EMG Visit',
                           appointment_reason=None, appointment_type='EMG Visit')
@@ -1109,6 +1125,29 @@ PCP $0 Specialist $50''')])
                 self.assertEqual(refreshed['selected_ids'], [])
                 return
             if empty_coverage:
+                if empty_office:
+                    self.assertEqual(result['payment_mode'], 'cash')
+                    self.assertEqual(result['collection_guidance']['amount_cents'], 25000)
+                    stored = case['previsit_context']['result']
+                    stored.update(payment_mode='insurance', collection_guidance={})
+                    stored.pop('cash_quote', None)
+                    stored.pop('cash_schedule', None)
+                    stored['price_range'].update(cash_complete=False, cash_min_cents=None, cash_max_cents=None)
+                    reopened = _previsit_result(case, 'clinic')
+                    self.assertEqual(reopened['payment_mode'], 'cash')
+                    self.assertEqual(reopened['cash_quote']['min_cents'], 25000)
+                    self.assertEqual(reopened['collection_guidance']['amount_cents'], 25000)
+                    self.assertEqual(case['previsit_context']['result']['payment_mode'], 'insurance')
+                    case['visit_review']['payment_mode'] = 'insurance'
+                    self.assertEqual(_previsit_result(case, 'clinic')['payment_mode'], 'insurance')
+                    case['visit_review'].pop('payment_mode')
+                    self.cash_current.return_value = None
+                    unpriced = _previsit_result(case, 'clinic')
+                    self.assertEqual(unpriced['payment_mode'], 'cash')
+                    self.assertFalse(unpriced['price_range']['cash_complete'])
+                    self.assertNotIn('cash_quote', unpriced)
+                    client.post.assert_not_awaited()
+                    return
                 self.assertEqual(result['payment_mode'], 'cash')
                 self.assertEqual(result['cash_quote']['min_cents'], 130000)
                 self.assertEqual(result['collection_guidance']['amount_cents'], 130000)

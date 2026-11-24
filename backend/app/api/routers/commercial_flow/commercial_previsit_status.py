@@ -7,6 +7,7 @@ from app.insurance import aetna_office_planning, evidence_resolution, group_cont
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence, recheck_saved_payer_message
 from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import guard_unresolved_telehealth, guard_telehealth_guidance, restore_active_blue_cross_insurance, restore_saved_published_product, restore_saved_humana_hmo_product, retain_conflicted_insurance, refresh_saved_aetna_identity, refresh_saved_cigna_office_benefits, refresh_saved_uhc_registration_benefits, refresh_saved_network_pricing, refresh_saved_year_to_date_oop_candidate, upgrade_saved_biopsy_preview, refresh_saved_cross_payer_planning, suppress_saved_ambiguous_combined_zero_oop
+from app.api.routers.commercial_flow.commercial_saved_cash import restore_empty_coverage_cash
 from app.api.routers.commercial_flow.commercial_previsit_requirements import refresh_saved_requirements
 from app.api.routers.commercial_flow.commercial_previsit_enrollment import _enrollment_failure
 from app.api.routers.commercial_flow.commercial_previsit_service_scope import retain_incomplete_service_evidence as _retain_incomplete_service_evidence, upgrade_saved_post_botox_followup
@@ -18,7 +19,6 @@ async def configuration(request: _api.Request) -> dict:
 @_api.router.get("/appointments", responses={409: {"description": "ecw_patient_selection_required: return to staff lookup and confirm the patient before checking benefits."}})
 async def ecw_appointments(request: _api.Request) -> dict:
     """List confirmed scheduled visits without an eligibility check.
-
     Identity no-match/ambiguity returns 409 (ecw_patient_selection_required).
     The UI opens staff lookup; it never switches a patient by similarity score.
     The 24-second reader returns 502 with a phase and request ID on failure.
@@ -57,7 +57,6 @@ async def ecw_appointment_readiness(value: _api.EcwStartInput, request: _api.Req
                                 status_code=409, headers={"Cache-Control": "no-store"})
         raise _api.HTTPException(502, str(exc)) from exc
     return _api._appointment_readiness(session["practice_id"], session, inputs, source)
-
 def _recovery_binding(inputs: dict, source: dict) -> str:
     # Choosing anticipated services must not invalidate the recovered member identity.
     return _api._visit_context_token({**inputs, 'lines': [], 'reason': None, 'visit_type': None}, source)
@@ -439,6 +438,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
             hint['sources'].append(row['source'])
     result['insurance_hints'] = list(hints.values())
     explicit_payment_mode = (case.get('visit_review') or {}).get('payment_mode')
+    restore_empty_coverage_cash(result, case, practice_id)
     if explicit_payment_mode in {'cash', 'insurance'}:
         result['payment_mode'] = explicit_payment_mode
         result.pop('cash_fallback', None)
