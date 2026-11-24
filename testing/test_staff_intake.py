@@ -233,6 +233,12 @@ class StaffDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved['status'], 'failed')
         self.assertEqual(saved['cards'], [card])
 
+    async def test_opened_card_precedes_scheduled_prefetch(self):
+        practice = 'test-practice'
+        ecw_card_refresh.enqueue_many(practice, {'scheduled-one', 'scheduled-two'})
+        self.assertEqual(ecw_card_refresh.enqueue(practice, 'scheduled-two')['priority'], 10)
+        self.assertEqual(ecw_card_refresh.claim()['ecw_patient_id'], 'scheduled-two')
+
     async def upload(self):
         response = await self.client.post("/api/staff/intakes", files=[("files", ("card.pdf", card_pdf(), "application/pdf"))])
         self.assertEqual(response.status_code, 201, response.text)

@@ -22,21 +22,25 @@ def _fresh(row: dict, moment: datetime) -> bool:
     return bool(row.get('checked_at') and row['checked_at'] > moment - timedelta(hours=FRESH_HOURS))
 
 
-def enqueue(practice_id: str, patient_id: str, *, force: bool = False) -> dict:
+def enqueue(practice_id: str, patient_id: str, *, force: bool = False, priority: int = 10) -> dict:
     """Deduplicate refreshes across requests and app tasks; preserve last good result."""
     moment = _now()
     with staff_store._connection() as connection:
-        connection.execute("""INSERT INTO staff_ecw_card_refresh (practice_id,ecw_patient_id,status,updated_at)
-            VALUES (%s,%s,'queued',%s) ON CONFLICT DO NOTHING""", (practice_id, patient_id, moment))
+        connection.execute("""INSERT INTO staff_ecw_card_refresh (practice_id,ecw_patient_id,status,priority,updated_at)
+            VALUES (%s,%s,'queued',%s,%s) ON CONFLICT DO NOTHING""", (practice_id, patient_id, priority, moment))
         row = connection.execute("""SELECT * FROM staff_ecw_card_refresh
             WHERE practice_id=%s AND ecw_patient_id=%s FOR UPDATE""", (practice_id, patient_id)).fetchone()
         running = row['status'] == 'running' and row['lease_until'] and row['lease_until'] > moment
         queued = row['status'] == 'queued'
         recent_failure = row['status'] == 'failed' and row['updated_at'] > moment - timedelta(minutes=RETRY_MINUTES)
+        if queued and row['priority'] < priority:
+            connection.execute("""UPDATE staff_ecw_card_refresh SET priority=%s
+                WHERE practice_id=%s AND ecw_patient_id=%s""", (priority, practice_id, patient_id))
+            row = {**row, 'priority': priority}
         if not (running or queued or (not force and (_fresh(row, moment) or recent_failure))):
-            connection.execute("""UPDATE staff_ecw_card_refresh SET status='queued',updated_at=%s,lease_until=NULL
-                WHERE practice_id=%s AND ecw_patient_id=%s""", (moment, practice_id, patient_id))
-            row = {**row, 'status': 'queued', 'updated_at': moment}
+            connection.execute("""UPDATE staff_ecw_card_refresh SET status='queued',priority=%s,updated_at=%s,lease_until=NULL
+                WHERE practice_id=%s AND ecw_patient_id=%s""", (priority, moment, practice_id, patient_id))
+            row = {**row, 'status': 'queued', 'priority': priority, 'updated_at': moment}
     return dict(row)
 
 
@@ -47,9 +51,9 @@ def enqueue_many(practice_id: str, patient_ids: set[str]) -> None:
     with staff_store._connection() as connection:
         for patient_id in patient_ids:
             connection.execute("""INSERT INTO staff_ecw_card_refresh AS current
-                (practice_id,ecw_patient_id,status,updated_at) VALUES (%s,%s,'queued',%s)
+                (practice_id,ecw_patient_id,status,priority,updated_at) VALUES (%s,%s,'queued',0,%s)
                 ON CONFLICT (practice_id,ecw_patient_id) DO UPDATE
-                SET status='queued',updated_at=EXCLUDED.updated_at,lease_until=NULL
+                SET status='queued',priority=0,updated_at=EXCLUDED.updated_at,lease_until=NULL
                 WHERE (current.status='ready' AND (current.checked_at IS NULL OR current.checked_at<%s))
                    OR (current.status='failed' AND current.updated_at<%s)
                    OR (current.status='running' AND current.lease_until<%s)""",
@@ -67,7 +71,7 @@ def status(practice_id: str, patient_id: str) -> dict | None:
 def current_or_enqueue(practice_id: str, patient_id: str) -> dict:
     row = status(practice_id, patient_id)
     moment = _now()
-    if row and (_fresh(row, moment) or row['status'] == 'queued' or
+    if row and (_fresh(row, moment) or (row['status'] == 'queued' and row['priority'] >= 10) or
                 (row['status'] == 'running' and row['lease_until'] and row['lease_until'] > moment) or
                 (row['status'] == 'failed' and row['updated_at'] > moment - timedelta(minutes=RETRY_MINUTES))):
         return row
@@ -89,7 +93,7 @@ def claim() -> dict | None:
             return None
         row = connection.execute("""SELECT * FROM staff_ecw_card_refresh
             WHERE status='queued' OR (status='running' AND lease_until<=%s)
-            ORDER BY updated_at LIMIT 1 FOR UPDATE SKIP LOCKED""", (moment,)).fetchone()
+            ORDER BY priority DESC,updated_at LIMIT 1 FOR UPDATE SKIP LOCKED""", (moment,)).fetchone()
         if not row:
             return None
         lease_until = moment + timedelta(seconds=LEASE_SECONDS)
