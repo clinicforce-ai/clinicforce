@@ -11,7 +11,12 @@ export function referenceCoverageRow(
 ): CostBreakdownRow {
   const subscriber = result.reference_subscriber
   const requestedDate = result.service_date ? visitDate(result.service_date) : 'date unavailable'
-  const value = subscriber?.first_name
+  const emptyCash =
+    result.payment_mode === 'cash' &&
+    !result.payer &&
+    !result.insurance_hints?.length &&
+    result.insurance_diagnosis?.reasonCodes.includes('ECW_UPSTREAM_NO_COVERAGE')
+  const payerValue = subscriber?.first_name
     ? [
         result.payer || 'Payer not recorded',
         `Stedi subscriber ${subscriber.first_name} ${subscriber.last_name || ''}`.trim(),
@@ -20,6 +25,7 @@ export function referenceCoverageRow(
         .filter(Boolean)
         .join(' · ')
     : [result.payer || 'Payer not recorded', model.planName].filter(Boolean).join(' · ')
+  const value = emptyCash ? 'Self Pay · no eCW insurance on file' : payerValue
   const detail = result.reference_benefits
     ? `Stedi subscriber and benefit values used for this reference; eCW identity differs · Stedi requested ${requestedDate}; payer returned service date ${benefits?.returned_service_dates?.start ? visitDate(benefits.returned_service_dates.start) : 'unavailable'}`
     : result.collection_guidance?.collection_rule?.mode === 'aetna_office_individual_oop_deferral'
