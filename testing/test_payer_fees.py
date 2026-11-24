@@ -370,6 +370,28 @@ def test_missing_both_rate_sources_names_cpt_and_insurer():
     assert priced['lines'][0]['rate_resolution']['status'] == 'RATE_UNAVAILABLE'
 
 
+def test_office_bcbstx_fee_does_not_price_a_telehealth_visit():
+    code = {'id': 'office', 'code': '99203', 'units': 1, 'modifiers': []}
+    inputs = {'service_date': '2026-11-24', 'place_of_service': '10',
+              'rendering_provider': {'npi': '1234567890'}, 'telehealth': True}
+    benefits = {'network_status': 'in_network', 'plan_details': {'names': ['Cigna OAP']}}
+
+    def office_reference(reference, *_):
+        reference['temporary_rate_reference'] = {'reference_place_of_service': '11',
+            'lines': [{'id': 'office', 'code': '99203', 'units': 1, 'modifiers': [],
+                       'unit_reference_cents': 10117, 'source_reference': 'library:synthetic-office'}]}
+
+    with patch.object(payer_fees, 'active_schedule', return_value=True), \
+         patch.object(payer_fees, 'matching_rates', return_value=[]), \
+         patch('app.api.routers.commercial_flow.commercial_previsit_rate_fallback._attach_temporary_blue_cross_rates',
+               side_effect=office_reference):
+        priced, issues = _previsit_range('synthetic-practice', inputs,
+            {'payer_plan_bound': True}, 'synthetic-route', [code], benefits,
+            payer_name='Cigna')
+    assert priced['lines'][0]['rate_resolution']['status'] == 'RATE_UNAVAILABLE'
+    assert 'Please enter rate for CPT 99203 from the Cigna fee schedule.' in issues
+
+
 @pytest.mark.parametrize(('payer', 'plan'), [
     ('Cigna', 'Cigna Open Access Plus'),
     ('Wellpoint', 'Wellpoint Medicare Advantage PPO'),

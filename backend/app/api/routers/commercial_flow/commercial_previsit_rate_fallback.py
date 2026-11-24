@@ -24,7 +24,10 @@ def apply_missing_commercial_rates(selected: list[dict], rates: list[dict], rule
         _attach_temporary_blue_cross_rates(reference, practice_id, inputs, source, payer_name)
     except Exception as exc:
         log_warning('BCBSTX fee fallback', 'Scoped fee lookup unavailable (%s).', type(exc).__name__)
-    for row in (reference.get('temporary_rate_reference') or {}).get('lines') or []:
+    fee_reference = reference.get('temporary_rate_reference') or {}
+    if str(fee_reference.get('reference_place_of_service') or inputs.get('place_of_service') or '') != str(inputs.get('place_of_service') or ''):
+        fee_reference = {}
+    for row in fee_reference.get('lines') or []:
         if not str(row.get('source_reference') or '').startswith('library:'):
             continue
         rates.append({'id': f"bcbstx-fallback:{row['id']}", 'line_id': row['id'],
