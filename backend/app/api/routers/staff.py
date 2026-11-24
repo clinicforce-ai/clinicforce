@@ -307,7 +307,9 @@ async def patient_cards(intake_id: str, request: Request, saved_only: bool = Fal
     """List patient-bound ClinicForce cards and eCW health insurance card previews.
 
     Return saved ClinicForce cards immediately and any fresh, verified eCW
-    previews from shared storage. An eCW refresh is queued outside this request;
+    previews from shared storage, including multiple compact card PDFs filed as
+    generic patient documents. Generic eCW previews retain their document title.
+    An eCW refresh is queued outside this request;
     poll /ecw-cards/status for its result. saved_only=true avoids even the
     refresh queue. Every card remains bound to this clinic and patient.
     """

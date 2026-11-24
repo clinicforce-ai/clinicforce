@@ -198,6 +198,55 @@ def test_short_generic_card_is_checked_before_unrelated_long_pdf_ocr():
     asyncio.run(run())
 
 
+def test_generic_patient_documents_return_both_drug_and_medical_card_pdfs():
+    image = io.BytesIO()
+    Image.new('RGB', (400, 250), 'white').save(image, format='PNG')
+
+    def packet(pages):
+        with fitz.open() as pdf:
+            for text in pages:
+                page = pdf.new_page()
+                page.insert_text((40, 40), text)
+                page.insert_image(fitz.Rect(40, 70, 440, 320), stream=image.getvalue())
+            return pdf.tobytes()
+
+    documents = [
+        ('drug', 'Drug plan card.pdf', packet([
+            'Prescription Drug Plan PDP\nMember ID 123456789\nRx BIN 987654',
+            'Prescription Drug Plan PDP card back',
+        ])),
+        ('medical', 'Medical and secondary cards.pdf', packet([
+            'Original Medicare\nMedicare Number 1AB2CD3EF45\nPart A Part B',
+            'Original Medicare card back',
+            'Secondary health plan\nMember ID 987654321',
+            'Secondary health plan card back',
+        ])),
+    ]
+    rows = [
+        {'resourceType': 'DocumentReference', 'id': identifier, 'status': 'current',
+         'subject': {'reference': 'Patient/synthetic'},
+         'type': {'coding': [{'system': 'http://loinc.org', 'code': '103140-0'}]},
+         'content': [{'attachment': {'title': title, 'contentType': 'application/pdf',
+                                     'data': base64.b64encode(content).decode()}}]}
+        for identifier, title, content in documents
+    ]
+
+    def handler(request):
+        found = rows if request.url.params.get('type') == '103140-0' else []
+        return httpx.Response(200, json={'resourceType': 'Bundle',
+                                         'entry': [{'resource': row} for row in found]})
+
+    async def run():
+        with patch.object(ecw, 'settings', return_value=('client', 'https://ehr.example.test/fhir')), \
+             patch.object(ecw, '_access_token', AsyncMock(return_value='synthetic-token')):
+            cards = await ecw.insurance_cards('synthetic', include_bytes=True,
+                                              transport=httpx.MockTransport(handler))
+            assert [(card['id'], card['title']) for card in cards] == [
+                ('drug:0', 'Drug plan card.pdf'), ('medical:0', 'Medical and secondary cards.pdf')]
+            assert [card['_content'] for card in cards] == [documents[0][2], documents[1][2]]
+    asyncio.run(run())
+
+
 def test_card_document_searches_overlap_and_keep_patient_wide_results():
     document = {'resourceType': 'DocumentReference', 'id': 'card', 'status': 'current',
                 'subject': {'reference': 'Patient/synthetic'}, 'description': 'Insurance card',

@@ -13,6 +13,7 @@ import httpx
 import fitz
 
 from app.insurance import golden
+from app.insurance.ecw.ecw_card_packets import compact_card_packet, generic_priority
 from app.insurance.ecw.ecw_fields import _concept_labels, _name, _norm, _reference
 from app.insurance.ecw.ecw_coverage import saved_eligibility_summary
 
@@ -309,6 +310,13 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
                 with fitz.open(stream=content, filetype='pdf') as document:
                     if document.needs_pass or document.page_count > 20:
                         return None
+                    # eCW also files card scans as generic patient PDFs. Their
+                    # text often has "Medicare Number" or "Member ID" without
+                    # the group/name labels required by the older OCR matcher.
+                    # Require every page to contain a card-shaped image so a
+                    # clinical letter mentioning a member number stays hidden.
+                    if compact_card_packet(document):
+                        return [(None, content)]
                     if document.page_count <= golden.MAX_PDF_PAGES:
                         text = '\n'.join(page.get_text(sort=True) for page in document)
                         if card_text(text):
@@ -407,27 +415,13 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
                 except (backend.EcwBackendError, httpx.HTTPError):
                     return None
 
-        def generic_priority(mime: str, data: bytes) -> int:
-            if mime.startswith('image/'):
-                return 2
-            try:
-                with fitz.open(stream=data, filetype='pdf') as document:
-                    if document.page_count > golden.MAX_PDF_PAGES:
-                        return 0
-                    return 2 if any(
-                        1.2 <= image['width'] / image['height'] <= 2.5
-                        for page in document for image in page.get_image_info(xrefs=True)
-                        if image['height'] > 0
-                    ) else 1
-            except (fitz.FileDataError, fitz.EmptyFileError, ValueError):
-                return 1
-
         def inspect_generic(mime: str, data: bytes, size: str):
             with backend._stage('card_inspect', resource=size):
                 return verified_generic_cards(mime, data)
 
         # Defer long-packet OCR until all short candidates are checked.
         deferred_long = []
+        found_generic = False
         for offset in range(0, len(generic), 6):
             batch = generic[offset:offset + 6]
             downloaded = await asyncio.gather(*(read_generic(item) for item in batch))
@@ -442,7 +436,7 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
                         deferred_long.append(item)
                     else:
                         candidates.append((priority, key, mime, data))
-            for priority in (2, 1):
+            for priority in (3, 2, 1):
                 ranked = [item for item in candidates if item[0] == priority]
                 for start in range(0, len(ranked), 3):
                     selected = ranked[start:start + 3]
@@ -461,12 +455,16 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
                             seen.add(card_id)
                             if document_id is not None:
                                 return card_bytes, mime
-                            card = {'id': card_id, 'title': 'eCW insurance card', 'content_type': mime}
+                            source_row, attachment, _, _ = next(item for item in batch if item[2] == key)
+                            card = {'id': card_id, 'title': attachment.get('title') or source_row.get('description') or 'eCW insurance card', 'content_type': mime}
                             if include_bytes:
                                 card['_content'] = card_bytes
                             cards.append(card)
-                        if matches and document_id is None:
-                            return cards
+                            found_generic = True
+                if priority == 3 and found_generic and document_id is None:
+                    return cards
+        if found_generic and document_id is None:
+            return cards
         # Re-read long packets to bound memory.
         for offset in range(0, len(deferred_long), 3):
             batch = deferred_long[offset:offset + 3]
