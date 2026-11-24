@@ -117,6 +117,43 @@ def name_difference_only(comparison: dict) -> bool:
     return bool(differences) and not comparison.get('policy_differences') and all(row['field'] in {'first_name', 'last_name'} for row in differences)
 
 
+def _payer_name_only_mismatch(payload: dict, coverage: dict, comparison: dict) -> bool:
+    """Permit a second self-member inquiry only with independent identity anchors."""
+    if (comparison.get('status') != 'review'
+            or [row.get('field') for row in comparison.get('differences') or []] != ['first_name']
+            or [row.get('field') for row in comparison.get('policy_differences') or []] != ['subscriber_first']
+            or comparison.get('missing_fields')
+            or coverage.get('relationship') not in {'18', 'self'}
+            or coverage.get('active_coverages') != 1 or coverage.get('other_active_coverage')
+            or coverage.get('subscriber_patient_linked') is not True
+            or not coverage.get('patient_id') or not coverage.get('coverage_id')
+            or str(payload.get('payerId') or '').upper() == 'CMS'):
+        return False
+    payer = payer_person(payload.get('subscriber') or {})
+    plan = plan_details(payload)
+    if (payload.get('dependent') or len(plan.get('names') or []) != 1
+            or not all(payer.get(key) for key in ('firstName', 'lastName', 'dateOfBirth', 'memberId'))
+            or normalized(payer['firstName']) == normalized(coverage.get('patient_first'))
+            or normalized(payer['lastName']) != normalized(coverage.get('patient_last'))
+            or normalized(payer['memberId']) != normalized(coverage.get('member_id'))
+            or birth_date(payer['dateOfBirth']) != birth_date(coverage.get('patient_birth_date'))
+            or birth_date(payer['dateOfBirth']) != birth_date(coverage.get('subscriber_birth_date'))
+            or normalized(coverage.get('subscriber_first')) != normalized(coverage.get('patient_first'))
+            or normalized(coverage.get('subscriber_last')) != normalized(coverage.get('patient_last'))):
+        return False
+    return (not coverage.get('group_number') or normalized(plan.get('group_number')) == normalized(coverage['group_number'])) and (
+        not coverage.get('plan_number') or not plan.get('plan_number')
+        or normalized(plan['plan_number']) == normalized(coverage['plan_number']))
+
+
+def payer_name_recheck_candidate(payload: dict, coverage: dict) -> dict | None:
+    comparison = compare(payload, coverage)
+    if not _payer_name_only_mismatch(payload, coverage, comparison):
+        return None
+    person = payer_person(payload['subscriber'])
+    return {'firstName': person['firstName'], 'lastName': person['lastName']}
+
+
 def compare(payload: dict, coverage: dict, evidence: dict | None = None) -> dict:
     ecw = payload.get('_ecw_response') or {}
     if ecw and coverage.get('patient_id') and coverage.get('coverage_id'):
@@ -300,7 +337,7 @@ def compare(payload: dict, coverage: dict, evidence: dict | None = None) -> dict
         and (not coverage.get('group_number') or not payer_plan.get('group_number') or group_matches)
         and (not coverage.get('plan_number') or not payer_plan.get('plan_number')
              or normalized(coverage['plan_number']) == normalized(payer_plan['plan_number'])))
-    return {'status': 'warning' if payer_registration_variant or aetna_payer_demographics or uhc_middle_name_variant else 'review' if (policy_differences and not payer_patient_bound) or not enough_identity else 'reconciled' if differences and verified else 'warning' if payer_patient_bound or surname_warning or uhc_suffix or cigna_suffix else 'review' if differences else 'matched',
+    decision = {'status': 'warning' if payer_registration_variant or aetna_payer_demographics or uhc_middle_name_variant else 'review' if (policy_differences and not payer_patient_bound) or not enough_identity else 'reconciled' if differences and verified else 'warning' if payer_patient_bound or surname_warning or uhc_suffix or cigna_suffix else 'review' if differences else 'matched',
             'match_version': 2,
             'binding': binding, 'differences': differences, 'policy_differences': policy_differences,
             'missing_fields': [field for field in missing_fields if field != 'patient_demographics'] if payer_registration_variant or uhc_middle_name_variant else missing_fields,
@@ -308,3 +345,11 @@ def compare(payload: dict, coverage: dict, evidence: dict | None = None) -> dict
             'reconciliation_rule': 'payer_registration_variant' if payer_registration_variant else 'aetna_payer_demographics' if aetna_payer_demographics else 'uhc_middle_name_variant' if uhc_middle_name_variant else 'payer_matched_patient' if payer_patient_bound else 'cigna_member_suffix' if cigna_suffix else None,
             'can_confirm': bool(differences and anchored and not policy_differences and not aetna_payer_demographics and not uhc_middle_name_variant),
             'evidence': evidence if verified else None}
+    recheck = payload.get('_payer_name_recheck')
+    if (isinstance(recheck, dict) and recheck.get('confirmed') is True
+            and _payer_name_only_mismatch(payload, coverage, decision)):
+        decision.update(status='reconciled', reconciliation_rule='payer_name_recheck',
+                        message=('A second payer inquiry using the payer-returned name confirmed the same member, '
+                                 'birth date, surname and medical plan. Use the payer name for this estimate; '
+                                 'the eCW first-name difference remains visible.'))
+    return decision

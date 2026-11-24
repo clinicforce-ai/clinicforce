@@ -221,7 +221,7 @@ export default function StaffPrebookingScreen({
         (payerCheckUnavailable || optionsState === 'failed' || payerNotListed) && (
           <div className="prebooking-cost-card is-patient" role="status">
             <span>Collect on arrival</span>
-            <strong>$0.00</strong>
+            <strong>Pending</strong>
             <small>
               {payerNotListed
                 ? 'Stedi did not list an insurer matching this search, so no payer benefit amount was obtained. '

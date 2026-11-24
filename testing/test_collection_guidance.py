@@ -22,7 +22,7 @@ def scenario(amount=3800):
 
 
 @pytest.mark.parametrize('gap', ['prior_date', 'identity', 'unpriced', 'no_payer_benefits', 'no_ecw_policy'])
-def test_unresolved_insured_visit_has_zero_check_in_decision_without_zero_patient_share(gap):
+def test_unresolved_insured_visit_has_pending_collection_without_zero_patient_share(gap):
     result = scenario()
     result.update(payment_mode='insurance', payer='Aetna', service_date='2026-11-23',
                   appointment_context={'place_of_service': '11'},
@@ -45,17 +45,32 @@ def test_unresolved_insured_visit_has_zero_check_in_decision_without_zero_patien
         result['identity'] = {}
         result['coverage_records'] = []
     guidance = arrival_zero_default.apply(result, collection_guidance.build(result))
-    assert guidance['amount_cents'] == 0
-    assert guidance['status'] == 'zero_advance'
-    assert guidance['basis'] == 'claim_after_service'
-    assert guidance['collection_rule']['mode'] == 'clinic_zero_arrival_default'
-    assert all(word not in guidance['reason'].lower() for word in ('verify', 'confirm', 'check'))
-    assert guidance['unresolved_collection_reason']
+    assert guidance['amount_cents'] is None
+    assert guidance['status'] == 'action_required'
+    if gap == 'identity':
+        assert guidance['basis'] == 'identity_recheck_required'
+    else:
+        assert guidance['basis'] == 'missing_collection_inputs'
+    assert 'collection_rule' not in guidance
     summary = encounter_summary.build({**result, 'collection_guidance': guidance})
-    assert summary['collect_today_cents'] == 0
+    assert summary['collect_today_cents'] is None
     assert summary['complete'] is False
     assert summary['estimated_total_patient_min_cents'] is None
-    assert 'Collect $0' in amount_explanation.build(result, guidance)['sentence']
+    assert 'Collect $0' not in amount_explanation.build(result, guidance)['sentence']
+
+
+def test_payer_name_recheck_without_supported_advance_stays_pending():
+    result = scenario()
+    result.update(payment_mode='insurance', nmct_fixed_office_copay_advance_enabled=True)
+    result['identity'] = {'status': 'reconciled', 'match_version': 2,
+        'binding': 'synthetic-binding', 'reconciliation_rule': 'payer_name_recheck',
+        'differences': [{'field': 'first_name'}]}
+    guidance = arrival_zero_default.apply(result, {'amount_cents': None,
+        'status': 'action_required', 'basis': 'missing_collection_inputs',
+        'reason': 'A separate visit requirement remains open.'})
+    assert guidance['amount_cents'] is None
+    assert guidance['basis'] == 'collection_review_required'
+    assert 'payer-name recheck matched' in guidance['reason']
 
 
 def test_nmct_can_collect_sourced_stedi_office_copay_with_a_date_or_roster_mismatch():
@@ -117,8 +132,8 @@ def test_nmct_can_collect_sourced_stedi_office_copay_with_a_date_or_roster_misma
         else:
             unsafe['price_range']['lines'].append({'id': 'other', 'code': '70552', 'units': 1})
         blocked = arrival_zero_default.apply(unsafe, collection_guidance.build(unsafe, review), review)
-        assert blocked['amount_cents'] == 0, change
-        assert blocked['collection_rule']['mode'] != 'nmct_stedi_provisional_office_copay', change
+        assert blocked['amount_cents'] is None, change
+        assert (blocked.get('collection_rule') or {}).get('mode') != 'nmct_stedi_provisional_office_copay', change
 
 
 def test_nmct_reports_potential_office_copay_with_exact_blockers():
@@ -146,7 +161,7 @@ def test_nmct_reports_potential_office_copay_with_exact_blockers():
     result['benefits']['reported_options'] = [row]
     result['benefits']['identity'] = result['identity']
     medicare = arrival_zero_default.apply(result, collection_guidance.build(result))
-    assert medicare['amount_cents'] == 0
+    assert medicare['amount_cents'] is None
     assert medicare['potential_office_collection']['amount_cents'] == 3000
     assert medicare['potential_office_collection']['office_code'] == '99213'
     assert 'medicare_protection_unknown' in {issue['code'] for issue in medicare['potential_office_collection']['issues']}
@@ -162,7 +177,8 @@ def test_nmct_reports_potential_office_copay_with_exact_blockers():
             {'field': 'subscriber_first', 'ecw': 'Morgan', 'payer': 'Megan'}]}
     mismatched['benefits']['identity'] = mismatched['identity']
     identity_guidance = arrival_zero_default.apply(mismatched, collection_guidance.build(mismatched))
-    assert identity_guidance['amount_cents'] == 0
+    assert identity_guidance['amount_cents'] is None
+    assert identity_guidance['basis'] == 'identity_recheck_required'
     potential = identity_guidance['potential_office_collection']
     assert potential['amount_cents'] == 3000
     assert [(issue['field'], issue['ecw'], issue['payer']) for issue in potential['issues']
@@ -191,7 +207,7 @@ def test_nmct_reports_potential_office_copay_with_exact_blockers():
         'description': 'Brain MRI without contrast', 'allowed_cents': None, 'issues': ['Rate unavailable']})
     imaging['benefits']['oop_remaining_cents'] = 319197
     imaging_guidance = arrival_zero_default.apply(imaging, collection_guidance.build(imaging))
-    assert imaging_guidance['amount_cents'] == 0
+    assert imaging_guidance['amount_cents'] is None
     potential = imaging_guidance['potential_office_collection']
     assert potential['amount_cents'] == 8000
     assert potential['office_code'] == '99203'
@@ -214,12 +230,12 @@ def test_nmct_reports_potential_office_copay_with_exact_blockers():
     unsourced['price_range']['lines'][0]['benefits']['reported_options'] = []
     unsourced['benefits']['reported_options'] = []
     unsourced_guidance = arrival_zero_default.apply(unsourced, collection_guidance.build(unsourced))
-    assert unsourced_guidance['amount_cents'] == 0
+    assert unsourced_guidance['amount_cents'] is None
     assert 'potential_office_collection' not in unsourced_guidance
 
 
 @pytest.mark.parametrize('legacy_cash_fallback', [False, True])
-def test_nmct_saved_insured_visit_reprojects_missing_payer_evidence_to_zero_arrival(legacy_cash_fallback):
+def test_nmct_saved_insured_visit_reprojects_missing_payer_evidence_to_pending(legacy_cash_fallback):
     result = scenario()
     result.update(payment_mode='insurance', payer='Aetna', service_date='2026-12-15')
     result['benefits'] = {}
@@ -233,42 +249,40 @@ def test_nmct_saved_insured_visit_reprojects_missing_payer_evidence_to_zero_arri
     with patch.object(api.network_participation, 'is_nmct_practice', return_value=True), \
          patch.object(api.staff_store, 'list_library', return_value=[]):
         projected = api._previsit_result(case, 'nmct')
-    assert projected['collection_guidance']['amount_cents'] == 0
+    assert projected['collection_guidance']['amount_cents'] is None
     assert projected['payment_mode'] == 'insurance'
     assert 'cash_fallback' not in projected
-    assert projected['collection_guidance']['collection_rule']['mode'] == 'clinic_zero_arrival_default'
-    assert projected['encounter_summary']['collect_today_cents'] == 0
+    assert 'collection_rule' not in projected['collection_guidance']
+    assert projected['encounter_summary']['collect_today_cents'] is None
     assert projected['encounter_summary']['estimated_total_patient_min_cents'] is None
-    assert 'Collect $0' in projected['payment_explanation']['sentence']
+    assert 'Collect $0' not in projected['payment_explanation']['sentence']
     trace = next(row for row in projected['evidence_resolution'] if row['field'] == 'collection_amount')
-    assert trace['status'] == 'resolved'
-    assert any('no-upfront default' in source['finding'] for source in trace['sources'])
+    assert trace['status'] != 'resolved'
 
 
-def test_explicit_nmct_cash_without_price_collects_zero_without_inventing_a_quote():
+def test_explicit_nmct_cash_without_price_stays_pending():
     result = scenario()
     result.update(payment_mode='cash', nmct_fixed_office_copay_advance_enabled=True)
     result['price_range'].update(cash_complete=False, cash_min_cents=None,
                                  cash_max_cents=None)
     guidance = arrival_zero_default.apply(result, collection_guidance.build(result))
-    assert guidance['amount_cents'] == 0
-    assert guidance['basis'] == 'cash_price_pending'
-    assert guidance['collection_rule']['mode'] == 'clinic_zero_arrival_default'
-    assert guidance['unresolved_collection_reason']
-    assert 'Collect $0' in amount_explanation.build(result, guidance)['sentence']
+    assert guidance['amount_cents'] is None
+    assert guidance['basis'] == 'practice_cash_price'
+    assert 'collection_rule' not in guidance
+    assert 'Collect $0' not in amount_explanation.build(result, guidance)['sentence']
     summary = encounter_summary.build({**result, 'collection_guidance': guidance})
-    assert summary['collect_today_cents'] == 0
+    assert summary['collect_today_cents'] is None
     assert summary['complete'] is False
     assert summary['estimated_total_patient_min_cents'] is None
 
 
 @pytest.mark.parametrize('invalid_amount', [-1, '3000', 100_000_001])
-def test_nmct_invalid_advance_is_replaced_by_zero_check_in(invalid_amount):
+def test_nmct_invalid_advance_is_rejected(invalid_amount):
     guidance = arrival_zero_default.apply(
         {'payment_mode': 'insurance', 'nmct_fixed_office_copay_advance_enabled': True},
         {'amount_cents': invalid_amount, 'reason': 'Unsupported amount'})
-    assert guidance['amount_cents'] == 0
-    assert guidance['unresolved_collection_reason'] == 'Unsupported amount'
+    assert guidance['amount_cents'] is None
+    assert guidance['basis'] == 'invalid_collection_amount'
 
 
 @pytest.mark.parametrize('payment_mode', ['cash', 'insurance'])
@@ -279,7 +293,7 @@ def test_nmct_zero_default_preserves_supported_advance(payment_mode):
         guidance) is guidance
 
 
-def test_saved_explicit_nmct_cash_without_quote_reopens_with_zero_arrival():
+def test_saved_explicit_nmct_cash_without_quote_reopens_pending():
     result = scenario()
     result.update(payment_mode='cash', service_date='2026-12-15')
     result['price_range'].update(cash_complete=False, cash_min_cents=None,
@@ -291,13 +305,13 @@ def test_saved_explicit_nmct_cash_without_quote_reopens_with_zero_arrival():
          patch.object(api.staff_store, 'list_library', return_value=[]):
         reopened = api._previsit_result(case, 'nmct')
     assert reopened['payment_mode'] == 'cash'
-    assert reopened['collection_guidance']['amount_cents'] == 0
-    assert reopened['collection_guidance']['basis'] == 'cash_price_pending'
-    assert reopened['encounter_summary']['collect_today_cents'] == 0
+    assert reopened['collection_guidance']['amount_cents'] is None
+    assert reopened['collection_guidance']['basis'] == 'practice_cash_price'
+    assert reopened['encounter_summary']['collect_today_cents'] is None
     assert reopened['encounter_summary']['complete'] is False
-    assert reopened['payment_explanation']['reason_code'] == 'cash_collection_deferred'
+    assert reopened['payment_explanation']['reason_code'] != 'cash_collection_deferred'
     trace = next(row for row in reopened['evidence_resolution'] if row['field'] == 'collection_amount')
-    assert any('self-pay price unresolved' in source['finding'] for source in trace['sources'])
+    assert trace['status'] != 'resolved'
 
 
 def test_bcbstx_ppo_unpriced_home_follow_up_defers_check_in_without_staff_confirmation():

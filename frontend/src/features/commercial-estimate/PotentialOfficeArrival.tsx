@@ -17,7 +17,8 @@ export default function PotentialOfficeArrival({ result }: { result: PrevisitEst
       <p>
         Based on the payer’s office copay for CPT {potential.office_code}; confirm before charging.
       </p>
-      <p>Amount to collect now: {money(result.collection_guidance?.amount_cents || 0)}.</p>
+      <p>Amount to collect now: {result.collection_guidance?.amount_cents == null
+        ? 'Pending review' : money(result.collection_guidance.amount_cents)}.</p>
       <details className="potential-office-review">
         <summary>
           Review before collecting:{' '}

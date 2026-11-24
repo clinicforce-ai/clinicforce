@@ -125,10 +125,9 @@ def test_previsit_uses_active_schedule_without_embedded_cash_rates(practice_id, 
     assert result['payment_mode'] == 'cash'
     assert 'cash_schedule' not in result and 'collection_policy' not in result
     assert result['price_range'].get('cash_min_cents') == amount
-    expected = 0 if amount is None and practice_id != 'clinic-a' else amount
-    assert result['collection_guidance']['amount_cents'] == expected
+    assert result['collection_guidance']['amount_cents'] == amount
     if amount is None and practice_id != 'clinic-a':
-        assert result['collection_guidance']['basis'] == 'cash_price_pending'
+        assert result['collection_guidance']['basis'] == 'practice_cash_price'
     else:
         assert result['collection_guidance']['basis'] == 'practice_cash_price'
     if amount is not None:

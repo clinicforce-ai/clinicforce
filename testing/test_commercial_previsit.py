@@ -10,7 +10,7 @@ import httpx
 
 from app.api.routers.commercial_estimator import PrevisitInput, VisitReviewInput, _compare_card_hints, _previsit_benefits, _previsit_result, previsit_estimate, update_visit_review
 from app.api.routers.commercial_flow.commercial_previsit_pricing import _previsit_service_types, _payer_previsit_service_types, _reviewed_service_types
-from app.api.routers.commercial_flow.commercial_previsit_submit import same_member_and_medical_plan
+from app.api.routers.commercial_flow.commercial_previsit_submit import same_member_and_medical_plan, recheck_payer_name
 from app.api.routers.commercial_flow.commercial_previsit_reuse import retain_saved_group_binding, support_saved_card_conflict, telehealth_setting
 
 
@@ -177,6 +177,65 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         changed = json.loads(json.dumps(first))
         changed['plans'][0]['name'] = 'OTHER MEDICAL'
         self.assertFalse(same_member_and_medical_plan(api, first, changed))
+
+    async def test_payer_name_recheck_binds_only_same_self_member_and_plan(self):
+        from copy import deepcopy
+        from types import SimpleNamespace
+        from app.insurance import commercial, identity
+
+        coverage = {'active_coverages': 1, 'patient_id': 'patient', 'coverage_id': 'coverage',
+            'subscriber_patient_linked': True, 'relationship': '18', 'member_id': 'SYNTHETIC-MEMBER',
+            'group_number': 'SYNTHETIC-GROUP', 'patient_first': 'Patricia',
+            'patient_last': 'Example', 'patient_birth_date': '1980-01-02',
+            'subscriber_first': 'Patricia', 'subscriber_last': 'Example',
+            'subscriber_birth_date': '1980-01-02'}
+        payload = {'payerId': 'QDTRP', 'provider': {'npi': '1234567890'},
+            'subscriber': {'memberId': 'SYNTHETIC-MEMBER', 'dateOfBirth': '1980-01-02',
+                'name': {'person': {'firstName': 'Pat', 'lastName': 'Example'}},
+                'groupNumber': 'SYNTHETIC-GROUP',
+                'dates': {'service': {'start': '2026-11-24'}}},
+            'plans': [{'name': 'PREFERRED PROVIDER OPTION MEDICAL', 'benefits': {
+                'statuses': [{'status': 'ACTIVE_COVERAGE',
+                              'service': {'system': 'STC', 'value': '98'}}]}}]}
+        assert identity.compare(payload, coverage)['status'] == 'review'
+        assert identity.payer_name_recheck_candidate(payload, coverage) == {
+            'firstName': 'Pat', 'lastName': 'Example'}
+        calls = []
+        reply = payload
+        class Client:
+            async def __aenter__(self): return self
+            async def __aexit__(self, *_): return None
+            async def post(self, _url, *, headers, json):
+                calls.append(json)
+                return httpx.Response(200, json=reply)
+        api = SimpleNamespace(commercial=commercial, insurance_identity=identity,
+            STEDI_URL='https://example.test/eligibility',
+            httpx=SimpleNamespace(AsyncClient=lambda **_: Client(), Timeout=httpx.Timeout,
+                                   HTTPError=httpx.HTTPError))
+        body = {'subscriber': {'memberId': 'SYNTHETIC-MEMBER',
+            'name': {'person': {'firstName': 'Patricia', 'lastName': 'Example'}}}}
+        verified, status = await recheck_payer_name(api, payload=payload, coverage=coverage,
+            basic_body=body, headers={'Authorization': 'synthetic'},
+            service_date='2026-11-24', service_type='98')
+        assert status == 'confirmed' and len(calls) == 1
+        assert calls[0]['subscriber']['name']['person']['firstName'] == 'Pat'
+        assert body['subscriber']['name']['person']['firstName'] == 'Patricia'
+        bound = identity.compare(verified, coverage)
+        assert bound['status'] == 'reconciled'
+        assert bound['reconciliation_rule'] == 'payer_name_recheck'
+        assert identity.payer_identity_verified(bound)
+        for field, value in [('memberId', 'OTHER'), ('dateOfBirth', '1979-01-01')]:
+            altered = deepcopy(payload)
+            altered['subscriber'][field] = value
+            assert identity.payer_name_recheck_candidate(altered, coverage) is None
+        altered = deepcopy(payload)
+        altered['plans'][0]['name'] = 'OTHER MEDICAL'
+        assert not same_member_and_medical_plan(api, payload, altered)
+        reply = altered
+        unconfirmed, status = await recheck_payer_name(api, payload=payload, coverage=coverage,
+            basic_body=body, headers={'Authorization': 'synthetic'},
+            service_date='2026-11-24', service_type='98')
+        assert status == 'unconfirmed' and unconfirmed is payload and len(calls) == 2
 
     async def test_bcbstx_combined_visit_uses_one_service_type_per_inquiry(self):
         await self._flow(date.today().isoformat(), combined_emg=True)

@@ -75,21 +75,21 @@ class FileBoundaryTests(unittest.TestCase):
         store_read.assert_called_once_with('private-object')
         ecw.assert_not_awaited()
 
-    def test_login_immediately_reports_nmct_no_upfront_policy(self):
+    def test_login_does_not_assign_unverified_collection_default(self):
         actor = {'practice_id': 'primary', 'id': 'synthetic-staff', 'role': 'staff'}
         request = Request({'type': 'http', 'method': 'POST', 'headers': []})
         with patch.object(staff, 'check_origin'), \
              patch.object(staff, 'request_address', return_value='127.0.0.1'), \
              patch.object(staff.staff_store, 'authenticate', return_value=(actor, 'synthetic-token')):
             response = asyncio.run(staff.login(staff.Login(username='synthetic', password='synthetic-password'), request))
-        self.assertEqual(json.loads(response.body)['staff']['arrival_collection_default_cents'], 0)
+        self.assertIsNone(json.loads(response.body)['staff']['arrival_collection_default_cents'])
 
-    def test_session_reports_nmct_no_upfront_policy_without_assigning_it_to_other_practices(self):
-        for practice_id, expected in [('primary', 0), ('synthetic-practice', None)]:
+    def test_session_does_not_assign_unverified_collection_default(self):
+        for practice_id in ('primary', 'synthetic-practice'):
             with patch.object(staff, 'require_staff', AsyncMock(return_value={
                     'practice_id': practice_id, 'id': 'synthetic-staff'})):
                 response = asyncio.run(staff.session(None))
-            self.assertEqual(json.loads(response.body)['staff']['arrival_collection_default_cents'], expected)
+            self.assertIsNone(json.loads(response.body)['staff']['arrival_collection_default_cents'])
 
     def test_saved_card_and_current_ecw_card_are_labeled_separately(self):
         from datetime import datetime, timezone

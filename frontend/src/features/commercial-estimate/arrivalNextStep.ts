@@ -30,7 +30,7 @@ export function nextStep(model: CommercialEstimateModel, result: PrevisitEstimat
   if (result.identity && !patientBenefitsBound(result.identity))
     return {
       title: 'Reconcile patient and policy',
-      hint: 'The payer details are not bound to this patient and policy. Use the clinic’s claim-after-service policy before setting a charge.',
+      hint: 'The payer details are not bound to this patient and policy. Recheck the member details with the payer before setting a collection amount.',
     }
   if (
     result.benefits.service_date_matches === false &&
@@ -38,7 +38,7 @@ export function nextStep(model: CommercialEstimateModel, result: PrevisitEstimat
   )
     return {
       title: 'Choose check-in policy',
-      hint: 'The payer returned benefits for an earlier date. Use an approved clinic advance or $0 claim-after-service policy for this visit.',
+      hint: 'The payer returned benefits for an earlier date. Confirm visit-date benefits before setting a collection amount.',
     }
   const cignaTerms = [result.benefits, ...lines.map((line) => line.benefits)]
   if (

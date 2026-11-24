@@ -75,7 +75,8 @@ for (const scenario of [
     price_range: { ...result.price_range, lines: [{ ...result.price_range.lines[0],
       code: scenario.code, benefits: { ...result.price_range.lines[0].benefits,
         copay_cents: scenario.amount } }] },
-    collection_guidance: { ...result.collection_guidance,
+    collection_guidance: { ...result.collection_guidance, amount_cents: null,
+    status: 'action_required', basis: 'identity_recheck_required', collection_rule: null,
     potential_office_collection: { amount_cents: scenario.amount,
       copay_cents: scenario.amount, allowed_cents: scenario.amount + 1325,
       oop_remaining_cents: 100000, verified_payments_cents: 0,
@@ -86,14 +87,14 @@ for (const scenario of [
     recovering: false })
   const conditionalHeadline = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
     { result: conditional, model: conditionalModel, partialCopay: null, visibleAmount: true }))
-  assert.match(conditionalHeadline, /Potential office amount.*Amount to collect now:.*\$0\.00/s)
+  assert.match(conditionalHeadline, /Potential office amount.*Amount to collect now:.*Pending review/s)
   assert.match(conditionalHeadline, scenario.expected)
   assert.match(conditionalHeadline, /Review before collecting:/)
   assert.doesNotMatch(conditionalHeadline.split('<details')[0], /max\(\$0\.00, min\(/)
   conditionalCases.push({ result: conditional, model: conditionalModel, amount: scenario.amount })
   const conditionalTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
     { result: conditional, model: conditionalModel }))
-  assert.match(conditionalTable, /Potential office amount.*\$0\.00/s)
+  assert.match(conditionalTable, /Amount to collect at visit.*Pending review/s)
 }
 
 const returnedDate = { ...result,
@@ -184,16 +185,17 @@ const otherPracticeScreen = renderView({ ...waitingActions,
   session: { arrival_collection_default_cents: null }, ...waiting })
 assert.doesNotMatch(otherPracticeScreen, /Amount to collect at visit.*\$0\.00/s)
 
-const stale = { ...model, session: { arrival_collection_default_cents: 0 },
-  previousEstimate: true, supportedAmount: false }
 const staleResult = { ...result, collection_guidance: { amount_cents: null,
   basis: 'missing_collection_inputs', reason: 'Previous result is stale.', services: [] } }
+const stale = { ...deriveCommercialEstimateView({ result: staleResult, appointments: [],
+  selectedVisit: '', busy: null, error: null, readOnly: true, recovering: false }),
+  previousEstimate: true, supportedAmount: false }
 const staleHeadline = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
   { result: staleResult, model: stale, partialCopay: null, visibleAmount: false }))
-assert.match(staleHeadline, /Amount to collect at visit.*\$0\.00/s)
+assert.doesNotMatch(staleHeadline, /Amount to collect at visit.*\$0\.00/s)
 const staleTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
   { result: staleResult, model: stale }))
-assert.match(staleTable, /Amount to collect at visit.*\$0\.00/s)
+assert.doesNotMatch(staleTable, /Amount to collect at visit.*\$0\.00/s)
 
 const availity = renderToStaticMarkup(React.createElement(AvailityArrivalAmount,
   { result: { ...result, availity_visit_reference: { copay_cents: 3000,
