@@ -27,7 +27,7 @@ export function zeroCollectionRow(
     return null
   return {
     label: 'Amount to collect at visit',
-    value: money(0),
+    value: guidance?.amount_cents == null ? 'Pending review' : money(0),
     detail:
       clinicFallback && rule !== 'clinic_zero_arrival_default'
         ? clinicFallbackReason

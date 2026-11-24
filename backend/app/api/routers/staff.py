@@ -88,8 +88,7 @@ async def require_staff(request: Request) -> dict:
 
 
 def _session_staff(actor: dict) -> dict:
-    return {**actor, "arrival_collection_default_cents":
-        0 if network_participation.is_nmct_practice(actor["practice_id"]) else None}
+    return {**actor, "arrival_collection_default_cents": None}
 
 
 def public(intake: dict) -> dict:
@@ -138,7 +137,7 @@ async def owned_intake(intake_id: str, staff: dict) -> dict:
     return intake
 
 
-@router.post("/login", description="Sign in to the clinic staff workspace. The returned staff session includes arrival_collection_default_cents: 0 for NMCT and null for other practices.")
+@router.post("/login", description="Sign in to the clinic staff workspace. The returned staff session includes arrival_collection_default_cents: null; collection is set from the visit evidence.")
 async def login(body: Login, request: Request):
     check_origin(request)
     try:
@@ -154,7 +153,7 @@ async def login(body: Login, request: Request):
     return response
 
 
-@router.get("/session", description="Return the authenticated clinic staff session. staff.arrival_collection_default_cents is 0 for NMCT and null for other practices; it is a check-in instruction, not a patient price or coverage determination.")
+@router.get("/session", description="Return the authenticated clinic staff session. staff.arrival_collection_default_cents is null; collection is set from the visit evidence.")
 async def session(request: Request):
     return JSONResponse({"staff": _session_staff(await require_staff(request))}, headers=NO_STORE)
 

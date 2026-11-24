@@ -13,6 +13,41 @@ def same_member_and_medical_plan(api: ModuleType, primary: dict, additional: dic
     return _same_member_and_medical_plan(primary, additional)
 
 
+async def recheck_payer_name(api: ModuleType, *, payload: dict, coverage: dict,
+                             basic_body: dict, headers: dict, service_date: str,
+                             service_type: str) -> tuple[dict, str]:
+    """Ask once with the payer's name when only a self-member first name differs."""
+    candidate = api.insurance_identity.payer_name_recheck_candidate(payload, coverage)
+    if not candidate:
+        return payload, 'not_needed'
+    initial = api.commercial.normalize_stedi_271(payload, service_type, False,
+                                                   service_date=service_date)
+    if initial.get('active') is not True or initial.get('service_date_matches') is False:
+        return payload, 'not_needed'
+    retry_body = deepcopy(basic_body)
+    retry_body['subscriber']['name']['person'] = candidate
+    try:
+        async with api.httpx.AsyncClient(timeout=api.httpx.Timeout(30, connect=5)) as client:
+            response = await client.post(api.STEDI_URL, headers=headers, json=retry_body)
+        verified = response.json()
+    except (api.httpx.HTTPError, ValueError):
+        return payload, 'indeterminate'
+    if response.is_error or not isinstance(verified, dict) or api.commercial.eligibility_errors(verified):
+        return payload, 'rejected'
+    first_plan = api.commercial.plan_details(payload)
+    second_plan = api.commercial.plan_details(verified)
+    confirmed = api.commercial.normalize_stedi_271(verified, service_type, False,
+                                                    service_date=service_date)
+    if (not same_member_and_medical_plan(api, payload, verified)
+            or first_plan.get('group_number') and first_plan['group_number'] != second_plan.get('group_number')
+            or first_plan.get('plan_number') and first_plan['plan_number'] != second_plan.get('plan_number')
+            or confirmed.get('active') is not True or confirmed.get('service_date_matches') is False
+            or not api.insurance_identity.payer_name_recheck_candidate(verified, coverage)):
+        return payload, 'unconfirmed'
+    return {**verified, '_payer_name_recheck': {'confirmed': True},
+            '_payer_name_initial': payload}, 'confirmed'
+
+
 async def submit_previsit_eligibility(api: ModuleType, *, payer: dict, provider: dict,
                                       api_key: str, session: dict, case: dict,
                                       result: dict, coverage: dict, inputs: dict,
@@ -117,6 +152,19 @@ async def submit_previsit_eligibility(api: ModuleType, *, payer: dict, provider:
         case = await api.run_in_threadpool(api._save, case, session, "previsit-stedi-rejected")
         return await api._start_previsit_recovery(case, session, provider, background_tasks)
     inquiry_state = 'complete'
+    payload, name_recheck = await recheck_payer_name(
+        api, payload=payload, coverage=coverage, basic_body=basic_body,
+        headers=headers, service_date=inputs['service_date'],
+        service_type=requested_stc[0])
+    if name_recheck == 'confirmed':
+        payer_person = api.commercial.payer_person(payload['subscriber'])
+        for request_body in (body, basic_body):
+            request_body['subscriber']['name']['person'] = {
+                'firstName': payer_person['firstName'], 'lastName': payer_person['lastName']}
+    if name_recheck in {'indeterminate', 'rejected', 'unconfirmed'}:
+        inquiry_state = 'partial'
+        result['issues'].append('The payer-name recheck did not confirm this member and visit. '
+                                'Check payer activity and reconcile the name before collecting.')
     if ((payer_id == 'QDTRP' and len(requested_stc) > 1)
             or (payer_id == 'HGJLR' and '73' in requested_stc)):
         linked = {}

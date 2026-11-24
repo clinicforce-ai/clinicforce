@@ -442,7 +442,7 @@ def test_saved_get_rebuilds_three_uhc_results_without_inheriting_old_zero_policy
     assert all(row['patient_cents'] is None for row in opened['collection_guidance']['services'])
 
 
-def test_saved_get_uses_current_approved_clinic_zero_policy_without_zero_liability():
+def test_saved_get_keeps_multiple_policies_pending_despite_a_deferral_policy():
     result, _, _ = replay('multiple_policies')
     result['service_date'] = '2026-10-14'
     case = {'source_mode': 'commercial_previsit', 'revision': 1,
@@ -460,9 +460,9 @@ def test_saved_get_uses_current_approved_clinic_zero_policy_without_zero_liabili
         response = TestClient(app).get('/api/doctor/insurance/commercial/cases/synthetic-case/previsit')
     assert response.status_code == 200
     opened = response.json()
-    assert opened['collection_guidance']['amount_cents'] == 0
-    assert opened['collection_guidance']['basis'] == 'claim_after_service'
-    assert opened['encounter_summary']['collect_today_cents'] == 0
+    assert opened['collection_guidance']['amount_cents'] is None
+    assert opened['collection_guidance']['basis'] != 'claim_after_service'
+    assert opened['encounter_summary']['collect_today_cents'] is None
     assert opened['encounter_summary']['estimated_total_patient_min_cents'] is None
     assert opened['benefits']['active'] is True
     assert '3 active policies' in opened['payment_explanation']['sentence']
@@ -898,7 +898,7 @@ def test_inactive_discovery_hit_does_not_create_a_tertiary_payer():
     ('UnitedHealthcare', None), ('United Health Care', None), ('UHC', None),
     ('AARP Regional PPO', 'UnitedHealthcare'),
 ])
-def test_saved_automatic_cash_fallback_reopens_as_insurance_with_clinic_policy(name, payer_label, directory_name, monkeypatch):
+def test_saved_automatic_cash_fallback_reopens_as_insurance_pending(name, payer_label, directory_name, monkeypatch):
     result, _, _ = replay(name)
     result.update(payer=payer_label, service_date='2026-10-14', payment_mode='cash',
                   cash_fallback={'reason': 'old automatic fallback'})
@@ -912,8 +912,12 @@ def test_saved_automatic_cash_fallback_reopens_as_insurance_with_clinic_policy(n
     reopened = api._previsit_result(case, 'clinic')
     assert reopened['payment_mode'] == 'insurance'
     assert 'cash_fallback' not in reopened
-    assert reopened['collection_guidance']['amount_cents'] == 0
-    assert reopened['payment_explanation']['sentence'].startswith('Collect $0 today:')
+    if name == 'regional_ppo':
+        assert reopened['collection_guidance']['amount_cents'] == 0
+        assert reopened['collection_guidance']['basis'] == 'claim_after_service'
+    else:
+        assert reopened['collection_guidance']['amount_cents'] is None
+        assert not reopened['payment_explanation']['sentence'].startswith('Collect $0 today:')
     case['visit_review'] = {'payment_mode': 'cash'}
     selected_cash = api._previsit_result(case, 'clinic')
     assert selected_cash['payment_mode'] == 'cash'

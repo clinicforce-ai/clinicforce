@@ -113,11 +113,8 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     when that blocker prevented an insured amount. For UnitedHealthcare, an
     unresolved insured amount stays in insurance mode and gives a short reason.
     The evidence engine retains a null advance when inputs cannot
-    support a charge. For a completed NMCT visit, the final collection
-    decision returns amount_cents=0, status=zero_advance and
-    collection_rule.mode=clinic_zero_arrival_default. Its claim_after_service
-    or cash_price_pending basis requests no upfront payment; unresolved_collection_reason retains the evidence blocker, and final patient share or cash price stays unknown.
-    Pending or indeterminate eligibility returns eligibility_request_state and a null amount; the completed NMCT default does not appear. Supported advances and approved payer policies still take precedence. For NMCT, potential_office_collection gives a capped, payment-adjusted Stedi STC 98 office copay separately from amount_cents, with exact eCW/payer identity differences, QMB status and unpriced proposed services. It is conditional and makes no payer request.
+    support a charge; a missing amount does not become a $0 clinic default.
+    Pending or indeterminate eligibility returns eligibility_request_state and a null amount. A self-member first-name difference with matching member ID, birth date, surname and group triggers one visit-date inquiry using the payer-returned name; only a matching active medical response can reconcile identity. An unresolved difference returns amount_cents=null and basis=identity_recheck_required; a confirmed payer-name recheck with another open collection requirement returns basis=collection_review_required. Saved GET reprojects this state without a payer request. Supported advances and approved payer policies still take precedence. For NMCT, potential_office_collection gives a capped, payment-adjusted Stedi STC 98 office copay separately from amount_cents, with exact eCW/payer identity differences, QMB status and unpriced proposed services. It is conditional and makes no payer request.
     A scoped Blue Cross Clinical Library CPT price can appear in
     temporary_rate_reference as a disclosed planning reference only; it does
     not establish UnitedHealthcare participation or a collection amount.
