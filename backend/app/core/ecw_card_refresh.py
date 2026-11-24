@@ -10,7 +10,7 @@ from app.core import staff_store
 
 FRESH_HOURS = 18  # S3 expires insurance-cases objects after one day.
 RETRY_MINUTES = 5
-LEASE_SECONDS = 180
+LEASE_SECONDS = 300
 MIN_SCAN_SPACING_SECONDS = 60
 
 

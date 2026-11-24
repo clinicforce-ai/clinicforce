@@ -15,6 +15,7 @@ import fitz
 from app.insurance import golden
 from app.insurance.ecw.ecw_fields import _concept_labels, _name, _norm, _reference
 from app.insurance.ecw.ecw_coverage import saved_eligibility_summary
+from app.insurance.ecw.ecw_card_packet import verified_packet_cards
 
 
 
@@ -324,25 +325,7 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
                             if card_text(text) or scanned_member_card(text):
                                 return [(None, content)]
                         return []
-                    cards = []
-                    for number in range(document.page_count):
-                        with fitz.open() as page_pdf:
-                            page_pdf.insert_pdf(document, from_page=number, to_page=number)
-                            page_bytes = page_pdf.tobytes()
-                        page = document[number]
-                        page_text = golden._pdf_text(page_bytes)
-                        if card_text(page_text):
-                            cards.append((number, page_bytes))
-                            continue
-                        images = card_images(page, page_text)
-                        if images:
-                            with fitz.open() as card_pdf:
-                                for item in images:
-                                    card_page = card_pdf.new_page(width=item['width'], height=item['height'])
-                                    card_page.insert_image(card_page.rect,
-                                                           stream=document.extract_image(item['xref'])['image'])
-                                cards.append((number, card_pdf.tobytes()))
-                    return cards
+                    return verified_packet_cards(document, card_text, card_images)
             except golden.OCRServiceError:
                 return None
             except (golden.GoldenCaseError, fitz.FileDataError, fitz.EmptyFileError):
