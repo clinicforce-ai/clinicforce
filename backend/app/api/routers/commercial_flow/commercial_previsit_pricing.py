@@ -174,9 +174,40 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
         rates = []
         rules['place_of_service'] = inputs.get('place_of_service')
         issues.append('A contract rate for telehealth POS 10 or 02 is not established; the clinic office rate is not used.')
+    if (selected and not medicare_plan and benefits.get('network_status') == 'in_network'
+            and source.get('payer_plan_bound') is True and not rules['provider_npi_conflict']):
+        missing = [line for line in selected if not any(
+            rate.get('code') == line.get('code')
+            and (rate.get('modifier') or '') == ','.join(line.get('modifiers') or [])
+            and (not rate.get('line_id') or rate['line_id'] == line.get('id'))
+            for rate in rates)]
+        if missing:
+            reference = {'codes': missing, 'plan_details': {'stedi': benefits.get('plan_details') or {}}}
+            _attach_temporary_blue_cross_rates(reference, practice_id, inputs, source, payer_name)
+            for row in (reference.get('temporary_rate_reference') or {}).get('lines') or []:
+                if not str(row.get('source_reference') or '').startswith('library:'):
+                    continue
+                rates.append({'id': f"bcbstx-fallback:{row['id']}", 'line_id': row['id'],
+                              'code': row['code'], 'modifier': ','.join(row.get('modifiers') or []),
+                              'units': row['units'], 'allowed_cents': row['unit_reference_cents'],
+                              'basis': 'bcbstx_rate_fallback', 'source_reference': row['source_reference']})
+            if any(rate.get('basis') == 'bcbstx_rate_fallback' for rate in rates):
+                rules['cost_share'] = rules.get('cost_share') or 'payer_returned'
+            unresolved = [line for line in missing if not any(
+                rate.get('line_id') == line.get('id') and rate.get('basis') == 'bcbstx_rate_fallback'
+                for rate in rates)]
+            if not unresolved:
+                issues = [issue for issue in issues if 'fee schedule has no' not in issue.lower()]
+            for line in unresolved:
+                issues.append(f"Please enter rate for CPT {line['code']} from the {payer_name} fee schedule.")
     rules['aetna_payer_verified'] = str(payer_route_id or payer_id).upper() == 'HPQRS'
     priced = _api.visit_estimate.price_lines(selected, rates, benefits, rules, payload=payload,
         service_date=inputs.get('service_date', ''), reviews=review.get('lines'), alternatives=alternatives)
+    for line in priced.get('lines') or []:
+        if (line.get('rate_resolution') or {}).get('status') == 'RATE_UNAVAILABLE' and not medicare_plan:
+            prompt = f"Please enter rate for CPT {line['code']} from the {payer_name} fee schedule."
+            if prompt not in line['issues']:
+                line['issues'].insert(0, prompt)
     if telehealth_pos_unresolved:
         priced['service_issues'] = [*(priced.get('service_issues') or []),
             'Confirm the patient telehealth location and obtain benefits for that place of service before collection.']

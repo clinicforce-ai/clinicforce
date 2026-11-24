@@ -11,5 +11,5 @@ def applies(benefits: dict, price: dict, lines: list[dict],
             and price.get('mode') == 'services' and bool(lines)
             and price.get('patient_min_cents') == price.get('patient_max_cents')
             and all(line.get('rate_resolution', {}).get('status') == 'RESOLVED'
-                    and line.get('allowed_basis') in {'clinic_contract', 'payer_fee_schedule'}
+                    and line.get('allowed_basis') in {'clinic_contract', 'payer_fee_schedule', 'bcbstx_rate_fallback'}
                     and line.get('allowed_cents') is not None for line in lines))

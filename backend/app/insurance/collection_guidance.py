@@ -492,6 +492,10 @@ def build(result: dict, review: dict | None = None) -> dict:
                             patient_message='The clinic needs to recalculate the insurance advance for this visit.')
             for service in guidance['services']:
                 service['patient_cents'] = None
+    if any(line.get('allowed_basis') == 'bcbstx_rate_fallback' for line in lines):
+        assumptions.append('A matching BCBSTX clinic fee replaces a missing insurer fee for this provisional estimate; the insurer allowed amount follows the claim.')
+        if guidance['amount_cents'] is not None and guidance['amount_cents'] > 0:
+            guidance['reason'] += ' The estimate uses a BCBSTX fee for a CPT without an insurer-specific rate.'
     guidance['assumptions'] = list(dict.fromkeys(assumptions))
     if (guidance['basis'] == 'office_copay' and guidance['amount_cents'] is not None
             and len(lines) == len([line for line in lines if str(line.get('code') or '').isdigit()

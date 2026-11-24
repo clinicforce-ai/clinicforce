@@ -87,6 +87,15 @@ const missingRateRow = collectionAtVisitRow({ ...unmatchedPlan,
 }, model, { ...values, pendingBluecardCopay: null })
 assert.match(missingRateRow.value, /check plan-to-rate match/i)
 assert.match(missingRateRow.detail, /CPT 99203/)
+const feeSchedulePrompt = 'Please enter rate for CPT 95908 from the United Healthcare fee schedule.'
+const missingBothRow = collectionAtVisitRow({ ...unmatchedPlan,
+  payer: 'United Healthcare',
+  price_range: { mode: 'services', lines: [{ id: 'ncs', code: '95908', units: 1,
+    allowed_cents: null, issues: [feeSchedulePrompt],
+    rate_resolution: { status: 'RATE_UNAVAILABLE' }, benefits: terms }] },
+  payment_explanation: { reason_code: 'contract_rate_missing', sentence: 'Rate unavailable.' },
+}, model, { ...values, pendingBluecardCopay: null })
+assert.match(missingBothRow.value, /Please enter rate for CPT 95908 from the United Healthcare fee schedule/)
 const plusDeferral = collectionAtVisitRow({
   ...result,
   price_range: { mode: 'services', lines: [{ id: 'office', code: '99213', units: 1,

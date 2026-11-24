@@ -241,8 +241,7 @@ def _recheck_saved_clinic_pricing(result: dict, case: dict, practice_id: str) ->
                 rates = _api.commercial_store.matching_rates(
                     practice_id, profile, network, str(inputs.get('service_date') or ''), clinic_lines)
                 current = {(row['code'], row.get('modifier') or ''): row for row in rates}
-                if any((not line.get('rate_version') or line.get('unit_allowed_cents') is None
-                        or line.get('rate_version') != (rate or {}).get('version_id')
+                if any((line.get('unit_allowed_cents') is None
                         or line.get('unit_allowed_cents') != (rate or {}).get('allowed_cents'))
                        for line in clinic_lines
                        for rate in [current.get((line['code'], ','.join(line.get('modifiers') or [])))]):

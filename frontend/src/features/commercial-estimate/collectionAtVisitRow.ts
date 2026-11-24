@@ -193,6 +193,9 @@ export function collectionAtVisitRow(
       ? result.collection_guidance.diagnostic_copay_reference_cents
       : null
   const collectionBlocker = result.payment_explanation
+  const missingRatePrompt = result.price_range?.lines
+    ?.flatMap((line) => line.issues || [])
+    .find((issue) => issue.startsWith('Please enter rate for CPT '))
   const namedCollectionAction =
     collectionBlocker?.reason_code === 'clinic_product_mismatch'
       ? 'Match member plan to clinic agreement'
@@ -200,6 +203,7 @@ export function collectionAtVisitRow(
         ? 'Check plan-to-rate match for selected CPT'
         : null
   const pendingCollectionAction =
+    missingRatePrompt ||
     namedCollectionAction ||
     collectionBlocker?.sentence ||
     'Review selected CPT, benefits and clinic rate before collecting'
