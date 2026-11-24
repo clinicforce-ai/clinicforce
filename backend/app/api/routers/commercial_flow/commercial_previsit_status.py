@@ -35,7 +35,6 @@ async def ecw_appointments(request: _api.Request) -> dict:
                                 status_code=409, headers={"Cache-Control": "no-store"})
         raise _api.HTTPException(502, str(exc)) from exc
     return {"appointments": values}
-
 @_api.router.post("/appointments/readiness")
 async def ecw_appointment_readiness(value: _api.EcwStartInput, request: _api.Request) -> dict:
     """Read pre-payer prerequisites; scheduled_codes remains actual eCW coding.
