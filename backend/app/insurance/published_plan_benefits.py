@@ -392,7 +392,8 @@ def apply_office_terms(raw: dict, case_benefits: dict, rules: dict,
     if raw.get('copay_cents') not in {None, copay} or raw.get('coinsurance_percent') not in {None, '0', '0.0', '0.00'}:
         return {**raw, 'review_reasons': [*(raw.get('review_reasons') or []),
             'The member-specific office cost share conflicts with the published FEP Preferred specialist rule.']}
-    if (not standard and raw.get('deductible_remaining_cents') not in {None, 0}) or raw.get('deductible_applies') is True:
+    clinic_default = raw.get('deductible_default_source') == 'clinic_in_network_policy'
+    if (not standard and raw.get('deductible_remaining_cents') not in {None, 0}) or (raw.get('deductible_applies') is True and not clinic_default):
         return {**raw, 'review_reasons': [*(raw.get('review_reasons') or []),
             'The member-specific office deductible conflicts with the published FEP Preferred visit rule.']}
     reasons = [reason for reason in raw.get('review_reasons') or [] if reason not in {
@@ -405,6 +406,9 @@ def apply_office_terms(raw: dict, case_benefits: dict, rules: dict,
     return {**raw, 'copay_cents': copay, 'copay_period': 'VISIT',
             'deductible_applies': False, 'deductible_applicability': 'DOES_NOT_APPLY',
             'deductible_remaining_cents': 0, 'coinsurance_percent': '0', 'cost_share': 'copay',
+            'deductible_default_source': None,
+            'benefit_assumptions': [note for note in raw.get('benefit_assumptions') or []
+                                    if not clinic_default or not note.startswith('Clinic policy assumes the remaining in-network deductible')],
             'referral_signal': 'not_required' if raw.get('referral_signal') != 'required' else 'required',
             'published_plan_rule': rule,
             'review_reasons': reasons, 'requires_review': bool(reasons)}

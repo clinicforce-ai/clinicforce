@@ -236,6 +236,27 @@ def test_saved_uhc_registration_response_rebinds_and_reprices_with_library_contr
     assert called and called[0][-1] == route
 
 
+@pytest.mark.parametrize(('basis', 'status'), [
+    ('bcbstx_rate_fallback', 'RESOLVED'),
+    ('clinic_contract', 'RATE_UNAVAILABLE'),
+])
+def test_saved_visit_reprices_after_a_fee_is_added(monkeypatch, basis, status):
+    result = {'payer': 'Synthetic insurer',
+              'benefits': {'network_status': 'in_network', 'network_source': 'clinic_library_contract'},
+              'price_range': {'lines': [{'allowed_basis': basis,
+                                         'rate_resolution': {'status': status}}]}}
+    case = {'previsit_context': {'payer_id': 'synthetic-route',
+                                 'source': {'payer_plan_bound': True}}}
+    route = {'id': 'synthetic-route', 'display_name': 'Synthetic insurer'}
+    calls = []
+    monkeypatch.setattr(saved_pricing.payer_fees, 'schedule_for_result', lambda _: None)
+    monkeypatch.setattr(saved_pricing.group_contract_support, 'eligibility_route', lambda *_: None)
+    monkeypatch.setattr(saved_pricing, '_reprice_saved_new_network', lambda *args: calls.append(args))
+    saved_pricing.refresh_saved_network_pricing(result, case, 'synthetic-clinic', route,
+                                                ('in_network', 'clinic_library_contract'))
+    assert calls and calls[0][-1] == route
+
+
 def test_saved_uhc_office_middle_name_rebinds_from_protected_response_and_reprices(monkeypatch):
     raw = json.dumps({'payerId': 'KMQTZ', 'subscriber': {'memberId': 'SYN123456'}}).encode()
     case = {'previsit': {'request_state': 'complete'}, 'previsit_raw_object_key': 'synthetic-key',

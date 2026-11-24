@@ -174,6 +174,7 @@ def test_fep_standard_new_patient_office_collects_forty_dollar_copay():
     assert result['collection_guidance']['basis'] == 'office_copay'
     assert [line['code'] for line in result['price_range']['lines']] == ['99203']
     assert result['price_range']['lines'][0]['benefits']['deductible_applies'] is False
+    assert result['price_range']['lines'][0]['benefits']['deductible_default_source'] is None
     assert result['benefits']['deductible_remaining_cents'] == 26424
     assert result['requirement_evidence']['referral']['status'] == 'Not required'
     assert result['requirement_evidence']['authorization']['status'] == 'Not required'

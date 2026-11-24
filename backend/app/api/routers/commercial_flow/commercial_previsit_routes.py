@@ -7,7 +7,7 @@ from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_reuse import (
     SAVED_RESPONSE_UNAVAILABLE, saved_benefits_for_review,
 )
-@_api.router.get('/cases/{case_id}/previsit')
+@_api.router.get('/cases/{case_id}/previsit', description='Read and reprice the saved insured visit from retained payer evidence and current clinic fees without a new eligibility request. A missing commercial insurer CPT fee uses a matching scoped BCBSTX Clinical Library fee as a labeled provisional calculation basis; when neither fee exists, the response names the CPT and insurer schedule needing an entry. A positive in-network individual deductible remaining defaults to applying to each CPT only when payer applicability is unstated; explicit exceptions and conditional benefits take precedence and the assumption is labeled. Collection remains subject to applicable payer benefits and billing protections.')
 async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     """Read saved recovery without submitting or retrying a paid transaction.
 

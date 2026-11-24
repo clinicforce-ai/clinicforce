@@ -278,6 +278,9 @@ def test_current_database_fee_and_fixed_uhc_office_copay_set_checkin_amount():
     guidance = collection_guidance.build(result)
     assert guidance['amount_cents'] == 5000
     assert guidance['basis'] == 'office_copay'
+    line['allowed_basis'] = 'bcbstx_rate_fallback'
+    assert collection_guidance.build(result)['amount_cents'] == 5000
+    line['allowed_basis'] = 'payer_fee_schedule'
     line['rate_resolution']['status'] = 'RATE_UNAVAILABLE'
     assert collection_guidance.build(result)['amount_cents'] is None
     line['rate_resolution']['status'] = 'RESOLVED'
@@ -305,6 +308,88 @@ def test_lookup_uses_database_amount_and_leaves_missing_code_unpriced():
         assert payer_fees.matching_rates('cigna', 'commercial', '2026-11-14', lines,
             place_of_service='10', provider_npi='1234567890',
             patient_binding='synthetic-person', product_binding='synthetic-product') == []
+
+
+def test_missing_insurer_cpt_uses_scoped_bcbstx_fee_and_retains_insurer_fee():
+    codes = [{'id': 'ncs', 'code': '95908', 'units': 1, 'modifiers': []},
+             {'id': 'emg', 'code': '95886', 'units': 1, 'modifiers': []}]
+    identity = {'status': 'matched', 'match_version': 2, 'binding': 'synthetic-person'}
+    benefits = {'plan_details': {'names': ['UnitedHealthcare Choice Plus']},
+                'identity': identity, 'network_status': 'in_network',
+                'network_source': 'clinic_library_contract',
+                'active': True, 'coverage_level': 'individual', 'deductible_remaining_cents': 10000,
+                'oop_remaining_cents': 50000, 'deductible_applies': True,
+                'copay_cents': 0, 'copay_period': 'VISIT', 'coinsurance_percent': '20',
+                'referral_signal': 'not_required', 'authorization_signal': 'not_required'}
+    inputs = {'service_date': '2026-11-24', 'place_of_service': '11',
+              'rendering_provider': {'npi': '1234567890'}}
+    source = {'payer_plan_bound': True, 'rendering_provider': {'npi': '1234567890'}}
+    insurer = {'id': 'uhc:95886', 'line_id': 'emg', 'code': '95886', 'modifier': '',
+               'units': 1, 'allowed_cents': 8628, 'basis': 'payer_fee_schedule'}
+
+    def bcbstx(reference, *_):
+        reference['temporary_rate_reference'] = {'lines': [
+            {'id': 'ncs', 'code': '95908', 'units': 1, 'modifiers': [],
+             'unit_reference_cents': 10511, 'source_reference': 'library:synthetic-bcbstx'}]}
+
+    with patch.object(payer_fees, 'active_schedule', return_value=True), \
+         patch.object(payer_fees, 'matching_rates', return_value=[insurer]), \
+         patch('app.api.routers.commercial_flow.commercial_previsit_rate_fallback._attach_temporary_blue_cross_rates',
+               side_effect=bcbstx):
+        priced, issues = _previsit_range('synthetic-practice', inputs, source,
+            'synthetic-route', codes, benefits, payer_name='United Healthcare')
+    assert [(line['code'], line['unit_allowed_cents'], line['allowed_basis'])
+            for line in priced['lines']] == [
+                ('95908', 10511, 'bcbstx_rate_fallback'),
+                ('95886', 8628, 'payer_fee_schedule')]
+    assert all(line['rate_resolution']['status'] == 'RESOLVED' for line in priced['lines'])
+    assert not any('Please enter rate' in issue for issue in issues)
+    assert priced['complete'] is True, [(line['code'], line['issues']) for line in priced['lines']]
+    assert priced['allowed_max_cents'] == 19139
+    assert priced['patient_max_cents'] == 11828
+    result = {'payer': 'United Healthcare', 'benefits': benefits, 'identity': identity,
+              'codes': codes, 'service_selection_status': 'selected', 'price_range': priced}
+    assert collection_guidance.build(result)['amount_cents'] == 11828
+
+
+def test_missing_both_rate_sources_names_cpt_and_insurer():
+    code = {'id': 'ncs', 'code': '95908', 'units': 1, 'modifiers': []}
+    benefits = {'plan_details': {'names': ['UnitedHealthcare Choice Plus']},
+                'identity': {'binding': 'synthetic-person'}, 'network_status': 'in_network'}
+    inputs = {'service_date': '2026-11-24', 'place_of_service': '11',
+              'rendering_provider': {'npi': '1234567890'}}
+    with patch.object(payer_fees, 'active_schedule', return_value=True), \
+         patch.object(payer_fees, 'matching_rates', return_value=[]), \
+         patch('app.api.routers.commercial_flow.commercial_previsit_rate_fallback._attach_temporary_blue_cross_rates'):
+        priced, issues = _previsit_range('synthetic-practice', inputs,
+            {'payer_plan_bound': True}, 'synthetic-route', [code], benefits,
+            payer_name='United Healthcare')
+    prompt = 'Please enter rate for CPT 95908 from the United Healthcare fee schedule.'
+    assert prompt in issues
+    assert prompt in priced['lines'][0]['issues']
+    assert priced['lines'][0]['rate_resolution']['status'] == 'RATE_UNAVAILABLE'
+
+
+def test_office_bcbstx_fee_does_not_price_a_telehealth_visit():
+    code = {'id': 'office', 'code': '99203', 'units': 1, 'modifiers': []}
+    inputs = {'service_date': '2026-11-24', 'place_of_service': '10',
+              'rendering_provider': {'npi': '1234567890'}, 'telehealth': True}
+    benefits = {'network_status': 'in_network', 'plan_details': {'names': ['Cigna OAP']}}
+
+    def office_reference(reference, *_):
+        reference['temporary_rate_reference'] = {'reference_place_of_service': '11',
+            'lines': [{'id': 'office', 'code': '99203', 'units': 1, 'modifiers': [],
+                       'unit_reference_cents': 10117, 'source_reference': 'library:synthetic-office'}]}
+
+    with patch.object(payer_fees, 'active_schedule', return_value=True), \
+         patch.object(payer_fees, 'matching_rates', return_value=[]), \
+         patch('app.api.routers.commercial_flow.commercial_previsit_rate_fallback._attach_temporary_blue_cross_rates',
+               side_effect=office_reference):
+        priced, issues = _previsit_range('synthetic-practice', inputs,
+            {'payer_plan_bound': True}, 'synthetic-route', [code], benefits,
+            payer_name='Cigna')
+    assert priced['lines'][0]['rate_resolution']['status'] == 'RATE_UNAVAILABLE'
+    assert 'Please enter rate for CPT 99203 from the Cigna fee schedule.' in issues
 
 
 @pytest.mark.parametrize(('payer', 'plan'), [

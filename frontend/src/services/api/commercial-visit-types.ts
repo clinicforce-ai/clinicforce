@@ -137,6 +137,7 @@ export type VisitCode = {
     | 'medicare_fee_schedule'
     | 'aetna_fee_schedule'
     | 'payer_fee_schedule'
+    | 'bcbstx_rate_fallback'
   rate_source?: string
 }
 
@@ -171,6 +172,7 @@ export type VisitPricedLine = VisitCode & {
     | 'medicare_fee_schedule'
     | 'aetna_fee_schedule'
     | 'payer_fee_schedule'
+    | 'bcbstx_rate_fallback'
   cash_cents?: number | null
   cash_source?: string
   cash_rule?: { locator?: string; document_id?: string }
@@ -203,6 +205,7 @@ export type VisitPricedLine = VisitCode & {
     benefit_summary?: string
     visits_remaining?: number
     deductible_applies?: boolean
+    deductible_default_source?: 'clinic_in_network_policy' | null
     copay_id?: string | null
     coinsurance_id?: string | null
     deductible_id?: string | null

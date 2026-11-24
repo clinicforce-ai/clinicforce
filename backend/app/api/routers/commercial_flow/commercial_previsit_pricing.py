@@ -174,18 +174,18 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
         rates = []
         rules['place_of_service'] = inputs.get('place_of_service')
         issues.append('A contract rate for telehealth POS 10 or 02 is not established; the clinic office rate is not used.')
+    from .commercial_previsit_rate_fallback import apply_missing_commercial_rates, annotate_missing_rate_prompts
+    issues = apply_missing_commercial_rates(selected, rates, rules, issues, benefits, source, inputs, practice_id, payer_name, medicare_plan)
     rules['aetna_payer_verified'] = str(payer_route_id or payer_id).upper() == 'HPQRS'
-    priced = _api.visit_estimate.price_lines(selected, rates, benefits, rules, payload=payload,
-        service_date=inputs.get('service_date', ''), reviews=review.get('lines'), alternatives=alternatives)
+    priced = _api.visit_estimate.price_lines(selected, rates, benefits, rules, payload=payload, service_date=inputs.get('service_date', ''), reviews=review.get('lines'), alternatives=alternatives)
+    annotate_missing_rate_prompts(priced, payer_name, medicare_plan)
     if telehealth_pos_unresolved:
-        priced['service_issues'] = [*(priced.get('service_issues') or []),
-            'Confirm the patient telehealth location and obtain benefits for that place of service before collection.']
+        priced['service_issues'] = [*(priced.get('service_issues') or []), 'Confirm the patient telehealth location and obtain benefits for that place of service before collection.']
     if options:
         priced['mode'] = 'options'
         priced['collection'] = {'action': 'choose_services', 'amount_cents': None,
             'reason': 'These are separate one-unit service examples, not a visit total. Choose anticipated services and units to build the visit estimate.'}
-    if not selected:
-        issues.append('Confirm the planned services before calculating the visit total.')
+    if not selected: issues.append('Confirm the planned services before calculating the visit total.')
     payments = review.get('payments') or {}
     if priced.get('complete') and not priced.get('conditional') and not alternatives and payments.get('reference'):
         amount = max(0, priced['patient_max_cents'] - payments['amount_cents'])

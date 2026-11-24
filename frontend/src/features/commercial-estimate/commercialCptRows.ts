@@ -86,11 +86,14 @@ export function commercialAllowedTotalRow(
   }
   const trsDeposit =
     result.collection_guidance?.collection_rule?.mode === 'trs_hd_office_refundable_deposit'
+  const fallback = price?.lines?.some((line) => line.allowed_basis === 'bcbstx_rate_fallback')
   return {
-    label: 'Total payer allowed',
-    detail: price?.lines?.some((line) => line.allowed_basis === 'payer_fee_schedule')
-      ? 'Clinic-approved payer fee schedule estimate; the processed claim determines the final allowance.'
-      : undefined,
+    label: fallback ? 'Estimated fee basis' : 'Total payer allowed',
+    detail: fallback
+      ? 'Missing insurer rates use matching clinic BCBSTX fees. The insurer’s final allowed amount follows the claim.'
+      : price?.lines?.some((line) => line.allowed_basis === 'payer_fee_schedule')
+        ? 'Clinic-approved payer fee schedule estimate; the processed claim determines the final allowance.'
+        : undefined,
     value: trsDeposit
       ? `Not established · ${money(result.collection_guidance!.reference_total_cents!)} clinic fee reference`
       : healthselectZero
@@ -401,6 +404,7 @@ export function commercialPricedCptRows({
         'medicare_fee_schedule',
         'aetna_fee_schedule',
         'payer_fee_schedule',
+        'bcbstx_rate_fallback',
       ].includes(line.allowed_basis || '')
     return {
       label: serviceRowLabel({
@@ -416,7 +420,9 @@ export function commercialPricedCptRows({
             ? `${money(result.collection_guidance!.reference_total_cents!)} clinic fee reference`
             : aetnaVideoDeferral
               ? `${money(line.allowed_cents)} clinic Aetna fee reference`
-              : money(line.allowed_cents)
+              : line.allowed_basis === 'bcbstx_rate_fallback'
+                ? `${money(line.allowed_cents)} BCBSTX fallback`
+                : money(line.allowed_cents)
           : proxyRate
             ? `${money(proxyRate.unit_reference_cents * (Number(line.units) || 1))} ${bluecardDeductible ? 'Blue Choice PPO fee reference' : aetnaRateReference ? 'Aetna fee reference' : 'BCBS Texas reference'}`
             : 'Allowed amount unavailable',
@@ -425,7 +431,7 @@ export function commercialPricedCptRows({
         : trsDeposit
           ? `${money(result.collection_guidance!.reference_total_cents!)} per unit × 1; insured allowed amount unknown`
           : resolved && line.unit_allowed_cents != null
-            ? `${money(line.unit_allowed_cents)} per unit × ${line.units || 1}${aetnaVideoDeferral ? '; telehealth allowance follows the claim' : line.allowed_basis === 'payer_fee_schedule' ? '; clinic fee reference, not a payer-confirmed allowance' : ''}`
+            ? `${money(line.unit_allowed_cents)} per unit × ${line.units || 1}${aetnaVideoDeferral ? '; telehealth allowance follows the claim' : line.allowed_basis === 'bcbstx_rate_fallback' ? `; ${result.payer || 'insurer'} allowed amount unknown` : line.allowed_basis === 'payer_fee_schedule' ? '; clinic fee reference, not a payer-confirmed allowance' : ''}`
             : proxyRate
               ? `${money(proxyRate.unit_reference_cents)} per unit × ${line.units || 1}; ${uhcNmCardPlan(result) ? 'UnitedHealthcare/Optum Care' : result.payer || 'payer'} allowed amount unknown`
               : line.description || undefined,

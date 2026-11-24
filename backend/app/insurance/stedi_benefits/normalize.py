@@ -334,6 +334,14 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
     conditional_terms = selected_ids is None and any(re.search(r"\b(first|after|before|beginning|visits?|waived|unless|only|limit|specialist|primary care)\b", note, re.IGNORECASE) for row in (copay, coinsurance) if row for note in notes([row.get("messages"), row.get("additionalInformation")])
         if not all(_deductible_message(label) is not None or re.fullmatch(r'BENEFITCLASS-SPECIALIST', label.strip(), re.I) or re.fullmatch(r'SPECIALIST APPLY ONLY 1 COPAYMENT, PER DATE OF SERVICE, PER PROVIDER', label.strip(), re.I) or re.fullmatch(r"(?:All Other In-Network Providers\s+)?(?:(?:specialist |physician )?office visits?(?: (?:specialist|primary care(?: prov(?:ider)?)?|with (?:labs|xray)))?|Specialist(?: AND PCP)?|PCP AND Specialist|per visit|(?:Specialist|Primary Care) Visit or Evaluation|GYN Visit|Walk In Clinic Visit|Telemedicine (?:General Medicine|Specialist) Visit|phy visit\s*-\s*specialist|(?:PCP AND )?BenefitTier Non Tier 1 Specialist|diagnostic medical procedure)(?:\s*-\s*professional)?(?:\s*,\s*COINS APPLIES TO OUT OF POCKET)?", label.strip(), re.I)
                    for label in note.split(';') if label.strip()))
+    focus_professional = (str(service_date or '').startswith('2026-')
+        and [str(name).strip().upper() for name in plan_details(payload).get('names') or []] == ['FEP BLUE FOCUS']
+        and service_type_code == '98')
+    deductible_assumed = (provider_network_verified and type(deductible_cents) is int and deductible_cents > 0
+        and deductible_applies is None and not deductible_conflict and not conditional_terms
+        and not focus_professional)
+    if deductible_assumed:
+        deductible_applies, deductible_applicability = True, 'APPLIES'
     source_errors = []
     for _, row in wanted:
         if row.get('code') in {'F', 'Y'} and not unresolved_limit(row):
@@ -433,6 +441,7 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
             "oop_quarantined_ids": cost_share.oop_quarantined_ids,
             "oop_remaining_conflict_ids": cost_share.conflicts.get('oop_remaining', []),
             "deductible_applicability": deductible_applicability,
+            "deductible_default_source": 'clinic_in_network_policy' if deductible_assumed else None,
             "deductible_applicability_ids": list(dict.fromkeys(row['evidence_path'] for _, row in deductible_signals)),
             "family_oop_remaining_cents": family_oop_cents,
             "family_oop_zero_applies": family_oop_zero_applies,
@@ -452,9 +461,10 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
             **({'deductible_applies': deductible_applies} if deductible_applies is not None else {}),
             'deductible_waiver_ids': [row['evidence_path'] for value, row in deductible_signals if value is False],
             "authorization_basis": authorization_basis,
-            "benefit_assumptions": ['The returned non-Tier-1 specialist benefit is used; the provider tier has not been confirmed.'] if any(
+            "benefit_assumptions": (['The returned non-Tier-1 specialist benefit is used; the provider tier has not been confirmed.'] if any(
                 'non tier 1 specialist' in note.casefold() for row in (copay, coinsurance) if row
-                for note in _benefit_notes(row.get('messages'))) else [],
+                for note in _benefit_notes(row.get('messages'))) else []) +
+                (['Clinic policy assumes the remaining in-network deductible applies to this CPT because the payer did not state an exception.'] if deductible_assumed else []),
             "copay_period": str((copay or {}).get("timeQualifierCode") or (copay or {}).get("timeQualifier") or ""),
             "plan_details": plan_details(payload),
             "authorization_signal": authorization_signal, "referral_signal": referral_signal,

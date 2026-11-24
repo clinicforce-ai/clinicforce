@@ -2530,7 +2530,7 @@ def test_preview_office_copay_can_collect_once_across_em_alternatives():
     assert guidance['basis'] == 'office_copay'
 
 
-@pytest.mark.parametrize('change', ['unchanged', 'contract_removed', 'rate_replaced', 'profile_changed'])
+@pytest.mark.parametrize('change', ['unchanged', 'contract_removed', 'rate_replaced', 'rate_amount_changed', 'profile_changed'])
 def test_reopening_saved_estimate_rechecks_current_clinic_pricing(change):
     result = scenario(4800)
     result.update(payer='United Healthcare', payment_mode='insurance', service_date='2026-10-15',
@@ -2546,16 +2546,17 @@ def test_reopening_saved_estimate_rechecks_current_clinic_pricing(change):
                   'status': 'staff_guidance_enabled', 'rules': {'collection_policy': ADVANCE_POLICY}}
     contract_id = 'replacement-contract' if change == 'contract_removed' else 'original-contract'
     rate_id = 'replacement-rate' if change == 'rate_replaced' else 'original-rate'
+    rate_cents = 12000 if change == 'rate_amount_changed' else 10000
     with patch.object(api.commercial_store, 'list_connections', return_value=[connection]), \
          patch.object(api, '_previsit_practice_path', return_value=({}, {}, {
              'updated_at': '2026-10-16T12:00:00+00:00' if change == 'profile_changed'
                            else '2026-10-14T12:00:00+00:00'})) as path, \
          patch.object(api, '_network_contract_evidence', return_value={'document_id': contract_id}), \
          patch.object(api.commercial_store, 'matching_rates', return_value=[
-             {'code': '99203', 'modifier': '', 'allowed_cents': 10000, 'version_id': rate_id}]):
+                 {'code': '99203', 'modifier': '', 'allowed_cents': rate_cents, 'version_id': rate_id}]):
         reopened = api._previsit_result({'previsit_context': context}, 'clinic')
     assert path.call_args.args[2]['payer_plan_names'] == ['Choice Plus']
-    if change == 'unchanged':
+    if change in {'unchanged', 'rate_replaced'}:
         assert reopened['collection_guidance']['amount_cents'] == 4800
         assert reopened['encounter_summary']['estimated_total_patient_min_cents'] == 4800
     else:
