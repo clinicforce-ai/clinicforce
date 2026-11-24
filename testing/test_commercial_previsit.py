@@ -738,8 +738,8 @@ PCP $0 Specialist $50''')])
         if cash_package:
             inputs['reason'] = 'One-hand carpal tunnel EMG/NCS'
         if empty_coverage:
-            inputs.update(reason='tremors all over the body' if empty_office else 'Reason: EMG 4 Areas',
-                          appointment_reason='tremors all over the body' if empty_office else 'EMG 4 Areas',
+            inputs.update(reason='new patient consultation' if empty_office else 'Reason: EMG 4 Areas',
+                          appointment_reason='new patient consultation' if empty_office else 'EMG 4 Areas',
                           member_id=None, relationship=None, subscriber={})
             if empty_office:
                 inputs['lines'] = [{'id': 'documented-office', 'code': '99203',
